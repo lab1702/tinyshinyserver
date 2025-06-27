@@ -19,6 +19,10 @@ A lightweight, WebSocket-enabled proxy server for hosting multiple Shiny applica
 
 - R (version 4.0 or higher)
 - Required R packages (automatically installed via setup script)
+- **Pandoc**: Required for R Markdown apps to work
+  - Linux: `sudo apt install pandoc` (Ubuntu/Debian) or equivalent for your distribution
+  - Windows: `winget install JohnMacFarlane.Pandoc`
+  - macOS: Available via Homebrew or direct download from pandoc.org
 
 ### Installation
 
