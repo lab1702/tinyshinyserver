@@ -1,6 +1,6 @@
 # Tiny Shiny Server
 
-A lightweight, WebSocket-enabled proxy server for hosting multiple Shiny applications with automatic health monitoring, session management, and graceful scaling.
+A lightweight, WebSocket-enabled proxy server for hosting multiple Shiny applications with automatic health monitoring, session management, and resource cleanup.
 
 ## Features
 

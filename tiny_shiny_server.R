@@ -9,6 +9,7 @@ library(jsonlite)
 library(callr)
 library(later)
 library(httr)
+library(digest)
 
 # Global variables
 config <- NULL
@@ -24,7 +25,10 @@ CLEANUP_INTERVAL_SECONDS <- 300 # 5 minutes
 # Load configuration
 load_config <- function() {
   if (file.exists("config.json")) {
-    config <<- fromJSON("config.json", simplifyDataFrame = FALSE)
+    # Read config file with explicit UTF-8 encoding
+    config_conn <- file("config.json", open = "r", encoding = "UTF-8")
+    on.exit(close(config_conn))
+    config <<- fromJSON(config_conn, simplifyDataFrame = FALSE)
   } else {
     stop("config.json not found")
   }
@@ -41,30 +45,34 @@ log_message <- function(message, level = "INFO", app_name = NULL) {
 
   cat(log_text, "\n")
 
-  # Write to log file
-  log_file <- "logs/websocket_proxy.log"
-  if (!dir.exists("logs")) dir.create("logs")
-  write(log_text, file = log_file, append = TRUE)
+  # Write to log file with UTF-8 encoding
+  log_file <- file.path("logs", "websocket_proxy.log")
+  if (!dir.exists("logs")) dir.create("logs", recursive = TRUE)
+  
+  # Use connection for explicit UTF-8 encoding
+  log_conn <- file(log_file, open = "a", encoding = "UTF-8")
+  on.exit(close(log_conn))
+  writeLines(log_text, con = log_conn)
 }
 
 # Start Shiny app process
 start_app <- function(app_config) {
   app_name <- app_config$name
   app_port <- app_config$port
-  app_path <- app_config$path
+  app_path <- normalizePath(app_config$path, mustWork = FALSE)
 
   log_message(paste("Starting app on port", app_port), app_name = app_name)
 
   # Prepare log files
-  output_log <- paste0("logs/", app_name, "_output.log")
-  error_log <- paste0("logs/", app_name, "_error.log")
+  output_log <- file.path("logs", paste0(app_name, "_output.log"))
+  error_log <- file.path("logs", paste0(app_name, "_error.log"))
 
   # Start the app process
   process <- r_bg(
     function(app_path, port, output_log, error_log) {
       # Redirect output to log files
-      output_con <- file(output_log, open = "w")
-      error_con <- file(error_log, open = "w")
+      output_con <- file(output_log, open = "w", encoding = "UTF-8")
+      error_con <- file(error_log, open = "w", encoding = "UTF-8")
 
       # Ensure file handles are closed on exit
       on.exit({
