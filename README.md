@@ -291,11 +291,10 @@ tail -f logs/sales_error.log
 
 ## License
 
-[Add your license information here]
+MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Support
 
 For issues and questions:
 - Check the logs for error messages
 - Review this README for common solutions
-- [Add your support contact information]
