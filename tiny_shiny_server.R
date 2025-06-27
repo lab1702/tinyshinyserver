@@ -47,7 +47,7 @@ log_message <- function(message, level = "INFO", app_name = NULL) {
   # Write to log file with UTF-8 encoding
   log_file <- file.path("logs", "websocket_proxy.log")
   if (!dir.exists("logs")) dir.create("logs", recursive = TRUE)
-  
+
   # Use connection for explicit UTF-8 encoding
   log_conn <- file(log_file, open = "a", encoding = "UTF-8")
   on.exit(close(log_conn))
