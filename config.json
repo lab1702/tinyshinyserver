@@ -1,0 +1,19 @@
+{
+  "apps": [
+    {
+      "name": "sales",
+      "path": "./apps/sales",
+      "port": 3001
+    },
+    {
+      "name": "inventory", 
+      "path": "./apps/inventory",
+      "port": 3002
+    }
+  ],
+  "restart_delay": 5,
+  "max_restarts": 3,
+  "health_check_interval": 10,
+  "proxy_port": 3838,
+  "log_dir": "./logs"
+}
