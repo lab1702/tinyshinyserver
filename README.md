@@ -38,9 +38,18 @@ A lightweight, WebSocket-enabled proxy server for hosting multiple Shiny applica
    ```
 
 3. **Start the server:**
+
+   **Linux/macOS:**
    ```bash
    Rscript tiny_shiny_server.R
    ```
+
+   **Windows:**
+   ```powershell
+   .\start-server.ps1
+   ```
+   
+   The PowerShell script automatically locates your R installation and starts the server.
 
 4. **Access applications:**
    - Landing page: http://localhost:3838
