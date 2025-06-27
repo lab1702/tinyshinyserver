@@ -73,7 +73,6 @@ The server is configured via `config.json`:
     }
   ],
   "restart_delay": 5,
-  "max_restarts": 3,
   "health_check_interval": 10,
   "proxy_port": 3838,
   "log_dir": "./logs"
@@ -89,7 +88,6 @@ The server is configured via `config.json`:
 | `apps[].path` | Relative path to app directory | Required |
 | `apps[].port` | Port where app process runs | Required |
 | `restart_delay` | Seconds to wait before restarting failed apps | 5 |
-| `max_restarts` | Maximum restart attempts (not currently enforced) | 3 |
 | `health_check_interval` | Seconds between health checks | 10 |
 | `proxy_port` | Port for the proxy server | 3838 |
 | `log_dir` | Directory for log files | "./logs" |

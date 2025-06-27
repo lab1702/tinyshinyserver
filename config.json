@@ -17,7 +17,6 @@
     }
   ],
   "restart_delay": 5,
-  "max_restarts": 3,
   "health_check_interval": 10,
   "proxy_port": 3838,
   "log_dir": "./logs"

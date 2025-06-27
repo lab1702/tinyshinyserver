@@ -25,10 +25,9 @@ CLEANUP_INTERVAL_SECONDS <- 300 # 5 minutes
 # Load configuration
 load_config <- function() {
   if (file.exists("config.json")) {
-    # Read config file with explicit UTF-8 encoding
-    config_conn <- file("config.json", open = "r", encoding = "UTF-8")
-    on.exit(close(config_conn))
-    config <<- fromJSON(config_conn, simplifyDataFrame = FALSE)
+    # Read with explicit UTF-8 encoding
+    config_text <- readLines("config.json", encoding = "UTF-8", warn = FALSE)
+    config <<- fromJSON(paste(config_text, collapse = "\n"), simplifyDataFrame = FALSE)
   } else {
     stop("config.json not found")
   }
@@ -692,12 +691,13 @@ handle_websocket <- function(ws) {
 
 # Start the proxy server
 start_proxy_server <- function() {
-  log_message("Starting WebSocket-enabled proxy server on port 3838")
+  proxy_port <- config$proxy_port %||% 3838
+  log_message(paste("Starting WebSocket-enabled proxy server on port", proxy_port))
 
   # Start the httpuv server
   server <- startServer(
     host = "127.0.0.1",
-    port = 3838,
+    port = proxy_port,
     app = list(
       call = handle_http_request,
       onWSOpen = handle_websocket
