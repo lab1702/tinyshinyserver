@@ -9,6 +9,11 @@
       "name": "inventory", 
       "path": "./apps/inventory",
       "port": 3002
+    },
+    {
+      "name": "reports",
+      "path": "./apps/reports",
+      "port": 3003
     }
   ],
   "restart_delay": 5,

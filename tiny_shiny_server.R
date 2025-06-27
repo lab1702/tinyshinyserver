@@ -16,6 +16,11 @@ app_processes <- list()
 ws_connections <- list()
 backend_connections <- list()
 
+# Memory management constants
+MAX_PENDING_MESSAGES <- 100
+CONNECTION_TIMEOUT_MINUTES <- 30
+CLEANUP_INTERVAL_SECONDS <- 300 # 5 minutes
+
 # Load configuration
 load_config <- function() {
   if (file.exists("config.json")) {
@@ -60,6 +65,23 @@ start_app <- function(app_config) {
       # Redirect output to log files
       output_con <- file(output_log, open = "w")
       error_con <- file(error_log, open = "w")
+
+      # Ensure file handles are closed on exit
+      on.exit({
+        tryCatch(
+          {
+            sink(type = "output") # Reset output sink to default
+            sink(type = "message") # Reset message sink to default
+            if (exists("output_con")) close(output_con)
+            if (exists("error_con")) close(error_con)
+          },
+          error = function(e) {
+            # Log cleanup errors but don't fail
+            cat("Warning: Error during file handle cleanup:", e$message, "\n")
+          }
+        )
+      })
+
       sink(output_con, type = "output")
       sink(error_con, type = "message")
 
@@ -129,6 +151,66 @@ cleanup_app_connections <- function(app_name) {
   }
 }
 
+# Clean up stale connections based on timeout
+cleanup_stale_connections <- function() {
+  current_time <- Sys.time()
+  timeout_threshold <- current_time - (CONNECTION_TIMEOUT_MINUTES * 60)
+
+  connections_cleaned <- 0
+
+  # Clean up stale backend connections
+  for (session_id in names(backend_connections)) {
+    conn_info <- backend_connections[[session_id]]
+
+    # Check if connection has timestamp and is stale
+    if (!is.null(conn_info$last_activity) && conn_info$last_activity < timeout_threshold) {
+      if (!is.null(conn_info$ws)) {
+        tryCatch(conn_info$ws$close(), error = function(e) {})
+      }
+      backend_connections[[session_id]] <<- NULL
+      connections_cleaned <- connections_cleaned + 1
+    }
+  }
+
+  # Clean up stale client connections
+  for (session_id in names(ws_connections)) {
+    conn_info <- ws_connections[[session_id]]
+
+    # Check if connection has timestamp and is stale
+    if (!is.null(conn_info$last_activity) && conn_info$last_activity < timeout_threshold) {
+      ws_connections[[session_id]] <<- NULL
+      connections_cleaned <- connections_cleaned + 1
+    }
+  }
+
+  if (connections_cleaned > 0) {
+    log_message(paste("Cleaned up", connections_cleaned, "stale connections"))
+  }
+
+  # Log current connection counts for monitoring
+  backend_count <- length(backend_connections)
+  ws_count <- length(ws_connections)
+  log_message(paste("Active connections - Backend:", backend_count, "WebSocket:", ws_count))
+}
+
+# Clean up dead processes from tracking
+cleanup_dead_processes <- function() {
+  processes_cleaned <- 0
+
+  for (app_name in names(app_processes)) {
+    process <- app_processes[[app_name]]
+    if (!is.null(process) && !process$is_alive()) {
+      app_processes[[app_name]] <<- NULL
+      processes_cleaned <- processes_cleaned + 1
+      log_message(paste("Removed dead process for app:", app_name))
+    }
+  }
+
+  if (processes_cleaned > 0) {
+    log_message(paste("Cleaned up", processes_cleaned, "dead processes"))
+  }
+}
+
 # Get app configuration by name
 get_app_config <- function(app_name) {
   for (app_config in config$apps) {
@@ -166,13 +248,15 @@ create_backend_connection <- function(app_name, session_id, client_ws) {
   # Create WebSocket connection to backend
   backend_ws <- WebSocket$new(backend_url)
 
-  # Store connection info with ready state
+  # Store connection info with ready state and timestamp
   backend_connections[[session_id]] <<- list(
     app_name = app_name,
     ws = backend_ws,
     client_ws = client_ws,
     ready = FALSE,
-    pending_messages = list()
+    pending_messages = list(),
+    last_activity = Sys.time(),
+    created_at = Sys.time()
   )
 
   # Handle messages from backend to client
@@ -222,10 +306,9 @@ generate_landing_page <- function() {
     <div class="app-card">
       <h3>%s</h3>
       <div class="app-links">
-        <a href="/proxy/%s/" class="proxy-link">Open via Proxy</a>
-        <a href="http://127.0.0.1:%d" class="direct-link" target="_blank">Open Direct</a>
+        <a href="/proxy/%s/" class="proxy-link">Open App</a>
       </div>
-    </div>', app_config$name, app_config$name, app_config$port))
+    </div>', app_config$name, app_config$name))
   }
 
   html <- sprintf('
@@ -322,19 +405,17 @@ generate_landing_page <- function() {
 
     .app-links {
       display: flex;
-      gap: 12px;
-      flex-wrap: wrap;
+      justify-content: center;
     }
 
     .app-links a {
-      padding: 8px 16px;
+      padding: 12px 24px;
       border-radius: 6px;
       text-decoration: none;
       font-weight: 500;
       transition: all 0.2s;
-      flex: 1;
       text-align: center;
-      min-width: 120px;
+      min-width: 150px;
     }
 
     .proxy-link {
@@ -344,17 +425,6 @@ generate_landing_page <- function() {
 
     .proxy-link:hover {
       background-color: var(--link-hover);
-    }
-
-    .direct-link {
-      background-color: transparent;
-      color: var(--link-color);
-      border: 1px solid var(--link-color);
-    }
-
-    .direct-link:hover {
-      background-color: var(--link-color);
-      color: white;
     }
 
     .info {
@@ -388,10 +458,10 @@ generate_landing_page <- function() {
     </div>
 
     <div class="info">
-      <h4>Usage Information</h4>
-      <p><strong>Proxy Links:</strong> Full WebSocket support with session management</p>
-      <p><strong>Direct Links:</strong> Bypass proxy for debugging or direct access</p>
-      <p><strong>Features:</strong> Automatic app restart, health monitoring, and session affinity</p>
+      <h4>Server Features</h4>
+      <p><strong>WebSocket Support:</strong> Full WebSocket support with session management</p>
+      <p><strong>Health Monitoring:</strong> Automatic app restart and health monitoring</p>
+      <p><strong>Session Affinity:</strong> Maintains user sessions across app interactions</p>
     </div>
   </div>
 </body>
@@ -473,12 +543,27 @@ handle_http_request <- function(req) {
               "text/html"
             }
 
-            # Return response
-            return(list(
-              status = status_code(response),
-              headers = list("Content-Type" = content_type),
-              body = rawToChar(content(response, "raw"))
-            ))
+            # Handle binary vs text content
+            raw_content <- content(response, "raw")
+
+            # Check if content is binary based on content type or presence of null bytes
+            is_binary <- grepl("image/|font/|application/octet-stream|application/pdf", content_type, ignore.case = TRUE) ||
+              any(raw_content == 0)
+
+            # Return response with appropriate body format
+            if (is_binary) {
+              return(list(
+                status = status_code(response),
+                headers = list("Content-Type" = content_type),
+                body = raw_content
+              ))
+            } else {
+              return(list(
+                status = status_code(response),
+                headers = list("Content-Type" = content_type),
+                body = rawToChar(raw_content)
+              ))
+            }
           },
           error = function(e) {
             log_message(paste("Proxy error:", e$message), "ERROR", app_name = app_name)
@@ -527,11 +612,21 @@ handle_websocket <- function(ws) {
 
   log_message(paste("WebSocket routed to app:", app_name))
 
-  # Store client WebSocket with app info
-  ws_connections[[session_id]] <<- list(ws = ws, app_name = app_name)
+  # Store client WebSocket with app info and timestamp
+  ws_connections[[session_id]] <<- list(
+    ws = ws,
+    app_name = app_name,
+    last_activity = Sys.time(),
+    created_at = Sys.time()
+  )
 
   ws$onMessage(function(binary, message) {
     log_message(paste("Client message:", substring(message, 1, 100)))
+
+    # Update last activity timestamp
+    if (session_id %in% names(ws_connections)) {
+      ws_connections[[session_id]]$last_activity <<- Sys.time()
+    }
 
     tryCatch(
       {
@@ -546,11 +641,19 @@ handle_websocket <- function(ws) {
           if (!is.null(backend_conn) && !is.null(backend_conn$ws)) {
             if (backend_conn$ready) {
               backend_conn$ws$send(message)
+              # Update last activity timestamp
+              backend_connections[[session_id]]$last_activity <<- Sys.time()
             } else {
-              # Queue message for when connection is ready
+              # Queue message for when connection is ready (with size limit)
+              current_pending <- backend_connections[[session_id]]$pending_messages
+              if (length(current_pending) >= MAX_PENDING_MESSAGES) {
+                # Drop oldest messages to make room
+                current_pending <- tail(current_pending, MAX_PENDING_MESSAGES - 1)
+                log_message(paste("Pending queue full, dropped oldest messages for", app_name), "WARN")
+              }
               backend_connections[[session_id]]$pending_messages <<-
-                append(backend_connections[[session_id]]$pending_messages, message)
-              log_message("Queued message for pending connection", app_name = app_name)
+                append(current_pending, message)
+              log_message(paste("Queued message for pending connection (", length(current_pending) + 1, "/", MAX_PENDING_MESSAGES, ")"), app_name = app_name)
             }
           }
         }
@@ -596,12 +699,53 @@ start_proxy_server <- function() {
   return(server)
 }
 
+# Cleanup function to terminate all processes
+cleanup_and_exit <- function() {
+  log_message("Shutting down server...")
+
+  # Close all WebSocket connections
+  for (session_id in names(backend_connections)) {
+    backend_conn <- backend_connections[[session_id]]
+    if (!is.null(backend_conn) && !is.null(backend_conn$ws)) {
+      tryCatch(backend_conn$ws$close(), error = function(e) {})
+    }
+  }
+  backend_connections <<- list()
+  ws_connections <<- list()
+
+  # Terminate all app processes
+  for (app_name in names(app_processes)) {
+    process <- app_processes[[app_name]]
+    if (!is.null(process) && process$is_alive()) {
+      log_message(paste("Terminating app:", app_name))
+      tryCatch(
+        {
+          process$kill()
+          # Wait a moment for graceful shutdown
+          Sys.sleep(1)
+          # Force kill if still alive
+          if (process$is_alive()) {
+            process$kill_tree()
+          }
+        },
+        error = function(e) {
+          log_message(paste("Error terminating", app_name, ":", e$message), "ERROR")
+        }
+      )
+    }
+  }
+
+  log_message("All processes terminated. Exiting.")
+  quit(status = 0)
+}
+
 # Main function
 main <- function() {
   # Load configuration
   load_config()
 
   log_message("Starting WebSocket Shiny Server process manager")
+  log_message("Press Ctrl-C to shutdown gracefully")
 
   # Start all apps
   for (app_config in config$apps) {
@@ -617,14 +761,36 @@ main <- function() {
     }, 10)
   }, 5)
 
+  # Start memory management and cleanup monitoring
+  log_message("Starting memory management monitor")
+  later::later(function() {
+    cleanup_stale_connections()
+    cleanup_dead_processes()
+    later::later(function() {
+      cleanup_stale_connections()
+      cleanup_dead_processes()
+    }, CLEANUP_INTERVAL_SECONDS)
+  }, CLEANUP_INTERVAL_SECONDS)
+
   # Start proxy server
   proxy_server <- start_proxy_server()
 
-  # Keep the server running
-  while (TRUE) {
-    later::run_now()
-    Sys.sleep(0.1)
-  }
+  # Keep the server running with interrupt handling
+  tryCatch({
+    while (TRUE) {
+      later::run_now()
+      Sys.sleep(0.1)
+    }
+  }, interrupt = function(e) {
+    # Handle Ctrl-C interrupt
+    cleanup_and_exit()
+  }, error = function(e) {
+    log_message(paste("Server error:", e$message), "ERROR")
+    cleanup_and_exit()
+  }, finally = {
+    # Always cleanup on exit
+    cleanup_and_exit()
+  })
 }
 
 # Null coalescing operator
