@@ -540,6 +540,14 @@ create_backend_connection <- function(app_name, session_id, client_ws) {
 
 # Generate landing page HTML
 generate_landing_page <- function() {
+  # Capture session information (first 3 lines only)
+  session_info_output <- capture.output(sessionInfo())
+  session_info_text <- paste(head(session_info_output, 3), collapse = "\n")
+  # Escape HTML characters
+  session_info_text <- gsub("&", "&amp;", session_info_text)
+  session_info_text <- gsub("<", "&lt;", session_info_text)
+  session_info_text <- gsub(">", "&gt;", session_info_text)
+
   app_cards <- ""
 
   for (app_config in config$apps) {
@@ -685,6 +693,33 @@ generate_landing_page <- function() {
       margin-bottom: 8px;
       opacity: 0.9;
     }
+
+    .session-info {
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 20px;
+      margin-top: 20px;
+    }
+
+    .session-info h4 {
+      margin-bottom: 10px;
+      color: var(--link-color);
+    }
+
+    .session-info pre {
+      background: var(--bg-color);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      padding: 15px;
+      margin: 0;
+      font-family: "Courier New", "Monaco", "Menlo", monospace;
+      font-size: 0.85rem;
+      line-height: 1.4;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      color: var(--text-color);
+    }
   </style>
 </head>
 <body>
@@ -698,9 +733,13 @@ generate_landing_page <- function() {
       %s
     </div>
 
+    <div class="session-info">
+      <h4>Server Information</h4>
+      <pre>%s</pre>
+    </div>
   </div>
 </body>
-</html>', app_cards)
+</html>', app_cards, session_info_text)
 
   return(html)
 }
