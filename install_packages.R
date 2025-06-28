@@ -3,7 +3,7 @@ packages <- c("shiny", "callr", "jsonlite", "later", "httr", "digest", "httpuv",
 
 for (pkg in packages) {
   if (!require(pkg, character.only = TRUE)) {
-    install.packages(pkg, repos = "https://cran.rstudio.com/")
+    install.packages(pkg)
   }
 }
 

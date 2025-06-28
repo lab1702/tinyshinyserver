@@ -45,8 +45,8 @@ log_message <- function(message, level = "INFO", app_name = NULL) {
   cat(log_text, "\n")
 
   # Write to log file with UTF-8 encoding
-  log_file <- file.path("logs", "websocket_proxy.log")
-  if (!dir.exists("logs")) dir.create("logs", recursive = TRUE)
+  log_file <- file.path(config$log_dir, "websocket_proxy.log")
+  if (!dir.exists(config$log_dir)) dir.create(config$log_dir, recursive = TRUE)
 
   # Use connection for explicit UTF-8 encoding
   log_conn <- file(log_file, open = "a", encoding = "UTF-8")
@@ -63,8 +63,8 @@ start_app <- function(app_config) {
   log_message(paste("Starting app on port", app_port), app_name = app_name)
 
   # Prepare log files
-  output_log <- file.path("logs", paste0(app_name, "_output.log"))
-  error_log <- file.path("logs", paste0(app_name, "_error.log"))
+  output_log <- file.path(config$log_dir, paste0(app_name, "_output.log"))
+  error_log <- file.path(config$log_dir, paste0(app_name, "_error.log"))
 
   # Start the app process
   process <- r_bg(
@@ -766,7 +766,7 @@ main <- function() {
     health_check()
     later::later(function() {
       health_check()
-    }, 10)
+    }, config$health_check_interval)
   }, 5)
 
   # Start memory management and cleanup monitoring
