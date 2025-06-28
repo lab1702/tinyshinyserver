@@ -162,7 +162,7 @@ Cleanup runs automatically every 5 minutes and logs activity for monitoring.
 
 ### Log Files
 
-- `logs/websocket_proxy.log` - Main server logs
+- `logs/server.log` - Main server logs
 - `logs/{app_name}_output.log` - Per-app stdout logs
 - `logs/{app_name}_error.log` - Per-app stderr logs
 
@@ -261,7 +261,7 @@ For detailed debugging, monitor the logs:
 
 ```bash
 # Follow main server logs
-tail -f logs/websocket_proxy.log
+tail -f logs/server.log
 
 # Monitor specific app
 tail -f logs/sales_error.log
@@ -296,6 +296,9 @@ tail -f logs/sales_error.log
 - `later` - Asynchronous scheduling
 - `httr` - HTTP client for proxying
 - `digest` - Session ID generation
+- `future` - Asynchronous operations
+- `promises` - Promise-based async programming
+- `logger` - Structured logging
 - `rmarkdown` - R Markdown support
 - `flexdashboard` - Dashboard layouts
 - `DT` - Interactive data tables
