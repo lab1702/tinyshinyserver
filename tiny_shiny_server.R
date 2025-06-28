@@ -36,21 +36,21 @@ validate_path <- function(path) {
   if (is.null(path) || !is.character(path) || length(path) != 1) {
     return(list(valid = FALSE, error = "Invalid path type"))
   }
-  
+
   if (nchar(path) > MAX_PATH_LENGTH) {
     return(list(valid = FALSE, error = "Path too long"))
   }
-  
+
   # Check for null bytes
   if (grepl("\\x00", path, useBytes = TRUE)) {
     return(list(valid = FALSE, error = "Path contains null bytes"))
   }
-  
+
   # Check for path traversal attempts (only dangerous patterns)
   if (grepl("\\.\\.[\\/\\\\]", path) || grepl("[\\/\\\\]\\.\\.", path)) {
     return(list(valid = FALSE, error = "Path traversal detected"))
   }
-  
+
   # Check for invalid characters (only reject very dangerous control chars)
   # ASCII 1-8: SOH, STX, ETX, EOT, ENQ, ACK, BEL, BS
   # ASCII 14-31: SO, SI, DLE, DC1-4, NAK, SYN, ETB, CAN, EM, SUB, ESC, FS, GS, RS, US
@@ -58,7 +58,7 @@ validate_path <- function(path) {
   if (grepl("[\001-\010\016-\037\177]", path)) {
     return(list(valid = FALSE, error = "Path contains invalid characters"))
   }
-  
+
   return(list(valid = TRUE, sanitized = path))
 }
 
@@ -66,13 +66,13 @@ validate_http_method <- function(method) {
   if (is.null(method) || !is.character(method) || length(method) != 1) {
     return(list(valid = FALSE, error = "Invalid method type"))
   }
-  
+
   method <- toupper(trimws(method))
-  
+
   if (!method %in% ALLOWED_HTTP_METHODS) {
     return(list(valid = FALSE, error = "HTTP method not allowed"))
   }
-  
+
   return(list(valid = TRUE, sanitized = method))
 }
 
@@ -80,25 +80,25 @@ validate_query_string <- function(query_string) {
   if (is.null(query_string)) {
     return(list(valid = TRUE, sanitized = ""))
   }
-  
+
   if (!is.character(query_string) || length(query_string) != 1) {
     return(list(valid = FALSE, error = "Invalid query string type"))
   }
-  
+
   if (nchar(query_string) > MAX_QUERY_LENGTH) {
     return(list(valid = FALSE, error = "Query string too long"))
   }
-  
+
   # Check for null bytes
   if (grepl("\\x00", query_string, useBytes = TRUE)) {
     return(list(valid = FALSE, error = "Query string contains null bytes"))
   }
-  
+
   # Basic URL encoding validation
   if (grepl("%[^0-9A-Fa-f]", query_string) || grepl("%[0-9A-Fa-f][^0-9A-Fa-f]", query_string)) {
     return(list(valid = FALSE, error = "Invalid URL encoding"))
   }
-  
+
   return(list(valid = TRUE, sanitized = query_string))
 }
 
@@ -106,20 +106,20 @@ validate_ws_message <- function(message) {
   if (is.null(message)) {
     return(list(valid = FALSE, error = "Message is null"))
   }
-  
+
   if (!is.character(message) || length(message) != 1) {
     return(list(valid = FALSE, error = "Invalid message type"))
   }
-  
+
   if (nchar(message, type = "bytes") > MAX_MESSAGE_SIZE) {
     return(list(valid = FALSE, error = "Message too large"))
   }
-  
+
   # Check for null bytes
   if (grepl("\\x00", message, useBytes = TRUE)) {
     return(list(valid = FALSE, error = "Message contains null bytes"))
   }
-  
+
   return(list(valid = TRUE, sanitized = message))
 }
 
@@ -127,16 +127,16 @@ validate_app_name <- function(app_name) {
   if (is.null(app_name) || !is.character(app_name) || length(app_name) != 1) {
     return(list(valid = FALSE, error = "Invalid app name type"))
   }
-  
+
   # Allow only alphanumeric, hyphen, underscore
   if (!grepl("^[a-zA-Z0-9_-]+$", app_name)) {
     return(list(valid = FALSE, error = "App name contains invalid characters"))
   }
-  
+
   if (nchar(app_name) > 50) {
     return(list(valid = FALSE, error = "App name too long"))
   }
-  
+
   return(list(valid = TRUE, sanitized = app_name))
 }
 
@@ -144,7 +144,7 @@ validate_config <- function(config) {
   if (!is.list(config)) {
     return(list(valid = FALSE, error = "Config must be a list"))
   }
-  
+
   # Validate required fields
   required_fields <- c("apps", "log_dir")
   for (field in required_fields) {
@@ -152,20 +152,20 @@ validate_config <- function(config) {
       return(list(valid = FALSE, error = paste("Missing required field:", field)))
     }
   }
-  
+
   # Validate apps array
   if (!is.list(config$apps) || length(config$apps) == 0) {
     return(list(valid = FALSE, error = "Apps must be a non-empty list"))
   }
-  
+
   # Validate each app configuration
   for (i in seq_along(config$apps)) {
     app <- config$apps[[i]]
-    
+
     if (!is.list(app)) {
       return(list(valid = FALSE, error = paste("App", i, "must be a list")))
     }
-    
+
     # Check required app fields
     app_required <- c("name", "port", "path")
     for (field in app_required) {
@@ -173,37 +173,37 @@ validate_config <- function(config) {
         return(list(valid = FALSE, error = paste("App", i, "missing field:", field)))
       }
     }
-    
+
     # Validate app name
     name_validation <- validate_app_name(app$name)
     if (!name_validation$valid) {
       return(list(valid = FALSE, error = paste("App", i, "name validation:", name_validation$error)))
     }
-    
+
     # Validate port
     if (!is.numeric(app$port) || length(app$port) != 1 || app$port < 1 || app$port > 65535) {
       return(list(valid = FALSE, error = paste("App", i, "invalid port")))
     }
-    
+
     # Validate path
     if (!is.character(app$path) || length(app$path) != 1) {
       return(list(valid = FALSE, error = paste("App", i, "path must be a string")))
     }
   }
-  
+
   # Validate proxy_port if present
   if ("proxy_port" %in% names(config)) {
-    if (!is.numeric(config$proxy_port) || length(config$proxy_port) != 1 || 
-        config$proxy_port < 1 || config$proxy_port > 65535) {
+    if (!is.numeric(config$proxy_port) || length(config$proxy_port) != 1 ||
+      config$proxy_port < 1 || config$proxy_port > 65535) {
       return(list(valid = FALSE, error = "Invalid proxy_port"))
     }
   }
-  
+
   # Validate log_dir
   if (!is.character(config$log_dir) || length(config$log_dir) != 1) {
     return(list(valid = FALSE, error = "log_dir must be a string"))
   }
-  
+
   return(list(valid = TRUE, sanitized = config))
 }
 
@@ -214,13 +214,13 @@ load_config <- function() {
     # Read with explicit UTF-8 encoding
     config_text <- readLines("config.json", encoding = "UTF-8", warn = FALSE)
     parsed_config <- fromJSON(paste(config_text, collapse = "\n"), simplifyDataFrame = FALSE)
-    
+
     # Validate configuration
     validation_result <- validate_config(parsed_config)
     if (!validation_result$valid) {
       stop(paste("Configuration validation failed:", validation_result$error))
     }
-    
+
     config <<- validation_result$sanitized
   } else {
     stop("config.json not found")
@@ -231,27 +231,30 @@ load_config <- function() {
 setup_logging <- function() {
   # Ensure log directory exists
   if (!dir.exists(config$log_dir)) dir.create(config$log_dir, recursive = TRUE)
-  
+
   # Set log level threshold
   log_threshold(INFO)
-  
+
   # Configure file appender with same format as console
   log_file <- file.path(config$log_dir, "server.log")
-  
+
   # Use a simple custom appender that writes to both console and file
   log_appender(function(lines) {
     # Write to console (stderr by default)
     cat(lines, sep = "\n", file = stderr())
-    
+
     # Write to file with same format
-    tryCatch({
-      cat(lines, sep = "\n", file = log_file, append = TRUE)
-    }, error = function(e) {
-      # If file writing fails, continue with console only
-      warning("Could not write to log file: ", e$message)
-    })
+    tryCatch(
+      {
+        cat(lines, sep = "\n", file = log_file, append = TRUE)
+      },
+      error = function(e) {
+        # If file writing fails, continue with console only
+        warning("Could not write to log file: ", e$message)
+      }
+    )
   })
-  
+
   log_info("Logging system initialized with file output")
 }
 
@@ -398,9 +401,10 @@ cleanup_stale_connections <- function() {
   # Log current connection counts for monitoring
   backend_count <- length(backend_connections)
   ws_count <- length(ws_connections)
-  log_debug("Active connections - Backend: {backend_count}, WebSocket: {ws_count}", 
-            backend_count = backend_count, ws_count = ws_count)
-  
+  log_debug("Active connections - Backend: {backend_count}, WebSocket: {ws_count}",
+    backend_count = backend_count, ws_count = ws_count
+  )
+
   return(connections_cleaned)
 }
 
@@ -420,7 +424,7 @@ cleanup_dead_processes <- function() {
   if (processes_cleaned > 0) {
     log_info("Cleaned up {processes_cleaned} dead processes", processes_cleaned = processes_cleaned)
   }
-  
+
   return(processes_cleaned)
 }
 
@@ -439,7 +443,7 @@ generate_session_id <- function(req) {
   user_agent <- if (is.null(req$HTTP_USER_AGENT)) "" else req$HTTP_USER_AGENT
   remote_addr <- if (is.null(req$REMOTE_ADDR)) "" else req$REMOTE_ADDR
   timestamp <- as.character(Sys.time())
-  
+
   # Add random entropy for better security
   random_salt <- paste(sample(c(0:9, letters, LETTERS), 16, replace = TRUE), collapse = "")
 
@@ -459,8 +463,9 @@ create_backend_connection <- function(app_name, session_id, client_ws) {
   }
 
   backend_url <- paste0("ws://127.0.0.1:", app_config$port, "/websocket/")
-  log_info("Connecting to backend: {backend_url} for app {app_name}", 
-           backend_url = backend_url, app_name = app_name)
+  log_info("Connecting to backend: {backend_url} for app {app_name}",
+    backend_url = backend_url, app_name = app_name
+  )
 
   # Create WebSocket connection to backend
   backend_ws <- WebSocket$new(backend_url)
@@ -478,8 +483,9 @@ create_backend_connection <- function(app_name, session_id, client_ws) {
 
   # Handle messages from backend to client
   backend_ws$onMessage(function(event) {
-    log_debug("Backend->Client message for {app_name}: {data}", 
-              app_name = app_name, data = substring(event$data, 1, 100))
+    log_debug("Backend->Client message for {app_name}: {data}",
+      app_name = app_name, data = substring(event$data, 1, 100)
+    )
     client_ws$send(event$data)
   })
 
@@ -494,8 +500,9 @@ create_backend_connection <- function(app_name, session_id, client_ws) {
       # Send any pending messages
       pending <- backend_connections[[session_id]]$pending_messages
       if (length(pending) > 0) {
-        log_info("Sending {count} pending messages for app {app_name}", 
-                 count = length(pending), app_name = app_name)
+        log_info("Sending {count} pending messages for app {app_name}",
+          count = length(pending), app_name = app_name
+        )
         for (msg in pending) {
           backend_ws$send(msg)
         }
@@ -510,8 +517,9 @@ create_backend_connection <- function(app_name, session_id, client_ws) {
   })
 
   backend_ws$onError(function(event) {
-    log_error("Backend connection error for app {app_name}: {error}", 
-              app_name = app_name, error = event$message)
+    log_error("Backend connection error for app {app_name}: {error}",
+      app_name = app_name, error = event$message
+    )
   })
 
   return(backend_ws)
@@ -703,7 +711,7 @@ handle_http_request <- function(req) {
     ))
   }
   path <- path_validation$sanitized
-  
+
   # Validate HTTP method
   method_validation <- validate_http_method(req$REQUEST_METHOD)
   if (!method_validation$valid) {
@@ -715,7 +723,7 @@ handle_http_request <- function(req) {
     ))
   }
   method <- method_validation$sanitized
-  
+
   # Validate query string
   query_validation <- validate_query_string(req$QUERY_STRING)
   if (!query_validation$valid) {
@@ -727,7 +735,7 @@ handle_http_request <- function(req) {
     ))
   }
   query_string <- query_validation$sanitized
-  
+
   log_debug("HTTP request: {method} {path}", method = method, path = path)
 
   # Landing page
@@ -785,12 +793,13 @@ handle_http_request <- function(req) {
         # Forward the request with timeout for better responsiveness
         tryCatch(
           {
-            log_info("Forwarding {method} to {target_url} for app {app_name}", 
-                     method = method, target_url = target_url, app_name = app_name)
+            log_info("Forwarding {method} to {target_url} for app {app_name}",
+              method = method, target_url = target_url, app_name = app_name
+            )
 
             # Make the request with timeout to prevent blocking
             if (method == "GET") {
-              response <- GET(target_url, timeout(30))  # 30 second timeout
+              response <- GET(target_url, timeout(30)) # 30 second timeout
             } else if (method == "POST") {
               # Handle POST data
               body <- req$rook.input$read_lines()
@@ -831,8 +840,9 @@ handle_http_request <- function(req) {
             }
           },
           error = function(e) {
-            log_error("Proxy error for app {app_name}: {error}", 
-                     app_name = app_name, error = e$message)
+            log_error("Proxy error for app {app_name}: {error}",
+              app_name = app_name, error = e$message
+            )
             return(list(
               status = 502L,
               headers = list("Content-Type" = "application/json"),
@@ -910,7 +920,7 @@ handle_websocket <- function(ws) {
       return()
     }
     validated_message <- message_validation$sanitized
-    
+
     log_debug("Client message: {message}", message = substring(validated_message, 1, 100))
 
     # Update last activity timestamp
@@ -943,8 +953,9 @@ handle_websocket <- function(ws) {
               }
               backend_connections[[session_id]]$pending_messages <<-
                 append(current_pending, validated_message)
-              log_debug("Queued message for pending connection ({count}/{max}) for app {app_name}", 
-                       count = length(current_pending) + 1, max = MAX_PENDING_MESSAGES, app_name = app_name)
+              log_debug("Queued message for pending connection ({count}/{max}) for app {app_name}",
+                count = length(current_pending) + 1, max = MAX_PENDING_MESSAGES, app_name = app_name
+              )
             }
           }
         }
@@ -1035,7 +1046,7 @@ cleanup_and_exit <- function() {
 main <- function() {
   # Load configuration
   load_config()
-  
+
   # Initialize proper logging
   setup_logging()
 
@@ -1064,21 +1075,24 @@ main <- function() {
 
   # Start memory management and cleanup monitoring with async operations
   log_info("Starting memory management monitor")
-  
+
   # Define async cleanup function
   async_cleanup <- function() {
     # Run cleanup operations in parallel to avoid blocking
-    cleanup_future <- future::future({
-      list(
-        stale_cleanup = cleanup_stale_connections(),
-        process_cleanup = cleanup_dead_processes()
-      )
-    }, seed = NULL)
-    
+    cleanup_future <- future::future(
+      {
+        list(
+          stale_cleanup = cleanup_stale_connections(),
+          process_cleanup = cleanup_dead_processes()
+        )
+      },
+      seed = NULL
+    )
+
     # Schedule next cleanup cycle
     later::later(async_cleanup, CLEANUP_INTERVAL_SECONDS)
   }
-  
+
   # Start first cleanup cycle
   later::later(async_cleanup, CLEANUP_INTERVAL_SECONDS)
 
@@ -1087,7 +1101,7 @@ main <- function() {
 
   # Set up future plan for async operations
   future::plan(future::multisession, workers = 4)
-  
+
   # Keep the server running with event-driven approach
   tryCatch({
     # Use httpuv's service function which is more efficient than busy waiting
@@ -1095,10 +1109,10 @@ main <- function() {
     while (TRUE) {
       # Process any pending later tasks
       later::run_now()
-      
+
       # Service httpuv events with timeout to allow periodic cleanup
       # This is more efficient than constant polling
-      httpuv::service(0.5)  # 500ms timeout instead of 100ms sleep
+      httpuv::service(0.5) # 500ms timeout instead of 100ms sleep
     }
   }, interrupt = function(e) {
     # Handle Ctrl-C interrupt
