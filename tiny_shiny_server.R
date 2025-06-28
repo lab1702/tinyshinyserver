@@ -641,7 +641,7 @@ generate_landing_page <- function() {
     .app-card h3 {
       font-size: 1.4rem;
       margin-bottom: 16px;
-      text-transform: capitalize;
+      text-transform: uppercase;
     }
 
     .app-links {
@@ -698,12 +698,6 @@ generate_landing_page <- function() {
       %s
     </div>
 
-    <div class="info">
-      <h4>Server Features</h4>
-      <p><strong>WebSocket Support:</strong> Full WebSocket support with session management</p>
-      <p><strong>Health Monitoring:</strong> Automatic app restart and health monitoring</p>
-      <p><strong>Session Affinity:</strong> Maintains user sessions across app interactions</p>
-    </div>
   </div>
 </body>
 </html>', app_cards)
