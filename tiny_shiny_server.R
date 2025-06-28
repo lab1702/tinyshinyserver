@@ -762,12 +762,16 @@ main <- function() {
 
   # Start health monitoring
   log_message("Starting health monitor")
-  later::later(function() {
+
+  # Define a recursive health check function
+  schedule_health_check <- function() {
     health_check()
-    later::later(function() {
-      health_check()
-    }, config$health_check_interval)
-  }, 5)
+    # Schedule the next health check
+    later::later(schedule_health_check, config$health_check_interval)
+  }
+
+  # Start the health check after initial delay
+  later::later(schedule_health_check, 5)
 
   # Start memory management and cleanup monitoring
   log_message("Starting memory management monitor")
