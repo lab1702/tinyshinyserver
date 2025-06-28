@@ -199,6 +199,19 @@ validate_config <- function(config) {
     }
   }
 
+  # Validate proxy_host if present
+  if ("proxy_host" %in% names(config)) {
+    if (!is.character(config$proxy_host) || length(config$proxy_host) != 1) {
+      return(list(valid = FALSE, error = "proxy_host must be a string"))
+    }
+
+    # Allow common host values
+    allowed_hosts <- c("localhost", "127.0.0.1", "0.0.0.0", "::1", "::")
+    if (!config$proxy_host %in% allowed_hosts) {
+      return(list(valid = FALSE, error = paste("proxy_host must be one of:", paste(allowed_hosts, collapse = ", "))))
+    }
+  }
+
   # Validate log_dir
   if (!is.character(config$log_dir) || length(config$log_dir) != 1) {
     return(list(valid = FALSE, error = "log_dir must be a string"))
@@ -987,11 +1000,20 @@ handle_websocket <- function(ws) {
 # Start the proxy server
 start_proxy_server <- function() {
   proxy_port <- config$proxy_port %||% 3838
-  log_info("Starting WebSocket-enabled proxy server on port {proxy_port}", proxy_port = proxy_port)
+  proxy_host <- config$proxy_host %||% "127.0.0.1"
+
+  # Convert localhost to 127.0.0.1 for httpuv compatibility
+  if (proxy_host == "localhost") {
+    proxy_host <- "127.0.0.1"
+  }
+
+  log_info("Starting WebSocket-enabled proxy server on {proxy_host}:{proxy_port}",
+    proxy_host = proxy_host, proxy_port = proxy_port
+  )
 
   # Start the httpuv server
   server <- startServer(
-    host = "127.0.0.1",
+    host = proxy_host,
     port = proxy_port,
     app = list(
       call = handle_http_request,

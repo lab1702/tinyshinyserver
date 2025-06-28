@@ -85,9 +85,10 @@ The server is configured via `config.json`:
       "port": 3003
     }
   ],
+  "proxy_port": 3838,
+  "proxy_host": "localhost",
   "restart_delay": 5,
   "health_check_interval": 10,
-  "proxy_port": 3838,
   "log_dir": "./logs"
 }
 ```
@@ -100,10 +101,22 @@ The server is configured via `config.json`:
 | `apps[].name` | Application identifier for URLs | Required |
 | `apps[].path` | Relative path to app directory | Required |
 | `apps[].port` | Port where app process runs | Required |
+| `proxy_port` | Port for the proxy server | 3838 |
+| `proxy_host` | Host interface for proxy server (localhost, 127.0.0.1, 0.0.0.0, ::1, ::) | "127.0.0.1" |
 | `restart_delay` | Seconds to wait before restarting failed apps | 5 |
 | `health_check_interval` | Seconds between health checks | 10 |
-| `proxy_port` | Port for the proxy server | 3838 |
 | `log_dir` | Directory for log files | "./logs" |
+
+### Network Configuration
+
+The `proxy_host` option controls which network interface the proxy server binds to:
+
+- `"localhost"` or `"127.0.0.1"` - Binds to localhost only (default, most secure)
+- `"0.0.0.0"` - Binds to all network interfaces (allows external access)
+- `"::1"` - IPv6 localhost
+- `"::"` - All IPv6 interfaces
+
+⚠️ **Security Note**: Using `"0.0.0.0"` makes the server accessible from external networks. Only use this if you understand the security implications and have proper firewall rules in place.
 
 ## Application Structure
 
