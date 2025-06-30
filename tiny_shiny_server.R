@@ -337,13 +337,27 @@ start_app <- function(app_config) {
 
   log_info("Starting app {app_name} on port {app_port}", app_name = app_name, app_port = app_port)
 
+  # Determine app type - prioritize traditional Shiny apps over Rmd
+  has_app_r <- file.exists(file.path(app_path, "app.R"))
+  has_ui_server <- file.exists(file.path(app_path, "ui.R")) && file.exists(file.path(app_path, "server.R"))
+  has_traditional_shiny <- has_app_r || has_ui_server
+
+  rmd_files <- list.files(app_path, pattern = "\\.Rmd$", full.names = TRUE)
+  is_rmd_app <- !has_traditional_shiny && length(rmd_files) > 0
+
+  if (is_rmd_app) {
+    log_info("Detected R Markdown app for {app_name}, using rmarkdown::run", app_name = app_name)
+  } else if (has_traditional_shiny) {
+    log_info("Detected traditional Shiny app for {app_name}", app_name = app_name)
+  }
+
   # Prepare log files
   output_log <- file.path(config$log_dir, paste0(app_name, "_output.log"))
   error_log <- file.path(config$log_dir, paste0(app_name, "_error.log"))
 
   # Start the app process
   process <- r_bg(
-    function(app_path, port, output_log, error_log) {
+    function(app_path, port, output_log, error_log, is_rmd_app, rmd_files) {
       # Redirect output to log files
       output_con <- file(output_log, open = "w", encoding = "UTF-8")
       error_con <- file(error_log, open = "w", encoding = "UTF-8")
@@ -367,19 +381,51 @@ start_app <- function(app_config) {
       sink(output_con, type = "output")
       sink(error_con, type = "message")
 
-      # Start the Shiny app
-      shiny::runApp(
-        appDir = app_path,
-        port = port,
-        host = "127.0.0.1",
-        launch.browser = FALSE
-      )
+      if (is_rmd_app && length(rmd_files) > 0) {
+        # Load rmarkdown library with error handling
+        tryCatch(
+          {
+            library(rmarkdown)
+          },
+          error = function(e) {
+            stop("rmarkdown package required. Install with: install.packages('rmarkdown')")
+          }
+        )
+
+        # Use the first .Rmd file found (use absolute path for security)
+        rmd_file <- rmd_files[1]
+
+        # Validate that the Rmd file exists and is readable
+        if (!file.exists(rmd_file)) {
+          stop("R Markdown file not found: ", rmd_file)
+        }
+
+        # Start the R Markdown app using rmarkdown::run
+        rmarkdown::run(
+          file = rmd_file,
+          shiny_args = list(
+            port = port,
+            host = "127.0.0.1",
+            launch.browser = FALSE
+          )
+        )
+      } else {
+        # Start the regular Shiny app
+        shiny::runApp(
+          appDir = app_path,
+          port = port,
+          host = "127.0.0.1",
+          launch.browser = FALSE
+        )
+      }
     },
     args = list(
       app_path = app_path,
       port = app_port,
       output_log = output_log,
-      error_log = error_log
+      error_log = error_log,
+      is_rmd_app = is_rmd_app,
+      rmd_files = rmd_files
     )
   )
 
