@@ -381,8 +381,8 @@ ProcessManager <- setRefClass("ProcessManager",
       }
 
       # Clear all connection tracking
-      config$backend_connections <- list()
-      config$ws_connections <- list()
+      config$backend_connections <<- list()
+      config$ws_connections <<- list()
 
       log_info("All applications stopped")
     }
