@@ -654,7 +654,10 @@ generate_landing_page <- function() {
 
   app_cards <- ""
 
-  for (app_config in config$apps) {
+  # Sort apps alphabetically by name
+  sorted_apps <- config$apps[order(sapply(config$apps, function(app) app$name))]
+
+  for (app_config in sorted_apps) {
     # HTML escape app name for security
     safe_name <- gsub("&", "&amp;", app_config$name)
     safe_name <- gsub("<", "&lt;", safe_name)
@@ -675,7 +678,7 @@ generate_landing_page <- function() {
     </div>', safe_name))
   }
 
-  html <- sprintf('
+  html <- paste0('
 <!DOCTYPE html>
 <html>
 <head>
@@ -764,7 +767,6 @@ generate_landing_page <- function() {
     .app-card h3 {
       font-size: 1.4rem;
       margin-bottom: 16px;
-      text-transform: uppercase;
     }
 
     .app-status {
@@ -888,32 +890,117 @@ generate_landing_page <- function() {
       white-space: pre-wrap;
       color: var(--text-color);
     }
+
+    .connection-status {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 20px;
+      padding: 8px 12px;
+      z-index: 1000;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    }
+
+    .status-indicator {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      transition: background-color 0.3s;
+    }
+
+    .status-indicator.connected {
+      background-color: #28a745;
+      box-shadow: 0 0 8px rgba(40, 167, 69, 0.4);
+    }
+
+    .status-indicator.disconnected {
+      background-color: #dc3545;
+      box-shadow: 0 0 8px rgba(220, 53, 69, 0.4);
+      animation: pulse 2s infinite;
+    }
+
+    .status-text {
+      font-weight: 500;
+    }
+
+    .status-text.connected {
+      color: #28a745;
+    }
+
+    .status-text.disconnected {
+      color: #dc3545;
+    }
+
+    @keyframes pulse {
+      0% { opacity: 1; }
+      50% { opacity: 0.5; }
+      100% { opacity: 1; }
+    }
   </style>
 </head>
 <body>
   <div class="container">
+    <div class="connection-status" id="connectionStatus">
+      <span class="status-indicator" id="statusIndicator"></span>
+      <span class="status-text" id="statusText">Connected</span>
+    </div>
+
     <div class="header">
       <h1>Tiny Shiny Server</h1>
       <p>WebSocket-enabled proxy server for Shiny applications</p>
     </div>
 
     <div class="apps-grid">
-      %s
+      ', app_cards, '
     </div>
 
     <div class="session-info">
       <h4>Server Information</h4>
-      <pre>%s</pre>
+      <pre>', session_info_text, '</pre>
     </div>
   </div>
 
   <script>
     let refreshInterval;
+    let isConnected = true;
+
+    function setConnectionStatus(connected) {
+      const indicator = document.getElementById("statusIndicator");
+      const statusText = document.getElementById("statusText");
+
+      if (connected) {
+        indicator.className = "status-indicator connected";
+        statusText.className = "status-text connected";
+        statusText.textContent = "Connected";
+        isConnected = true;
+      } else {
+        indicator.className = "status-indicator disconnected";
+        statusText.className = "status-text disconnected";
+        statusText.textContent = "Connection Lost";
+        isConnected = false;
+      }
+    }
 
     function updateAppStatus() {
       fetch(\"/api/apps\")
-        .then(response => response.json())
+        .then(response => {
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+          return response.json();
+        })
         .then(data => {
+          // Update connection status to connected if we were disconnected
+          if (!isConnected) {
+            setConnectionStatus(true);
+          }
+
           Object.values(data).forEach(app => {
             const statusElement = document.getElementById(\"status-\" + app.name);
             const connectionsElement = document.getElementById(\"connections-\" + app.name);
@@ -931,6 +1018,10 @@ generate_landing_page <- function() {
         })
         .catch(error => {
           console.error(\"Error fetching app status:\", error);
+
+          // Update connection status to disconnected
+          setConnectionStatus(false);
+
           // Update all status badges to show error state
           document.querySelectorAll(\".status-badge\").forEach(badge => {
             badge.textContent = \"error\";
@@ -940,6 +1031,7 @@ generate_landing_page <- function() {
     }
 
     // Initial load
+    setConnectionStatus(true);
     updateAppStatus();
 
     // Auto-refresh every 5 seconds
@@ -953,7 +1045,7 @@ generate_landing_page <- function() {
     });
   </script>
 </body>
-</html>', app_cards, session_info_text)
+</html>')
 
   return(html)
 }
@@ -1420,7 +1512,10 @@ handle_management_request <- function(req) {
 get_apps_status_json <- function() {
   apps_status <- list()
 
-  for (app_config in config$apps) {
+  # Sort apps alphabetically by name
+  sorted_apps <- config$apps[order(sapply(config$apps, function(app) app$name))]
+
+  for (app_config in sorted_apps) {
     app_name <- app_config$name
     process <- app_processes[[app_name]]
 
@@ -1844,10 +1939,58 @@ generate_management_html <- function() {
             text-align: right;
             margin-top: 10px;
         }
+        .connection-status {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            padding: 8px 12px;
+            z-index: 1000;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            transition: background-color 0.3s;
+        }
+        .status-indicator.connected {
+            background-color: #28a745;
+            box-shadow: 0 0 8px rgba(40, 167, 69, 0.4);
+        }
+        .status-indicator.disconnected {
+            background-color: #dc3545;
+            box-shadow: 0 0 8px rgba(220, 53, 69, 0.4);
+            animation: pulse 2s infinite;
+        }
+        .status-text {
+            font-weight: 500;
+        }
+        .status-text.connected {
+            color: #28a745;
+        }
+        .status-text.disconnected {
+            color: #dc3545;
+        }
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
     </style>
 </head>
 <body>
     <div class="container">
+        <div class="connection-status" id="connectionStatus">
+            <span class="status-indicator" id="statusIndicator"></span>
+            <span class="status-text" id="statusText">Connected</span>
+        </div>
         <div class="header">
             <div class="header-content">
                 <div>
@@ -1887,6 +2030,24 @@ generate_management_html <- function() {
 
     <script>
         let refreshInterval;
+        let isConnected = true;
+
+        function setConnectionStatus(connected) {
+            const indicator = document.getElementById("statusIndicator");
+            const statusText = document.getElementById("statusText");
+
+            if (connected) {
+                indicator.className = "status-indicator connected";
+                statusText.className = "status-text connected";
+                statusText.textContent = "Connected";
+                isConnected = true;
+            } else {
+                indicator.className = "status-indicator disconnected";
+                statusText.className = "status-text disconnected";
+                statusText.textContent = "Connection Lost";
+                isConnected = false;
+            }
+        }
 
         function formatDuration(seconds) {
             const hours = Math.floor(seconds / 3600);
@@ -1904,8 +2065,18 @@ generate_management_html <- function() {
 
         function updateSystemStatus() {
             fetch("/api/status")
-                .then(response => response.json())
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    return response.json();
+                })
                 .then(data => {
+                    // Update connection status to connected if we were disconnected
+                    if (!isConnected) {
+                        setConnectionStatus(true);
+                    }
+
                     const container = document.getElementById("systemStatus");
                     container.innerHTML =
                         "<div class=\\"status-card\\">" +
@@ -1923,13 +2094,25 @@ generate_management_html <- function() {
                 })
                 .catch(error => {
                     console.error("Error fetching system status:", error);
+                    // Update connection status to disconnected
+                    setConnectionStatus(false);
                 });
         }
 
         function updateApps() {
             fetch("/api/apps")
-                .then(response => response.json())
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    return response.json();
+                })
                 .then(data => {
+                    // Update connection status to connected if we were disconnected
+                    if (!isConnected) {
+                        setConnectionStatus(true);
+                    }
+
                     const container = document.getElementById("appsContainer");
                     container.innerHTML = "";
 
@@ -1953,13 +2136,25 @@ generate_management_html <- function() {
                 })
                 .catch(error => {
                     console.error("Error fetching apps:", error);
+                    // Update connection status to disconnected
+                    setConnectionStatus(false);
                 });
         }
 
         function updateConnections() {
             fetch("/api/connections")
-                .then(response => response.json())
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    return response.json();
+                })
                 .then(data => {
+                    // Update connection status to connected if we were disconnected
+                    if (!isConnected) {
+                        setConnectionStatus(true);
+                    }
+
                     const container = document.getElementById("connectionsContainer");
 
                     if (Object.keys(data).length === 0) {
@@ -2000,6 +2195,8 @@ generate_management_html <- function() {
                 })
                 .catch(error => {
                     console.error("Error fetching connections:", error);
+                    // Update connection status to disconnected
+                    setConnectionStatus(false);
                 });
         }
 
@@ -2096,6 +2293,7 @@ generate_management_html <- function() {
         }
 
         // Initial load
+        setConnectionStatus(true);
         refreshAll();
 
         // Auto-refresh every 5 seconds
