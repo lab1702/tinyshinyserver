@@ -230,19 +230,19 @@ get_client_ip <- function(req) {
     ip <- strsplit(forwarded_for, ",")[[1]][1]
     return(trimws(ip))
   }
-  
+
   # Try other common headers
   real_ip <- req$HTTP_X_REAL_IP
   if (!is.null(real_ip) && real_ip != "") {
     return(trimws(real_ip))
   }
-  
+
   # Fall back to REMOTE_ADDR
   remote_addr <- req$REMOTE_ADDR
   if (!is.null(remote_addr) && remote_addr != "") {
     return(remote_addr)
   }
-  
+
   return("unknown")
 }
 
@@ -251,28 +251,32 @@ get_dns_name <- function(ip) {
   if (ip %in% c("127.0.0.1", "::1", "localhost", "unknown")) {
     return(ip)
   }
-  
+
   # Try to resolve DNS name with timeout
-  tryCatch({
-    # Use system nslookup command for reverse DNS with timeout
-    result <- system2("timeout", c("2", "nslookup", ip),
-                     stdout = TRUE, stderr = TRUE, timeout = 3)
-    
-    # Parse nslookup output for name
-    if (length(result) > 0 && !is.null(attr(result, "status")) && attr(result, "status") == 0) {
-      name_lines <- grep("name =", result, value = TRUE)
-      if (length(name_lines) > 0) {
-        name <- gsub(".*name = (.+)\\.", "\\1", name_lines[1])
-        if (name != ip && nchar(name) > 0) {
-          return(name)
+  tryCatch(
+    {
+      # Use system nslookup command for reverse DNS with timeout
+      result <- system2("timeout", c("2", "nslookup", ip),
+        stdout = TRUE, stderr = TRUE, timeout = 3
+      )
+
+      # Parse nslookup output for name
+      if (length(result) > 0 && !is.null(attr(result, "status")) && attr(result, "status") == 0) {
+        name_lines <- grep("name =", result, value = TRUE)
+        if (length(name_lines) > 0) {
+          name <- gsub(".*name = (.+)\\.", "\\1", name_lines[1])
+          if (name != ip && nchar(name) > 0) {
+            return(name)
+          }
         }
       }
+
+      return(ip)
+    },
+    error = function(e) {
+      return(ip)
     }
-    
-    return(ip)
-  }, error = function(e) {
-    return(ip)
-  })
+  )
 }
 
 # Load configuration
@@ -605,13 +609,24 @@ generate_landing_page <- function() {
   app_cards <- ""
 
   for (app_config in config$apps) {
+    # HTML escape app name for security
+    safe_name <- gsub("&", "&amp;", app_config$name)
+    safe_name <- gsub("<", "&lt;", safe_name)
+    safe_name <- gsub(">", "&gt;", safe_name)
+    safe_name <- gsub("\"", "&quot;", safe_name)
+    safe_name <- gsub("'", "&#39;", safe_name)
+
     app_cards <- paste0(app_cards, sprintf('
-    <div class="app-card">
-      <h3>%s</h3>
-      <div class="app-links">
-        <a href="/proxy/%s/" class="proxy-link">Open App</a>
+    <div class="app-card" data-app="%1$s">
+      <h3>%1$s</h3>
+      <div class="app-status">
+        <span class="status-badge" id="status-%1$s">Loading...</span>
+        <span class="connections-count" id="connections-%1$s">0 connections</span>
       </div>
-    </div>', app_config$name, app_config$name))
+      <div class="app-links">
+        <a href="/proxy/%1$s/" class="proxy-link">Open App</a>
+      </div>
+    </div>', safe_name))
   }
 
   html <- sprintf('
@@ -706,6 +721,59 @@ generate_landing_page <- function() {
       text-transform: uppercase;
     }
 
+    .app-status {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      gap: 10px;
+    }
+
+    .status-badge {
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: bold;
+      text-transform: uppercase;
+    }
+
+    .status-running {
+      background-color: #d4edda;
+      color: #155724;
+    }
+
+    .status-stopped {
+      background-color: #f8d7da;
+      color: #721c24;
+    }
+
+    .status-crashed {
+      background-color: #fff3cd;
+      color: #856404;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .status-running {
+        background-color: #1e3a2e;
+        color: #4ade80;
+      }
+
+      .status-stopped {
+        background-color: #3a1e1e;
+        color: #f87171;
+      }
+
+      .status-crashed {
+        background-color: #3a2e1e;
+        color: #fbbf24;
+      }
+    }
+
+    .connections-count {
+      font-size: 12px;
+      color: var(--muted-text);
+    }
+
     .app-links {
       display: flex;
       justify-content: center;
@@ -792,6 +860,52 @@ generate_landing_page <- function() {
       <pre>%s</pre>
     </div>
   </div>
+
+  <script>
+    let refreshInterval;
+
+    function updateAppStatus() {
+      fetch(\"/api/apps\")
+        .then(response => response.json())
+        .then(data => {
+          Object.values(data).forEach(app => {
+            const statusElement = document.getElementById(\"status-\" + app.name);
+            const connectionsElement = document.getElementById(\"connections-\" + app.name);
+
+            if (statusElement) {
+              statusElement.textContent = app.status;
+              statusElement.className = \"status-badge status-\" + app.status;
+            }
+
+            if (connectionsElement) {
+              const connectionText = app.connections === 1 ? \"1 connection\" : app.connections + \" connections\";
+              connectionsElement.textContent = connectionText;
+            }
+          });
+        })
+        .catch(error => {
+          console.error(\"Error fetching app status:\", error);
+          // Update all status badges to show error state
+          document.querySelectorAll(\".status-badge\").forEach(badge => {
+            badge.textContent = \"error\";
+            badge.className = \"status-badge status-stopped\";
+          });
+        });
+    }
+
+    // Initial load
+    updateAppStatus();
+
+    // Auto-refresh every 5 seconds
+    refreshInterval = setInterval(updateAppStatus, 5000);
+
+    // Clean up interval when page is about to unload
+    window.addEventListener(\"beforeunload\", function() {
+      if (refreshInterval) {
+        clearInterval(refreshInterval);
+      }
+    });
+  </script>
 </body>
 </html>', app_cards, session_info_text)
 
@@ -853,6 +967,15 @@ handle_http_request <- function(req) {
       status = 200L,
       headers = list("Content-Type" = "application/json"),
       body = '{"status": "healthy"}'
+    ))
+  }
+
+  # API endpoint for app status (needed for landing page)
+  if (path == "/api/apps") {
+    return(list(
+      status = 200L,
+      headers = list("Content-Type" = "application/json"),
+      body = get_apps_status_json()
     ))
   }
 
@@ -1124,7 +1247,7 @@ handle_management_request <- function(req) {
   method <- req$REQUEST_METHOD
   path <- req$PATH_INFO %||% "/"
   query_string <- req$QUERY_STRING %||% ""
-  
+
   # Validate inputs
   method_validation <- validate_http_method(method)
   if (!method_validation$valid) {
@@ -1135,7 +1258,7 @@ handle_management_request <- function(req) {
     ))
   }
   method <- method_validation$sanitized
-  
+
   path_validation <- validate_path(path)
   if (!path_validation$valid) {
     return(list(
@@ -1145,9 +1268,9 @@ handle_management_request <- function(req) {
     ))
   }
   path <- path_validation$sanitized
-  
+
   log_info("Management {method} {path}", method = method, path = path)
-  
+
   # Management dashboard
   if (path == "/" && method == "GET") {
     return(list(
@@ -1156,7 +1279,7 @@ handle_management_request <- function(req) {
       body = generate_management_html()
     ))
   }
-  
+
   # API endpoints
   if (path == "/api/apps" && method == "GET") {
     return(list(
@@ -1165,7 +1288,7 @@ handle_management_request <- function(req) {
       body = get_apps_status_json()
     ))
   }
-  
+
   if (path == "/api/connections" && method == "GET") {
     return(list(
       status = 200L,
@@ -1173,7 +1296,7 @@ handle_management_request <- function(req) {
       body = get_connections_json()
     ))
   }
-  
+
   if (path == "/api/status" && method == "GET") {
     return(list(
       status = 200L,
@@ -1181,12 +1304,12 @@ handle_management_request <- function(req) {
       body = get_system_status_json()
     ))
   }
-  
+
   # App restart endpoint
   if (startsWith(path, "/api/apps/") && endsWith(path, "/restart") && method == "POST") {
     path_parts <- strsplit(path, "/")[[1]]
     path_parts <- path_parts[path_parts != ""]
-    
+
     if (length(path_parts) >= 3) {
       app_name_validation <- validate_app_name(path_parts[3])
       if (!app_name_validation$valid) {
@@ -1197,7 +1320,7 @@ handle_management_request <- function(req) {
         ))
       }
       app_name <- app_name_validation$sanitized
-      
+
       result <- restart_app(app_name)
       if (result$success) {
         return(list(
@@ -1214,29 +1337,32 @@ handle_management_request <- function(req) {
       }
     }
   }
-  
+
   # Shutdown endpoint
   if (path == "/api/shutdown" && method == "POST") {
     log_info("Shutdown requested via management API")
-    
+
     # Create shutdown flag file
     shutdown_flag_file <- file.path(config$log_dir, "shutdown.flag")
-    tryCatch({
-      writeLines("shutdown", shutdown_flag_file)
-      return(list(
-        status = 200L,
-        headers = list("Content-Type" = "application/json"),
-        body = '{"success": true, "message": "Shutdown initiated"}'
-      ))
-    }, error = function(e) {
-      return(list(
-        status = 500L,
-        headers = list("Content-Type" = "application/json"),
-        body = paste0('{"success": false, "error": "', e$message, '"}')
-      ))
-    })
+    tryCatch(
+      {
+        writeLines("shutdown", shutdown_flag_file)
+        return(list(
+          status = 200L,
+          headers = list("Content-Type" = "application/json"),
+          body = '{"success": true, "message": "Shutdown initiated"}'
+        ))
+      },
+      error = function(e) {
+        return(list(
+          status = 500L,
+          headers = list("Content-Type" = "application/json"),
+          body = paste0('{"success": false, "error": "', e$message, '"}')
+        ))
+      }
+    )
   }
-  
+
   # 404 for unknown paths
   return(list(
     status = 404L,
@@ -1247,11 +1373,11 @@ handle_management_request <- function(req) {
 
 get_apps_status_json <- function() {
   apps_status <- list()
-  
+
   for (app_config in config$apps) {
     app_name <- app_config$name
     process <- app_processes[[app_name]]
-    
+
     status <- if (is.null(process)) {
       "stopped"
     } else if (process$is_alive()) {
@@ -1259,7 +1385,7 @@ get_apps_status_json <- function() {
     } else {
       "crashed"
     }
-    
+
     # Count connections for this app
     app_connections <- 0
     for (conn in ws_connections) {
@@ -1267,7 +1393,7 @@ get_apps_status_json <- function() {
         app_connections <- app_connections + 1
       }
     }
-    
+
     apps_status[[app_name]] <- list(
       name = app_name,
       status = status,
@@ -1277,13 +1403,13 @@ get_apps_status_json <- function() {
       pid = if (!is.null(process) && process$is_alive()) process$get_pid() else NULL
     )
   }
-  
+
   return(toJSON(apps_status, auto_unbox = TRUE))
 }
 
 get_connections_json <- function() {
   connections <- list()
-  
+
   for (session_id in names(ws_connections)) {
     conn <- ws_connections[[session_id]]
     if (!is.null(conn)) {
@@ -1299,29 +1425,29 @@ get_connections_json <- function() {
       )
     }
   }
-  
+
   return(toJSON(connections, auto_unbox = TRUE))
 }
 
 get_system_status_json <- function() {
   total_connections <- length(ws_connections)
   running_apps <- 0
-  
+
   for (app_name in names(app_processes)) {
     process <- app_processes[[app_name]]
     if (!is.null(process) && process$is_alive()) {
       running_apps <- running_apps + 1
     }
   }
-  
+
   status <- list(
     total_apps = length(config$apps),
     running_apps = running_apps,
     total_connections = total_connections,
     server_uptime = "N/A", # Could be enhanced with actual uptime tracking
-    memory_usage = "N/A"   # Could be enhanced with memory monitoring
+    memory_usage = "N/A" # Could be enhanced with memory monitoring
   )
-  
+
   return(toJSON(status, auto_unbox = TRUE))
 }
 
@@ -1330,55 +1456,58 @@ restart_app <- function(app_name) {
   if (is.null(app_config)) {
     return(list(success = FALSE, message = "App not found"))
   }
-  
+
   log_info("Restarting app: {app_name}", app_name = app_name)
-  
-  tryCatch({
-    # Close existing connections for this app
-    sessions_to_remove <- c()
-    for (session_id in names(ws_connections)) {
-      conn <- ws_connections[[session_id]]
-      if (!is.null(conn) && !is.null(conn$app_name) && conn$app_name == app_name) {
-        if (!is.null(conn$ws)) {
-          tryCatch(conn$ws$close(), error = function(e) {})
+
+  tryCatch(
+    {
+      # Close existing connections for this app
+      sessions_to_remove <- c()
+      for (session_id in names(ws_connections)) {
+        conn <- ws_connections[[session_id]]
+        if (!is.null(conn) && !is.null(conn$app_name) && conn$app_name == app_name) {
+          if (!is.null(conn$ws)) {
+            tryCatch(conn$ws$close(), error = function(e) {})
+          }
+          sessions_to_remove <- c(sessions_to_remove, session_id)
         }
-        sessions_to_remove <- c(sessions_to_remove, session_id)
       }
-    }
-    
-    # Remove closed connections
-    for (session_id in sessions_to_remove) {
-      ws_connections[[session_id]] <<- NULL
-      if (session_id %in% names(backend_connections)) {
-        backend_connections[[session_id]] <<- NULL
+
+      # Remove closed connections
+      for (session_id in sessions_to_remove) {
+        ws_connections[[session_id]] <<- NULL
+        if (session_id %in% names(backend_connections)) {
+          backend_connections[[session_id]] <<- NULL
+        }
       }
-    }
-    
-    # Stop existing process
-    process <- app_processes[[app_name]]
-    if (!is.null(process) && process$is_alive()) {
-      process$kill()
-      Sys.sleep(1)
-      if (process$is_alive()) {
-        process$kill_tree()
+
+      # Stop existing process
+      process <- app_processes[[app_name]]
+      if (!is.null(process) && process$is_alive()) {
+        process$kill()
+        Sys.sleep(1)
+        if (process$is_alive()) {
+          process$kill_tree()
+        }
       }
+
+      # Start new process
+      start_app(app_config)
+
+      return(list(success = TRUE, message = paste("App", app_name, "restarted successfully")))
+    },
+    error = function(e) {
+      log_error("Failed to restart app {app_name}: {error}", app_name = app_name, error = e$message)
+      return(list(success = FALSE, message = paste("Failed to restart app:", e$message)))
     }
-    
-    # Start new process
-    start_app(app_config)
-    
-    return(list(success = TRUE, message = paste("App", app_name, "restarted successfully")))
-  }, error = function(e) {
-    log_error("Failed to restart app {app_name}: {error}", app_name = app_name, error = e$message)
-    return(list(success = FALSE, message = paste("Failed to restart app:", e$message)))
-  })
+  )
 }
 
 start_management_server <- function() {
   management_port <- config$management_port %||% 3839
-  
+
   log_info("Starting management server on localhost:{management_port}", management_port = management_port)
-  
+
   # Start the management server (always on localhost for security)
   server <- startServer(
     host = "127.0.0.1",
@@ -1387,7 +1516,7 @@ start_management_server <- function() {
       call = handle_management_request
     )
   )
-  
+
   return(server)
 }
 
@@ -1717,7 +1846,7 @@ generate_management_html <- function() {
             const hours = Math.floor(seconds / 3600);
             const minutes = Math.floor((seconds % 3600) / 60);
             const secs = Math.floor(seconds % 60);
-            
+
             if (hours > 0) {
                 return `${hours}h ${minutes}m ${secs}s`;
             } else if (minutes > 0) {
@@ -1732,7 +1861,7 @@ generate_management_html <- function() {
                 .then(response => response.json())
                 .then(data => {
                     const container = document.getElementById("systemStatus");
-                    container.innerHTML = 
+                    container.innerHTML =
                         "<div class=\\"status-card\\">" +
                             "<h3>Total Apps</h3>" +
                             "<div class=\\"value\\">" + data.total_apps + "</div>" +
@@ -1757,11 +1886,11 @@ generate_management_html <- function() {
                 .then(data => {
                     const container = document.getElementById("appsContainer");
                     container.innerHTML = "";
-                    
+
                     Object.values(data).forEach(app => {
                         const appDiv = document.createElement("div");
                         appDiv.className = "app-card";
-                        appDiv.innerHTML = 
+                        appDiv.innerHTML =
                             "<div class=\\"app-header\\">" +
                                 "<div class=\\"app-name\\">" + app.name + "</div>" +
                                 "<span class=\\"status-badge status-" + app.status + "\\">" + app.status + "</span>" +
@@ -1786,13 +1915,13 @@ generate_management_html <- function() {
                 .then(response => response.json())
                 .then(data => {
                     const container = document.getElementById("connectionsContainer");
-                    
+
                     if (Object.keys(data).length === 0) {
                         container.innerHTML = "<p>No active connections</p>";
                         return;
                     }
-                    
-                    let tableHTML = 
+
+                    let tableHTML =
                         "<table class=\\"connections-table\\">" +
                             "<thead>" +
                                 "<tr>" +
@@ -1806,9 +1935,9 @@ generate_management_html <- function() {
                                 "</tr>" +
                             "</thead>" +
                             "<tbody>";
-                    
+
                     Object.values(data).forEach(conn => {
-                        tableHTML += 
+                        tableHTML +=
                             "<tr>" +
                                 "<td>" + conn.app_name + "</td>" +
                                 "<td>" + conn.client_ip + "</td>" +
@@ -1819,7 +1948,7 @@ generate_management_html <- function() {
                                 "<td>" + conn.last_activity + "</td>" +
                             "</tr>";
                     });
-                    
+
                     tableHTML += "</tbody></table>";
                     container.innerHTML = tableHTML;
                 })
@@ -1832,7 +1961,7 @@ generate_management_html <- function() {
             const button = event.target;
             button.disabled = true;
             button.textContent = "Restarting...";
-            
+
             fetch("/api/apps/" + appName + "/restart", {
                 method: "POST"
             })
@@ -1861,19 +1990,19 @@ generate_management_html <- function() {
                 "This will stop all applications and the management interface. " +
                 "You will need to restart the server manually to continue using it."
             );
-            
+
             if (!confirmed) {
                 return;
             }
-            
+
             const button = document.querySelector(".shutdown-btn");
             button.disabled = true;
             button.textContent = "Shutting down...";
-            
+
             if (refreshInterval) {
                 clearInterval(refreshInterval);
             }
-            
+
             fetch("/api/shutdown", {
                 method: "POST"
             })
@@ -1881,7 +2010,7 @@ generate_management_html <- function() {
             .then(data => {
                 if (data.success) {
                     alert("Server shutdown initiated successfully. The page will become unresponsive as the server stops.");
-                    document.body.innerHTML = 
+                    document.body.innerHTML =
                         "<div style=\\"display: flex; justify-content: center; align-items: center; height: 100vh; text-align: center; background: var(--surface-color); color: var(--text-color);\\">" +
                             "<div>" +
                                 "<h1 style=\\"color: var(--error-text); margin-bottom: 20px;\\">Server Shutdown</h1>" +
@@ -1898,7 +2027,7 @@ generate_management_html <- function() {
             .catch(error => {
                 console.error("Error shutting down server:", error);
                 if (error.message.includes("fetch")) {
-                    document.body.innerHTML = 
+                    document.body.innerHTML =
                         "<div style=\\"display: flex; justify-content: center; align-items: center; height: 100vh; text-align: center; background: var(--surface-color); color: var(--text-color);\\">" +
                             "<div>" +
                                 "<h1 style=\\"color: var(--error-text); margin-bottom: 20px;\\">Server Shutdown</h1>" +
@@ -1927,8 +2056,8 @@ generate_management_html <- function() {
         refreshInterval = setInterval(refreshAll, 5000);
     </script>
 </body>
-</html>';
-  
+</html>'
+
   return(html)
 }
 
@@ -1948,13 +2077,16 @@ cleanup_and_exit <- function() {
 
   # Stop management server
   if (!is.null(management_server)) {
-    tryCatch({
-      stopServer(management_server)
-      management_server <<- NULL
-      log_info("Management server stopped")
-    }, error = function(e) {
-      log_error("Error stopping management server: {error}", error = e$message)
-    })
+    tryCatch(
+      {
+        stopServer(management_server)
+        management_server <<- NULL
+        log_info("Management server stopped")
+      },
+      error = function(e) {
+        log_error("Error stopping management server: {error}", error = e$message)
+      }
+    )
   }
 
   # Terminate all app processes
@@ -1993,19 +2125,22 @@ main <- function() {
 
   log_info("Starting WebSocket Shiny Server process manager")
   log_info("Press Ctrl-C to shutdown gracefully")
-  
+
   # Create a shutdown flag file to monitor for external shutdown requests
   shutdown_flag_file <- file.path(config$log_dir, "shutdown.flag")
   if (file.exists(shutdown_flag_file)) {
     file.remove(shutdown_flag_file)
   }
-  
+
   # Add cleanup to remove shutdown flag
-  on.exit({
-    if (file.exists(shutdown_flag_file)) {
-      file.remove(shutdown_flag_file)
-    }
-  }, add = TRUE)
+  on.exit(
+    {
+      if (file.exists(shutdown_flag_file)) {
+        file.remove(shutdown_flag_file)
+      }
+    },
+    add = TRUE
+  )
 
   # Start all apps sequentially to ensure proper process tracking
   # Note: Parallel startup was causing issues with global process tracking
@@ -2069,7 +2204,7 @@ main <- function() {
         log_info("Shutdown flag detected, initiating graceful shutdown")
         break
       }
-      
+
       # Process any pending later tasks
       later::run_now()
 

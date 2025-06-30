@@ -6,6 +6,7 @@ A lightweight, WebSocket-enabled proxy server for hosting multiple Shiny applica
 
 - **Multi-App Hosting**: Host multiple Shiny applications on different ports behind a single proxy
 - **WebSocket Support**: Full WebSocket proxy with session affinity for real-time Shiny apps
+- **Real-time Status Updates**: Landing page shows live app status and connection counts with auto-refresh
 - **Management Interface**: Professional web-based dashboard for monitoring and controlling all applications
 - **Real-time Monitoring**: Live connection tracking with IP addresses, DNS names, and user agents
 - **Individual App Control**: Restart specific applications without affecting others
@@ -56,7 +57,7 @@ A lightweight, WebSocket-enabled proxy server for hosting multiple Shiny applica
    The PowerShell script automatically locates your R installation and starts the server.
 
 4. **Access applications:**
-   - Landing page: http://localhost:3838
+   - Landing page with live status: http://localhost:3838
    - Management interface: http://localhost:3839
    - Individual apps: http://localhost:3838/proxy/{app_name}/
 
@@ -130,6 +131,29 @@ The `proxy_host` option controls which network interface the proxy server binds 
 - `"::"` - All IPv6 interfaces
 
 ⚠️ **Security Note**: Using `"0.0.0.0"` makes the server accessible from external networks. Only use this if you understand the security implications and have proper firewall rules in place.
+
+## Landing Page
+
+The landing page at **http://localhost:3838** provides an overview of all hosted applications with real-time status information.
+
+### Features
+
+#### **Real-time Status Display**
+- **Live Status Badges**: Visual indicators showing if each app is running, stopped, or crashed
+- **Connection Counts**: Real-time display of active connections per application
+- **Auto-refresh**: Status updates automatically every 5 seconds
+- **Color-coded Indicators**: Green for running, red for stopped, yellow for crashed apps
+
+#### **Application Access**
+- **Direct Links**: Click "Open App" to access any application directly
+- **Clean Interface**: Modern, responsive design that works on all devices
+- **Dark Mode Support**: Automatically adapts to your system's theme preference
+
+#### **Server Information**
+- **System Details**: Display of R version, platform, and server configuration
+- **Session Info**: Technical details about the running R environment
+
+The landing page uses the same status API as the management interface, ensuring consistency between all monitoring views.
 
 ## Management Interface
 
@@ -289,6 +313,7 @@ R -e "rmarkdown::run('apps/reports/report.Rmd', shiny_args = list(port = 3003, h
 
 **Proxy Server:**
 - Health check: `GET /health` - Returns `{"status": "healthy"}`
+- Apps status: `GET /api/apps` - Returns detailed application status (used by landing page)
 
 **Management Interface:**
 - System status: `GET /api/status` - Returns overall system health
