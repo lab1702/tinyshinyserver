@@ -8,7 +8,7 @@ A lightweight, WebSocket-enabled proxy server for hosting multiple Shiny applica
 - **WebSocket Support**: Full WebSocket proxy with session affinity for real-time Shiny apps
 - **Real-time Status Updates**: Landing page shows live app status and connection counts with auto-refresh
 - **Management Interface**: Professional web-based dashboard for monitoring and controlling all applications
-- **Real-time Monitoring**: Live connection tracking with IP addresses, DNS names, and user agents
+- **Real-time Monitoring**: Live connection tracking with IP addresses and user agents
 - **Individual App Control**: Restart specific applications without affecting others
 - **Health Monitoring**: Automatic health checks with app restart on failure
 - **Memory Management**: Built-in connection cleanup and resource management
@@ -207,7 +207,7 @@ Visit **http://localhost:3839** to access the management dashboard.
 
 #### **Connection Tracking**
 - **Real-time Connections**: See all active WebSocket connections
-- **Client Information**: IP addresses, DNS names, and user agents
+- **Client Information**: IP addresses and user agents
 - **Session Details**: Connection timestamps, duration, and last activity
 - **Browser Detection**: Identify client browsers and operating systems
 

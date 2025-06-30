@@ -31,51 +31,6 @@ get_client_ip <- function(req) {
   return("unknown")
 }
 
-get_dns_name <- function(ip) {
-  "Safely resolve DNS name from IP address with validation"
-
-  # Validate IP address first
-  ip_validation <- validate_ip_address(ip)
-  if (!ip_validation$valid) {
-    log_warn("Invalid IP address for DNS resolution: {ip}", ip = ip)
-    return(ip)
-  }
-
-  validated_ip <- ip_validation$sanitized
-
-  # Skip DNS resolution for localhost and unknown IPs
-  if (validated_ip %in% c("127.0.0.1", "::1", "localhost", "unknown")) {
-    return(validated_ip)
-  }
-
-  # Try to resolve DNS name with timeout and validation
-  tryCatch(
-    {
-      # Use system nslookup command for reverse DNS with timeout
-      # Note: This is safer than the original implementation as we validate IP first
-      result <- system2("timeout", c("2", "nslookup", validated_ip),
-        stdout = TRUE, stderr = TRUE, timeout = 3
-      )
-
-      # Parse nslookup output for name
-      if (length(result) > 0 && !is.null(attr(result, "status")) && attr(result, "status") == 0) {
-        name_lines <- grep("name =", result, value = TRUE)
-        if (length(name_lines) > 0) {
-          name <- gsub(".*name = (.+)\\.", "\\1", name_lines[1])
-          if (name != validated_ip && nchar(name) > 0) {
-            return(name)
-          }
-        }
-      }
-
-      return(validated_ip)
-    },
-    error = function(e) {
-      log_debug("DNS resolution failed for {ip}: {error}", ip = validated_ip, error = e$message)
-      return(validated_ip)
-    }
-  )
-}
 
 # Generate session ID
 generate_session_id <- function(req) {

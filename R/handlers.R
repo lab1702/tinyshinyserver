@@ -272,11 +272,10 @@ handle_websocket_connection <- function(ws, config, connection_manager) {
 
   # Get client connection info
   client_ip <- get_client_ip(ws$request)
-  client_dns <- get_dns_name(client_ip)
   user_agent <- ws$request$HTTP_USER_AGENT %||% "unknown"
 
   # Add connection to manager
-  connection_manager$add_client_connection(session_id, ws, app_name, client_ip, client_dns, user_agent)
+  connection_manager$add_client_connection(session_id, ws, app_name, client_ip, user_agent)
 
   # Set up message handler
   ws$onMessage(function(binary, message) {

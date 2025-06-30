@@ -148,14 +148,13 @@ ConnectionManager <- setRefClass("ConnectionManager",
         }
       )
     },
-    add_client_connection = function(session_id, ws, app_name, client_ip, client_dns, user_agent) {
+    add_client_connection = function(session_id, ws, app_name, client_ip, user_agent) {
       "Add a new client WebSocket connection"
 
       config$add_ws_connection(session_id, list(
         ws = ws,
         app_name = app_name,
         client_ip = client_ip,
-        client_dns = client_dns,
         user_agent = user_agent,
         last_activity = Sys.time(),
         created_at = Sys.time()
@@ -216,7 +215,6 @@ ConnectionManager <- setRefClass("ConnectionManager",
             session_id = session_id,
             app_name = conn$app_name %||% "unknown",
             client_ip = conn$client_ip %||% "unknown",
-            client_dns = conn$client_dns %||% "unknown",
             user_agent = conn$user_agent %||% "unknown",
             connected_at = format(conn$created_at, "%Y-%m-%d %H:%M:%S"),
             last_activity = format(conn$last_activity, "%Y-%m-%d %H:%M:%S"),

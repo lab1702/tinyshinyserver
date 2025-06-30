@@ -121,7 +121,7 @@ validate_app_name <- function(app_name, max_length = 50) {
 }
 
 validate_ip_address <- function(ip) {
-  "Validate IP addresses for DNS resolution"
+  "Validate IP addresses"
 
   if (is.null(ip) || !is.character(ip) || length(ip) != 1) {
     return(list(valid = FALSE, error = "Invalid IP type"))

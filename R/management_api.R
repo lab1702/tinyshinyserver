@@ -112,7 +112,6 @@ handle_management_connections_api <- function(config) {
             session_id = session_id,
             app_name = conn$app_name %||% "unknown",
             client_ip = conn$client_ip %||% "unknown",
-            client_dns = conn$client_dns %||% "unknown",
             user_agent = conn$user_agent %||% "unknown",
             connected_at = format(conn$created_at, "%Y-%m-%d %H:%M:%S"),
             last_activity = format(conn$last_activity, "%Y-%m-%d %H:%M:%S"),
