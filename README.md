@@ -6,12 +6,16 @@ A lightweight, WebSocket-enabled proxy server for hosting multiple Shiny applica
 
 - **Multi-App Hosting**: Host multiple Shiny applications on different ports behind a single proxy
 - **WebSocket Support**: Full WebSocket proxy with session affinity for real-time Shiny apps
+- **Management Interface**: Professional web-based dashboard for monitoring and controlling all applications
+- **Real-time Monitoring**: Live connection tracking with IP addresses, DNS names, and user agents
+- **Individual App Control**: Restart specific applications without affecting others
 - **Health Monitoring**: Automatic health checks with app restart on failure
 - **Memory Management**: Built-in connection cleanup and resource management
+- **Graceful Shutdown**: Multiple shutdown options including web-based controls
+- **Dark Mode Support**: Automatic theme detection for better user experience
 - **R Markdown Support**: Native support for interactive R Markdown documents with `runtime: shiny`
-- **Graceful Shutdown**: Clean process termination with Ctrl-C
 - **Binary Asset Support**: Handles images, fonts, and other binary files correctly
-- **Logging**: Comprehensive logging with per-app log files
+- **Comprehensive Logging**: Structured logging with per-app log files
 
 ## Quick Start
 
@@ -53,11 +57,18 @@ A lightweight, WebSocket-enabled proxy server for hosting multiple Shiny applica
 
 4. **Access applications:**
    - Landing page: http://localhost:3838
+   - Management interface: http://localhost:3839
    - Individual apps: http://localhost:3838/proxy/{app_name}/
 
 ### Stopping the Server
 
-Press `Ctrl-C` to gracefully shutdown the server. This will:
+**Recommended**: Use the management interface at http://localhost:3839 and click the "Shutdown Server" button.
+
+**Alternative methods:**
+- Press `Ctrl-C` in the terminal where the server is running
+- API call: `curl -X POST http://localhost:3839/api/shutdown`
+
+All methods will gracefully:
 - Close all WebSocket connections
 - Terminate all spawned Shiny app processes
 - Clean up resources and exit
@@ -87,6 +98,7 @@ The server is configured via `config.json`:
   ],
   "proxy_port": 3838,
   "proxy_host": "localhost",
+  "management_port": 3839,
   "restart_delay": 5,
   "health_check_interval": 10,
   "log_dir": "./logs"
@@ -103,6 +115,7 @@ The server is configured via `config.json`:
 | `apps[].port` | Port where app process runs | Required |
 | `proxy_port` | Port for the proxy server | 3838 |
 | `proxy_host` | Host interface for proxy server (localhost, 127.0.0.1, 0.0.0.0, ::1, ::) | "127.0.0.1" |
+| `management_port` | Port for the management interface | 3839 |
 | `restart_delay` | Seconds to wait before restarting failed apps | 5 |
 | `health_check_interval` | Seconds between health checks | 10 |
 | `log_dir` | Directory for log files | "./logs" |
@@ -117,6 +130,73 @@ The `proxy_host` option controls which network interface the proxy server binds 
 - `"::"` - All IPv6 interfaces
 
 ⚠️ **Security Note**: Using `"0.0.0.0"` makes the server accessible from external networks. Only use this if you understand the security implications and have proper firewall rules in place.
+
+## Management Interface
+
+The management interface provides a professional web-based dashboard for monitoring and controlling your Shiny server.
+
+### Accessing the Management Interface
+
+Visit **http://localhost:3839** to access the management dashboard.
+
+🔒 **Security**: The management interface is restricted to localhost only for security.
+
+### Features
+
+#### **System Overview**
+- Total applications count
+- Running applications count  
+- Active connections count
+- Real-time auto-refresh (every 5 seconds)
+
+#### **Application Management**
+- **Status Monitoring**: See if each app is running, stopped, or crashed
+- **Connection Counts**: View active connections per application
+- **Process Information**: See process IDs and ports for each app
+- **Individual Restart**: Restart specific applications without affecting others
+- **Resource Details**: Monitor app paths and configuration
+
+#### **Connection Tracking**
+- **Real-time Connections**: See all active WebSocket connections
+- **Client Information**: IP addresses, DNS names, and user agents
+- **Session Details**: Connection timestamps, duration, and last activity
+- **Browser Detection**: Identify client browsers and operating systems
+
+#### **Server Controls**
+- **Graceful Shutdown**: Shutdown the entire server with confirmation dialog
+- **Safety Features**: Multiple confirmation prompts prevent accidental shutdowns
+- **Clean Termination**: Properly closes all connections and terminates all processes
+
+### Management API
+
+The management interface exposes a REST API for programmatic access:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/status` | GET | System overview (apps, connections) |
+| `/api/apps` | GET | Detailed application status |
+| `/api/connections` | GET | Active connection details |
+| `/api/apps/{name}/restart` | POST | Restart specific application |
+| `/api/shutdown` | POST | Graceful server shutdown |
+
+**Example usage:**
+```bash
+# Get system status
+curl http://localhost:3839/api/status
+
+# Restart the sales app
+curl -X POST http://localhost:3839/api/apps/sales/restart
+
+# Shutdown server
+curl -X POST http://localhost:3839/api/shutdown
+```
+
+### Dark Mode Support
+
+The management interface automatically adapts to your system's theme preference:
+- **Light Mode**: Clean, professional appearance for daytime use
+- **Dark Mode**: Comfortable viewing for low-light environments
+- **Automatic Detection**: Uses CSS `prefers-color-scheme` media query
 
 ## Application Structure
 
@@ -207,13 +287,29 @@ R -e "rmarkdown::run('apps/reports/report.Rmd', shiny_args = list(port = 3003, h
 
 ### Health Endpoints
 
+**Proxy Server:**
 - Health check: `GET /health` - Returns `{"status": "healthy"}`
+
+**Management Interface:**
+- System status: `GET /api/status` - Returns overall system health
+- Apps status: `GET /api/apps` - Returns detailed application status
+- Connections: `GET /api/connections` - Returns active connection details
 
 ## Architecture
 
 The server uses a multi-process architecture:
 
 ```
+                    ┌─────────────────────┐
+                    │  Management Server  │
+                    │    (Port 3839)      │
+                    │                     │
+                    │  • System Status    │
+                    │  • App Control      │
+                    │  • Connection Info  │
+                    │  • Graceful Shutdown│
+                    └─────────────────────┘
+                    
 ┌─────────────────────┐
 │   Proxy Server      │
 │   (Port 3838)       │
@@ -239,10 +335,12 @@ The server uses a multi-process architecture:
 
 ### Key Components
 
+- **Management Server**: Web-based monitoring and control interface
 - **HTTP Handler**: Routes requests to appropriate backend apps
 - **WebSocket Handler**: Manages real-time connections with session affinity
 - **Process Manager**: Monitors and restarts failed applications
 - **Memory Manager**: Cleans up stale connections and resources
+- **Connection Tracker**: Records client information and session details
 
 ## Troubleshooting
 
@@ -268,6 +366,17 @@ The server uses a multi-process architecture:
 - Consider adjusting health check intervals
 - Check for resource exhaustion in individual apps
 
+**Management interface not accessible:**
+- Verify server is running and listening on port 3839
+- Check that you're accessing http://localhost:3839 (not external IP)
+- Ensure no firewall is blocking localhost connections
+- Check logs for management server startup messages
+
+**Connection tracking not showing data:**
+- Verify clients are making WebSocket connections (not just HTTP)
+- Check that apps are properly proxied through the server
+- Monitor logs for WebSocket connection messages
+
 ### Debug Mode
 
 For detailed debugging, monitor the logs:
@@ -284,11 +393,13 @@ tail -f logs/sales_error.log
 
 ⚠️ **Important**: This server is designed for development and internal use. For production deployment, consider:
 
-- Adding authentication and authorization
-- Implementing input validation and sanitization
-- Setting up SSL/TLS encryption
+- **Management Interface Security**: Currently restricted to localhost only
+- Adding authentication and authorization for both proxy and management interfaces
+- Implementing rate limiting on management API endpoints
+- Setting up SSL/TLS encryption for all interfaces
 - Configuring proper firewall rules
 - Regular security updates of dependencies
+- Network segmentation if exposing the proxy server externally
 
 ## Contributing
 

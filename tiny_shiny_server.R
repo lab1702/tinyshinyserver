@@ -19,6 +19,7 @@ config <- NULL
 app_processes <- list()
 ws_connections <- list()
 backend_connections <- list()
+management_server <- NULL
 
 # Memory management constants
 MAX_PENDING_MESSAGES <- 100
@@ -220,6 +221,59 @@ validate_config <- function(config) {
   return(list(valid = TRUE, sanitized = config))
 }
 
+# Helper functions for connection tracking
+get_client_ip <- function(req) {
+  # Try to get real IP from headers (for reverse proxy setups)
+  forwarded_for <- req$HTTP_X_FORWARDED_FOR
+  if (!is.null(forwarded_for) && forwarded_for != "") {
+    # Take the first IP if multiple are present
+    ip <- strsplit(forwarded_for, ",")[[1]][1]
+    return(trimws(ip))
+  }
+  
+  # Try other common headers
+  real_ip <- req$HTTP_X_REAL_IP
+  if (!is.null(real_ip) && real_ip != "") {
+    return(trimws(real_ip))
+  }
+  
+  # Fall back to REMOTE_ADDR
+  remote_addr <- req$REMOTE_ADDR
+  if (!is.null(remote_addr) && remote_addr != "") {
+    return(remote_addr)
+  }
+  
+  return("unknown")
+}
+
+get_dns_name <- function(ip) {
+  # Skip DNS resolution for localhost and unknown IPs
+  if (ip %in% c("127.0.0.1", "::1", "localhost", "unknown")) {
+    return(ip)
+  }
+  
+  # Try to resolve DNS name with timeout
+  tryCatch({
+    # Use system nslookup command for reverse DNS with timeout
+    result <- system2("timeout", c("2", "nslookup", ip),
+                     stdout = TRUE, stderr = TRUE, timeout = 3)
+    
+    # Parse nslookup output for name
+    if (length(result) > 0 && !is.null(attr(result, "status")) && attr(result, "status") == 0) {
+      name_lines <- grep("name =", result, value = TRUE)
+      if (length(name_lines) > 0) {
+        name <- gsub(".*name = (.+)\\.", "\\1", name_lines[1])
+        if (name != ip && nchar(name) > 0) {
+          return(name)
+        }
+      }
+    }
+    
+    return(ip)
+  }, error = function(e) {
+    return(ip)
+  })
+}
 
 # Load configuration
 load_config <- function() {
@@ -947,10 +1001,18 @@ handle_websocket <- function(ws) {
 
   log_info("WebSocket routed to app: {app_name}", app_name = app_name)
 
+  # Get client connection info
+  client_ip <- get_client_ip(ws$request)
+  client_dns <- get_dns_name(client_ip)
+  user_agent <- ws$request$HTTP_USER_AGENT %||% "unknown"
+
   # Store client WebSocket with app info and timestamp
   ws_connections[[session_id]] <<- list(
     ws = ws,
     app_name = app_name,
+    client_ip = client_ip,
+    client_dns = client_dns,
+    user_agent = user_agent,
     last_activity = Sys.time(),
     created_at = Sys.time()
   )
@@ -1057,6 +1119,819 @@ start_proxy_server <- function() {
   return(server)
 }
 
+# Management server functions
+handle_management_request <- function(req) {
+  method <- req$REQUEST_METHOD
+  path <- req$PATH_INFO %||% "/"
+  query_string <- req$QUERY_STRING %||% ""
+  
+  # Validate inputs
+  method_validation <- validate_http_method(method)
+  if (!method_validation$valid) {
+    return(list(
+      status = 400L,
+      headers = list("Content-Type" = "application/json"),
+      body = paste0('{"error": "400 - Bad Request: ', method_validation$error, '"}')
+    ))
+  }
+  method <- method_validation$sanitized
+  
+  path_validation <- validate_path(path)
+  if (!path_validation$valid) {
+    return(list(
+      status = 400L,
+      headers = list("Content-Type" = "application/json"),
+      body = paste0('{"error": "400 - Bad Request: ', path_validation$error, '"}')
+    ))
+  }
+  path <- path_validation$sanitized
+  
+  log_info("Management {method} {path}", method = method, path = path)
+  
+  # Management dashboard
+  if (path == "/" && method == "GET") {
+    return(list(
+      status = 200L,
+      headers = list("Content-Type" = "text/html"),
+      body = generate_management_html()
+    ))
+  }
+  
+  # API endpoints
+  if (path == "/api/apps" && method == "GET") {
+    return(list(
+      status = 200L,
+      headers = list("Content-Type" = "application/json"),
+      body = get_apps_status_json()
+    ))
+  }
+  
+  if (path == "/api/connections" && method == "GET") {
+    return(list(
+      status = 200L,
+      headers = list("Content-Type" = "application/json"),
+      body = get_connections_json()
+    ))
+  }
+  
+  if (path == "/api/status" && method == "GET") {
+    return(list(
+      status = 200L,
+      headers = list("Content-Type" = "application/json"),
+      body = get_system_status_json()
+    ))
+  }
+  
+  # App restart endpoint
+  if (startsWith(path, "/api/apps/") && endsWith(path, "/restart") && method == "POST") {
+    path_parts <- strsplit(path, "/")[[1]]
+    path_parts <- path_parts[path_parts != ""]
+    
+    if (length(path_parts) >= 3) {
+      app_name_validation <- validate_app_name(path_parts[3])
+      if (!app_name_validation$valid) {
+        return(list(
+          status = 400L,
+          headers = list("Content-Type" = "application/json"),
+          body = paste0('{"error": "400 - Bad Request: ', app_name_validation$error, '"}')
+        ))
+      }
+      app_name <- app_name_validation$sanitized
+      
+      result <- restart_app(app_name)
+      if (result$success) {
+        return(list(
+          status = 200L,
+          headers = list("Content-Type" = "application/json"),
+          body = toJSON(result, auto_unbox = TRUE)
+        ))
+      } else {
+        return(list(
+          status = 500L,
+          headers = list("Content-Type" = "application/json"),
+          body = toJSON(result, auto_unbox = TRUE)
+        ))
+      }
+    }
+  }
+  
+  # Shutdown endpoint
+  if (path == "/api/shutdown" && method == "POST") {
+    log_info("Shutdown requested via management API")
+    
+    # Create shutdown flag file
+    shutdown_flag_file <- file.path(config$log_dir, "shutdown.flag")
+    tryCatch({
+      writeLines("shutdown", shutdown_flag_file)
+      return(list(
+        status = 200L,
+        headers = list("Content-Type" = "application/json"),
+        body = '{"success": true, "message": "Shutdown initiated"}'
+      ))
+    }, error = function(e) {
+      return(list(
+        status = 500L,
+        headers = list("Content-Type" = "application/json"),
+        body = paste0('{"success": false, "error": "', e$message, '"}')
+      ))
+    })
+  }
+  
+  # 404 for unknown paths
+  return(list(
+    status = 404L,
+    headers = list("Content-Type" = "application/json"),
+    body = '{"error": "404 - Not Found"}'
+  ))
+}
+
+get_apps_status_json <- function() {
+  apps_status <- list()
+  
+  for (app_config in config$apps) {
+    app_name <- app_config$name
+    process <- app_processes[[app_name]]
+    
+    status <- if (is.null(process)) {
+      "stopped"
+    } else if (process$is_alive()) {
+      "running"
+    } else {
+      "crashed"
+    }
+    
+    # Count connections for this app
+    app_connections <- 0
+    for (conn in ws_connections) {
+      if (!is.null(conn$app_name) && conn$app_name == app_name) {
+        app_connections <- app_connections + 1
+      }
+    }
+    
+    apps_status[[app_name]] <- list(
+      name = app_name,
+      status = status,
+      port = app_config$port,
+      path = app_config$path,
+      connections = app_connections,
+      pid = if (!is.null(process) && process$is_alive()) process$get_pid() else NULL
+    )
+  }
+  
+  return(toJSON(apps_status, auto_unbox = TRUE))
+}
+
+get_connections_json <- function() {
+  connections <- list()
+  
+  for (session_id in names(ws_connections)) {
+    conn <- ws_connections[[session_id]]
+    if (!is.null(conn)) {
+      connections[[session_id]] <- list(
+        session_id = session_id,
+        app_name = conn$app_name %||% "unknown",
+        client_ip = conn$client_ip %||% "unknown",
+        client_dns = conn$client_dns %||% "unknown",
+        user_agent = conn$user_agent %||% "unknown",
+        connected_at = format(conn$created_at, "%Y-%m-%d %H:%M:%S"),
+        last_activity = format(conn$last_activity, "%Y-%m-%d %H:%M:%S"),
+        duration_seconds = as.numeric(difftime(Sys.time(), conn$created_at, units = "secs"))
+      )
+    }
+  }
+  
+  return(toJSON(connections, auto_unbox = TRUE))
+}
+
+get_system_status_json <- function() {
+  total_connections <- length(ws_connections)
+  running_apps <- 0
+  
+  for (app_name in names(app_processes)) {
+    process <- app_processes[[app_name]]
+    if (!is.null(process) && process$is_alive()) {
+      running_apps <- running_apps + 1
+    }
+  }
+  
+  status <- list(
+    total_apps = length(config$apps),
+    running_apps = running_apps,
+    total_connections = total_connections,
+    server_uptime = "N/A", # Could be enhanced with actual uptime tracking
+    memory_usage = "N/A"   # Could be enhanced with memory monitoring
+  )
+  
+  return(toJSON(status, auto_unbox = TRUE))
+}
+
+restart_app <- function(app_name) {
+  app_config <- get_app_config(app_name)
+  if (is.null(app_config)) {
+    return(list(success = FALSE, message = "App not found"))
+  }
+  
+  log_info("Restarting app: {app_name}", app_name = app_name)
+  
+  tryCatch({
+    # Close existing connections for this app
+    sessions_to_remove <- c()
+    for (session_id in names(ws_connections)) {
+      conn <- ws_connections[[session_id]]
+      if (!is.null(conn) && !is.null(conn$app_name) && conn$app_name == app_name) {
+        if (!is.null(conn$ws)) {
+          tryCatch(conn$ws$close(), error = function(e) {})
+        }
+        sessions_to_remove <- c(sessions_to_remove, session_id)
+      }
+    }
+    
+    # Remove closed connections
+    for (session_id in sessions_to_remove) {
+      ws_connections[[session_id]] <<- NULL
+      if (session_id %in% names(backend_connections)) {
+        backend_connections[[session_id]] <<- NULL
+      }
+    }
+    
+    # Stop existing process
+    process <- app_processes[[app_name]]
+    if (!is.null(process) && process$is_alive()) {
+      process$kill()
+      Sys.sleep(1)
+      if (process$is_alive()) {
+        process$kill_tree()
+      }
+    }
+    
+    # Start new process
+    start_app(app_config)
+    
+    return(list(success = TRUE, message = paste("App", app_name, "restarted successfully")))
+  }, error = function(e) {
+    log_error("Failed to restart app {app_name}: {error}", app_name = app_name, error = e$message)
+    return(list(success = FALSE, message = paste("Failed to restart app:", e$message)))
+  })
+}
+
+start_management_server <- function() {
+  management_port <- config$management_port %||% 3839
+  
+  log_info("Starting management server on localhost:{management_port}", management_port = management_port)
+  
+  # Start the management server (always on localhost for security)
+  server <- startServer(
+    host = "127.0.0.1",
+    port = management_port,
+    app = list(
+      call = handle_management_request
+    )
+  )
+  
+  return(server)
+}
+
+generate_management_html <- function() {
+  html <- '<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shiny Server Management</title>
+    <style>
+        :root {
+            --bg-color: #ffffff;
+            --text-color: #333333;
+            --card-bg: #f8f9fa;
+            --border-color: #dee2e6;
+            --link-color: #007bff;
+            --link-hover: #0056b3;
+            --surface-color: #f5f5f5;
+            --success-bg: #d4edda;
+            --success-text: #155724;
+            --warning-bg: #fff3cd;
+            --warning-text: #856404;
+            --error-bg: #f8d7da;
+            --error-text: #721c24;
+            --muted-text: #6c757d;
+            --table-header-bg: #f8f9fa;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg-color: #1a1a1a;
+                --text-color: #e0e0e0;
+                --card-bg: #2d2d2d;
+                --border-color: #404040;
+                --link-color: #4dabf7;
+                --link-hover: #339af0;
+                --surface-color: #121212;
+                --success-bg: #1e3a2e;
+                --success-text: #4ade80;
+                --warning-bg: #3a2e1e;
+                --warning-text: #fbbf24;
+                --error-bg: #3a1e1e;
+                --error-text: #f87171;
+                --muted-text: #9ca3af;
+                --table-header-bg: #374151;
+            }
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--surface-color);
+            color: var(--text-color);
+            line-height: 1.6;
+            padding: 20px;
+            transition: background-color 0.3s, color 0.3s;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .header {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            transition: all 0.3s;
+        }
+        .header-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+        .header h1 {
+            background: linear-gradient(135deg, var(--link-color), var(--link-hover));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin: 0;
+        }
+        .header p {
+            margin: 5px 0 0 0;
+            opacity: 0.8;
+        }
+        .header-actions {
+            display: flex;
+            gap: 10px;
+        }
+        .shutdown-btn {
+            background-color: var(--error-bg);
+            color: var(--error-text);
+            border: 1px solid var(--border-color);
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .shutdown-btn:hover {
+            background-color: #dc3545;
+            color: white;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(220, 53, 69, 0.3);
+        }
+        .shutdown-btn:disabled {
+            background-color: var(--muted-text);
+            color: var(--text-color);
+            cursor: not-allowed;
+            opacity: 0.6;
+            transform: none;
+            box-shadow: none;
+        }
+        .section {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            transition: all 0.3s;
+        }
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .status-card {
+            background: var(--bg-color);
+            border: 1px solid var(--border-color);
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 4px solid var(--link-color);
+            transition: all 0.3s;
+        }
+        .status-card h3 {
+            margin: 0 0 10px 0;
+            font-size: 16px;
+            color: var(--text-color);
+            opacity: 0.8;
+        }
+        .status-card .value {
+            font-size: 24px;
+            font-weight: bold;
+            color: var(--link-color);
+        }
+        .app-card {
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+            background: var(--bg-color);
+            transition: all 0.3s;
+        }
+        .app-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+        }
+        .app-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .app-name {
+            font-size: 18px;
+            font-weight: bold;
+            color: var(--text-color);
+        }
+        .status-badge {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+        .status-running {
+            background-color: var(--success-bg);
+            color: var(--success-text);
+        }
+        .status-stopped {
+            background-color: var(--error-bg);
+            color: var(--error-text);
+        }
+        .status-crashed {
+            background-color: var(--warning-bg);
+            color: var(--warning-text);
+        }
+        .app-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin-bottom: 15px;
+            font-size: 14px;
+        }
+        .app-detail {
+            color: var(--muted-text);
+        }
+        .restart-btn {
+            background-color: var(--warning-bg);
+            color: var(--warning-text);
+            border: 1px solid var(--border-color);
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        .restart-btn:hover {
+            background-color: var(--link-color);
+            color: white;
+            transform: translateY(-1px);
+        }
+        .restart-btn:disabled {
+            background-color: var(--muted-text);
+            color: var(--text-color);
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+        .connections-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        .connections-table th,
+        .connections-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .connections-table th {
+            background-color: var(--table-header-bg);
+            font-weight: 600;
+            color: var(--text-color);
+        }
+        .connections-table td {
+            color: var(--text-color);
+        }
+        .connections-table .user-agent {
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-family: "Courier New", monospace;
+            font-size: 12px;
+            cursor: help;
+        }
+        .connections-table .user-agent:hover {
+            white-space: normal;
+            word-break: break-all;
+            max-width: none;
+            background-color: var(--card-bg);
+            position: relative;
+            z-index: 1;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            padding: 8px;
+            border-radius: 4px;
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: var(--muted-text);
+        }
+        .auto-refresh {
+            font-size: 12px;
+            color: var(--muted-text);
+            text-align: right;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="header-content">
+                <div>
+                    <h1>Shiny Server Management</h1>
+                    <p>Monitor and manage your Shiny applications</p>
+                </div>
+                <div class="header-actions">
+                    <button class="shutdown-btn" onclick="shutdownServer()">
+                        Shutdown Server
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>System Overview</h2>
+            <div class="status-grid" id="systemStatus">
+                <div class="loading">Loading system status...</div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Applications</h2>
+            <div id="appsContainer">
+                <div class="loading">Loading applications...</div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Active Connections</h2>
+            <div id="connectionsContainer">
+                <div class="loading">Loading connections...</div>
+            </div>
+            <div class="auto-refresh">Auto-refreshing every 5 seconds</div>
+        </div>
+    </div>
+
+    <script>
+        let refreshInterval;
+
+        function formatDuration(seconds) {
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const secs = Math.floor(seconds % 60);
+            
+            if (hours > 0) {
+                return `${hours}h ${minutes}m ${secs}s`;
+            } else if (minutes > 0) {
+                return `${minutes}m ${secs}s`;
+            } else {
+                return `${secs}s`;
+            }
+        }
+
+        function updateSystemStatus() {
+            fetch("/api/status")
+                .then(response => response.json())
+                .then(data => {
+                    const container = document.getElementById("systemStatus");
+                    container.innerHTML = 
+                        "<div class=\\"status-card\\">" +
+                            "<h3>Total Apps</h3>" +
+                            "<div class=\\"value\\">" + data.total_apps + "</div>" +
+                        "</div>" +
+                        "<div class=\\"status-card\\">" +
+                            "<h3>Running Apps</h3>" +
+                            "<div class=\\"value\\">" + data.running_apps + "</div>" +
+                        "</div>" +
+                        "<div class=\\"status-card\\">" +
+                            "<h3>Active Connections</h3>" +
+                            "<div class=\\"value\\">" + data.total_connections + "</div>" +
+                        "</div>";
+                })
+                .catch(error => {
+                    console.error("Error fetching system status:", error);
+                });
+        }
+
+        function updateApps() {
+            fetch("/api/apps")
+                .then(response => response.json())
+                .then(data => {
+                    const container = document.getElementById("appsContainer");
+                    container.innerHTML = "";
+                    
+                    Object.values(data).forEach(app => {
+                        const appDiv = document.createElement("div");
+                        appDiv.className = "app-card";
+                        appDiv.innerHTML = 
+                            "<div class=\\"app-header\\">" +
+                                "<div class=\\"app-name\\">" + app.name + "</div>" +
+                                "<span class=\\"status-badge status-" + app.status + "\\">" + app.status + "</span>" +
+                            "</div>" +
+                            "<div class=\\"app-details\\">" +
+                                "<div class=\\"app-detail\\"><strong>Port:</strong> " + app.port + "</div>" +
+                                "<div class=\\"app-detail\\"><strong>Connections:</strong> " + app.connections + "</div>" +
+                                "<div class=\\"app-detail\\"><strong>Path:</strong> " + app.path + "</div>" +
+                                "<div class=\\"app-detail\\"><strong>PID:</strong> " + (app.pid || "N/A") + "</div>" +
+                            "</div>" +
+                            "<button class=\\"restart-btn\\" onclick=\\"restartApp(\'" + app.name + "\')\\">Restart Application</button>";
+                        container.appendChild(appDiv);
+                    });
+                })
+                .catch(error => {
+                    console.error("Error fetching apps:", error);
+                });
+        }
+
+        function updateConnections() {
+            fetch("/api/connections")
+                .then(response => response.json())
+                .then(data => {
+                    const container = document.getElementById("connectionsContainer");
+                    
+                    if (Object.keys(data).length === 0) {
+                        container.innerHTML = "<p>No active connections</p>";
+                        return;
+                    }
+                    
+                    let tableHTML = 
+                        "<table class=\\"connections-table\\">" +
+                            "<thead>" +
+                                "<tr>" +
+                                    "<th>App</th>" +
+                                    "<th>Client IP</th>" +
+                                    "<th>DNS Name</th>" +
+                                    "<th>User Agent</th>" +
+                                    "<th>Connected</th>" +
+                                    "<th>Duration</th>" +
+                                    "<th>Last Activity</th>" +
+                                "</tr>" +
+                            "</thead>" +
+                            "<tbody>";
+                    
+                    Object.values(data).forEach(conn => {
+                        tableHTML += 
+                            "<tr>" +
+                                "<td>" + conn.app_name + "</td>" +
+                                "<td>" + conn.client_ip + "</td>" +
+                                "<td>" + conn.client_dns + "</td>" +
+                                "<td class=\\"user-agent\\">" + conn.user_agent + "</td>" +
+                                "<td>" + conn.connected_at + "</td>" +
+                                "<td>" + formatDuration(conn.duration_seconds) + "</td>" +
+                                "<td>" + conn.last_activity + "</td>" +
+                            "</tr>";
+                    });
+                    
+                    tableHTML += "</tbody></table>";
+                    container.innerHTML = tableHTML;
+                })
+                .catch(error => {
+                    console.error("Error fetching connections:", error);
+                });
+        }
+
+        function restartApp(appName) {
+            const button = event.target;
+            button.disabled = true;
+            button.textContent = "Restarting...";
+            
+            fetch("/api/apps/" + appName + "/restart", {
+                method: "POST"
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert("App " + appName + " restarted successfully");
+                } else {
+                    alert("Failed to restart " + appName + ": " + data.message);
+                }
+                button.disabled = false;
+                button.textContent = "Restart Application";
+                updateApps();
+            })
+            .catch(error => {
+                console.error("Error restarting app:", error);
+                alert("Error restarting " + appName + ": " + error.message);
+                button.disabled = false;
+                button.textContent = "Restart Application";
+            });
+        }
+
+        function shutdownServer() {
+            const confirmed = confirm(
+                "Are you sure you want to shutdown the entire Shiny server? " +
+                "This will stop all applications and the management interface. " +
+                "You will need to restart the server manually to continue using it."
+            );
+            
+            if (!confirmed) {
+                return;
+            }
+            
+            const button = document.querySelector(".shutdown-btn");
+            button.disabled = true;
+            button.textContent = "Shutting down...";
+            
+            if (refreshInterval) {
+                clearInterval(refreshInterval);
+            }
+            
+            fetch("/api/shutdown", {
+                method: "POST"
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert("Server shutdown initiated successfully. The page will become unresponsive as the server stops.");
+                    document.body.innerHTML = 
+                        "<div style=\\"display: flex; justify-content: center; align-items: center; height: 100vh; text-align: center; background: var(--surface-color); color: var(--text-color);\\">" +
+                            "<div>" +
+                                "<h1 style=\\"color: var(--error-text); margin-bottom: 20px;\\">Server Shutdown</h1>" +
+                                "<p style=\\"font-size: 18px; margin-bottom: 10px;\\">The Shiny server has been shut down successfully.</p>" +
+                                "<p style=\\"color: var(--muted-text);\\">To restart the server, run the startup script from the command line.</p>" +
+                            "</div>" +
+                        "</div>";
+                } else {
+                    alert("Failed to shutdown server: " + data.message);
+                    button.disabled = false;
+                    button.textContent = "Shutdown Server";
+                }
+            })
+            .catch(error => {
+                console.error("Error shutting down server:", error);
+                if (error.message.includes("fetch")) {
+                    document.body.innerHTML = 
+                        "<div style=\\"display: flex; justify-content: center; align-items: center; height: 100vh; text-align: center; background: var(--surface-color); color: var(--text-color);\\">" +
+                            "<div>" +
+                                "<h1 style=\\"color: var(--error-text); margin-bottom: 20px;\\">Server Shutdown</h1>" +
+                                "<p style=\\"font-size: 18px; margin-bottom: 10px;\\">The Shiny server has been shut down.</p>" +
+                                "<p style=\\"color: var(--muted-text);\\">To restart the server, run the startup script from the command line.</p>" +
+                            "</div>" +
+                        "</div>";
+                } else {
+                    alert("Error shutting down server: " + error.message);
+                    button.disabled = false;
+                    button.textContent = "Shutdown Server";
+                }
+            });
+        }
+
+        function refreshAll() {
+            updateSystemStatus();
+            updateApps();
+            updateConnections();
+        }
+
+        // Initial load
+        refreshAll();
+
+        // Auto-refresh every 5 seconds
+        refreshInterval = setInterval(refreshAll, 5000);
+    </script>
+</body>
+</html>';
+  
+  return(html)
+}
+
 # Cleanup function to terminate all processes
 cleanup_and_exit <- function() {
   log_info("Shutting down server...")
@@ -1070,6 +1945,17 @@ cleanup_and_exit <- function() {
   }
   backend_connections <<- list()
   ws_connections <<- list()
+
+  # Stop management server
+  if (!is.null(management_server)) {
+    tryCatch({
+      stopServer(management_server)
+      management_server <<- NULL
+      log_info("Management server stopped")
+    }, error = function(e) {
+      log_error("Error stopping management server: {error}", error = e$message)
+    })
+  }
 
   # Terminate all app processes
   for (app_name in names(app_processes)) {
@@ -1107,6 +1993,19 @@ main <- function() {
 
   log_info("Starting WebSocket Shiny Server process manager")
   log_info("Press Ctrl-C to shutdown gracefully")
+  
+  # Create a shutdown flag file to monitor for external shutdown requests
+  shutdown_flag_file <- file.path(config$log_dir, "shutdown.flag")
+  if (file.exists(shutdown_flag_file)) {
+    file.remove(shutdown_flag_file)
+  }
+  
+  # Add cleanup to remove shutdown flag
+  on.exit({
+    if (file.exists(shutdown_flag_file)) {
+      file.remove(shutdown_flag_file)
+    }
+  }, add = TRUE)
 
   # Start all apps sequentially to ensure proper process tracking
   # Note: Parallel startup was causing issues with global process tracking
@@ -1154,6 +2053,9 @@ main <- function() {
   # Start proxy server
   proxy_server <- start_proxy_server()
 
+  # Start management server
+  management_server <<- start_management_server()
+
   # Set up future plan for async operations
   future::plan(future::multisession, workers = 4)
 
@@ -1162,6 +2064,12 @@ main <- function() {
     # Use httpuv's service function which is more efficient than busy waiting
     # Run later tasks and then block until events occur
     while (TRUE) {
+      # Check for shutdown flag file
+      if (file.exists(shutdown_flag_file)) {
+        log_info("Shutdown flag detected, initiating graceful shutdown")
+        break
+      }
+      
       # Process any pending later tasks
       later::run_now()
 
