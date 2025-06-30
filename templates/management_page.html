@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shiny Server Management</title>
+    <link rel="stylesheet" href="{{base_url}}/templates/styles/main.css">
+    <style>
+        .header-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+        .header-actions {
+            display: flex;
+            gap: 10px;
+        }
+        .app-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .app-name {
+            font-size: 18px;
+            font-weight: bold;
+            color: var(--text-color);
+        }
+        .app-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin-bottom: 15px;
+            font-size: 14px;
+        }
+        .app-detail {
+            color: var(--muted-text);
+        }
+        .management-header {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            transition: all 0.3s;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="connection-status" id="connectionStatus">
+            <span class="status-indicator" id="statusIndicator"></span>
+            <span class="status-text" id="statusText">Connected</span>
+        </div>
+        
+        <div class="management-header">
+            <div class="header-content">
+                <div>
+                    <h1>Shiny Server Management</h1>
+                    <p>Monitor and manage your Shiny applications</p>
+                </div>
+                <div class="header-actions">
+                    <button class="shutdown-btn" onclick="shutdownServer()">
+                        Shutdown Server
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>System Overview</h2>
+            <div class="status-grid" id="systemStatus">
+                <div class="loading">Loading system status...</div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Applications</h2>
+            <div id="appsContainer">
+                <div class="loading">Loading applications...</div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Active Connections</h2>
+            <div id="connectionsContainer">
+                <div class="loading">Loading connections...</div>
+            </div>
+            <div class="auto-refresh">Auto-refreshing every 5 seconds</div>
+        </div>
+    </div>
+
+    <script>
+        let refreshInterval;
+        let isConnected = true;
+
+        function setConnectionStatus(connected) {
+            const indicator = document.getElementById("statusIndicator");
+            const statusText = document.getElementById("statusText");
+
+            if (connected) {
+                indicator.className = "status-indicator connected";
+                statusText.className = "status-text connected";
+                statusText.textContent = "Connected";
+                isConnected = true;
+            } else {
+                indicator.className = "status-indicator disconnected";
+                statusText.className = "status-text disconnected";
+                statusText.textContent = "Connection Lost";
+                isConnected = false;
+            }
+        }
+
+        function formatDuration(seconds) {
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const secs = Math.floor(seconds % 60);
+
+            if (hours > 0) {
+                return `${hours}h ${minutes}m ${secs}s`;
+            } else if (minutes > 0) {
+                return `${minutes}m ${secs}s`;
+            } else {
+                return `${secs}s`;
+            }
+        }
+
+        function updateSystemStatus() {
+            fetch("/api/status")
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (!isConnected) {
+                        setConnectionStatus(true);
+                    }
+
+                    const container = document.getElementById("systemStatus");
+                    container.innerHTML =
+                        "<div class=\"status-card\">" +
+                            "<h3>Total Apps</h3>" +
+                            "<div class=\"value\">" + data.total_apps + "</div>" +
+                        "</div>" +
+                        "<div class=\"status-card\">" +
+                            "<h3>Running Apps</h3>" +
+                            "<div class=\"value\">" + data.running_apps + "</div>" +
+                        "</div>" +
+                        "<div class=\"status-card\">" +
+                            "<h3>Active Connections</h3>" +
+                            "<div class=\"value\">" + data.total_connections + "</div>" +
+                        "</div>";
+                })
+                .catch(error => {
+                    console.error("Error fetching system status:", error);
+                    setConnectionStatus(false);
+                });
+        }
+
+        function updateApps() {
+            fetch("/api/apps")
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (!isConnected) {
+                        setConnectionStatus(true);
+                    }
+
+                    const container = document.getElementById("appsContainer");
+                    container.innerHTML = "";
+
+                    Object.values(data).forEach(app => {
+                        const appDiv = document.createElement("div");
+                        appDiv.className = "app-card";
+                        appDiv.innerHTML =
+                            "<div class=\"app-header\">" +
+                                "<div class=\"app-name\">" + app.name + "</div>" +
+                                "<span class=\"status-badge status-" + app.status + "\">" + app.status + "</span>" +
+                            "</div>" +
+                            "<div class=\"app-details\">" +
+                                "<div class=\"app-detail\"><strong>Port:</strong> " + app.port + "</div>" +
+                                "<div class=\"app-detail\"><strong>Connections:</strong> " + app.connections + "</div>" +
+                                "<div class=\"app-detail\"><strong>Path:</strong> " + app.path + "</div>" +
+                                "<div class=\"app-detail\"><strong>PID:</strong> " + (app.pid || "N/A") + "</div>" +
+                            "</div>" +
+                            "<button class=\"restart-btn\" onclick=\"restartApp('" + app.name + "')\">Restart Application</button>";
+                        container.appendChild(appDiv);
+                    });
+                })
+                .catch(error => {
+                    console.error("Error fetching apps:", error);
+                    setConnectionStatus(false);
+                });
+        }
+
+        function updateConnections() {
+            fetch("/api/connections")
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (!isConnected) {
+                        setConnectionStatus(true);
+                    }
+
+                    const container = document.getElementById("connectionsContainer");
+
+                    if (Object.keys(data).length === 0) {
+                        container.innerHTML = "<p>No active connections</p>";
+                        return;
+                    }
+
+                    let tableHTML =
+                        "<table class=\"connections-table\">" +
+                            "<thead>" +
+                                "<tr>" +
+                                    "<th>App</th>" +
+                                    "<th>Client IP</th>" +
+                                    "<th>DNS Name</th>" +
+                                    "<th>User Agent</th>" +
+                                    "<th>Connected</th>" +
+                                    "<th>Duration</th>" +
+                                    "<th>Last Activity</th>" +
+                                "</tr>" +
+                            "</thead>" +
+                            "<tbody>";
+
+                    Object.values(data).forEach(conn => {
+                        tableHTML +=
+                            "<tr>" +
+                                "<td>" + conn.app_name + "</td>" +
+                                "<td>" + conn.client_ip + "</td>" +
+                                "<td>" + conn.client_dns + "</td>" +
+                                "<td class=\"user-agent\">" + conn.user_agent + "</td>" +
+                                "<td>" + conn.connected_at + "</td>" +
+                                "<td>" + formatDuration(conn.duration_seconds) + "</td>" +
+                                "<td>" + conn.last_activity + "</td>" +
+                            "</tr>";
+                    });
+
+                    tableHTML += "</tbody></table>";
+                    container.innerHTML = tableHTML;
+                })
+                .catch(error => {
+                    console.error("Error fetching connections:", error);
+                    setConnectionStatus(false);
+                });
+        }
+
+        function restartApp(appName) {
+            const button = event.target;
+            button.disabled = true;
+            button.textContent = "Restarting...";
+
+            fetch("/api/apps/" + appName + "/restart", {
+                method: "POST"
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert("App " + appName + " restarted successfully");
+                } else {
+                    alert("Failed to restart " + appName + ": " + data.message);
+                }
+                button.disabled = false;
+                button.textContent = "Restart Application";
+                updateApps();
+            })
+            .catch(error => {
+                console.error("Error restarting app:", error);
+                alert("Error restarting " + appName + ": " + error.message);
+                button.disabled = false;
+                button.textContent = "Restart Application";
+            });
+        }
+
+        function shutdownServer() {
+            const confirmed = confirm(
+                "Are you sure you want to shutdown the entire Shiny server? " +
+                "This will stop all applications and the management interface. " +
+                "You will need to restart the server manually to continue using it."
+            );
+
+            if (!confirmed) {
+                return;
+            }
+
+            const button = document.querySelector(".shutdown-btn");
+            button.disabled = true;
+            button.textContent = "Shutting down...";
+
+            if (refreshInterval) {
+                clearInterval(refreshInterval);
+            }
+
+            fetch("/api/shutdown", {
+                method: "POST"
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert("Server shutdown initiated successfully. The page will become unresponsive as the server stops.");
+                    document.body.innerHTML =
+                        "<div style=\"display: flex; justify-content: center; align-items: center; height: 100vh; text-align: center; background: var(--surface-color); color: var(--text-color);\">" +
+                            "<div>" +
+                                "<h1 style=\"color: var(--error-text); margin-bottom: 20px;\">Server Shutdown</h1>" +
+                                "<p style=\"font-size: 18px; margin-bottom: 10px;\">The Shiny server has been shut down successfully.</p>" +
+                                "<p style=\"color: var(--muted-text);\">To restart the server, run the startup script from the command line.</p>" +
+                            "</div>" +
+                        "</div>";
+                } else {
+                    alert("Failed to shutdown server: " + data.message);
+                    button.disabled = false;
+                    button.textContent = "Shutdown Server";
+                }
+            })
+            .catch(error => {
+                console.error("Error shutting down server:", error);
+                button.disabled = false;
+                button.textContent = "Shutdown Server";
+            });
+        }
+
+        function refreshAll() {
+            updateSystemStatus();
+            updateApps();
+            updateConnections();
+        }
+
+        // Initial load
+        setConnectionStatus(true);
+        refreshAll();
+
+        // Auto-refresh every 5 seconds
+        refreshInterval = setInterval(refreshAll, 5000);
+    </script>
+</body>
+</html>

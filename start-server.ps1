@@ -61,9 +61,9 @@ if (-not $rscriptPath) {
     exit 1
 }
 
-# Check if tiny_shiny_server.R exists
-if (-not (Test-Path "tiny_shiny_server.R")) {
-    Write-Host "ERROR: tiny_shiny_server.R not found in current directory!" -ForegroundColor Red
+# Check if main.R exists
+if (-not (Test-Path "main.R")) {
+    Write-Host "ERROR: main.R not found in current directory!" -ForegroundColor Red
     Write-Host "Please ensure you're running this script from the tiny-shiny-server directory." -ForegroundColor Red
     exit 1
 }
@@ -79,7 +79,7 @@ Write-Host "Press Ctrl+C to stop the server" -ForegroundColor Cyan
 
 # Start the server
 try {
-    & $rscriptPath "tiny_shiny_server.R"
+    & $rscriptPath "main.R"
 }
 catch {
     Write-Host "ERROR: Failed to start server: $($_.Exception.Message)" -ForegroundColor Red

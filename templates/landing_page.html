@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Tiny Shiny Server</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="{{base_url}}/templates/styles/main.css">
+</head>
+<body>
+  <div class="container">
+    <div class="connection-status" id="connectionStatus">
+      <span class="status-indicator" id="statusIndicator"></span>
+      <span class="status-text" id="statusText">Connected</span>
+    </div>
+
+    <div class="header">
+      <h1>Tiny Shiny Server</h1>
+      <p>WebSocket-enabled proxy server for Shiny applications</p>
+    </div>
+
+    <div class="apps-grid">
+      {{app_cards}}
+    </div>
+
+    <div class="session-info">
+      <h4>Server Information</h4>
+      <pre>{{session_info}}</pre>
+    </div>
+  </div>
+
+  <script>
+    let refreshInterval;
+    let isConnected = true;
+
+    function setConnectionStatus(connected) {
+      const indicator = document.getElementById("statusIndicator");
+      const statusText = document.getElementById("statusText");
+
+      if (connected) {
+        indicator.className = "status-indicator connected";
+        statusText.className = "status-text connected";
+        statusText.textContent = "Connected";
+        isConnected = true;
+      } else {
+        indicator.className = "status-indicator disconnected";
+        statusText.className = "status-text disconnected";
+        statusText.textContent = "Connection Lost";
+        isConnected = false;
+      }
+    }
+
+    function updateAppStatus() {
+      fetch("/api/apps")
+        .then(response => {
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+          return response.json();
+        })
+        .then(data => {
+          // Update connection status to connected if we were disconnected
+          if (!isConnected) {
+            setConnectionStatus(true);
+          }
+
+          Object.values(data).forEach(app => {
+            const statusElement = document.getElementById("status-" + app.name);
+            const connectionsElement = document.getElementById("connections-" + app.name);
+
+            if (statusElement) {
+              statusElement.textContent = app.status;
+              statusElement.className = "status-badge status-" + app.status;
+            }
+
+            if (connectionsElement) {
+              const connectionText = app.connections === 1 ? "1 connection" : app.connections + " connections";
+              connectionsElement.textContent = connectionText;
+            }
+          });
+        })
+        .catch(error => {
+          console.error("Error fetching app status:", error);
+
+          // Update connection status to disconnected
+          setConnectionStatus(false);
+
+          // Update all status badges to show error state
+          document.querySelectorAll(".status-badge").forEach(badge => {
+            badge.textContent = "error";
+            badge.className = "status-badge status-stopped";
+          });
+        });
+    }
+
+    // Initial load
+    setConnectionStatus(true);
+    updateAppStatus();
+
+    // Auto-refresh every 5 seconds
+    refreshInterval = setInterval(updateAppStatus, 5000);
+
+    // Clean up interval when page is about to unload
+    window.addEventListener("beforeunload", function() {
+      if (refreshInterval) {
+        clearInterval(refreshInterval);
+      }
+    });
+  </script>
+</body>
+</html>

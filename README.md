@@ -46,7 +46,7 @@ A lightweight, WebSocket-enabled proxy server for hosting multiple Shiny applica
 
    **Linux/macOS:**
    ```bash
-   Rscript tiny_shiny_server.R
+   Rscript main.R
    ```
 
    **Windows:**
@@ -131,6 +131,31 @@ The `proxy_host` option controls which network interface the proxy server binds 
 - `"::"` - All IPv6 interfaces
 
 ⚠️ **Security Note**: Using `"0.0.0.0"` makes the server accessible from external networks. Only use this if you understand the security implications and have proper firewall rules in place.
+
+### SSL and Authentication with Caddy
+
+For production deployments requiring SSL/TLS and authentication, [Caddy Server](https://caddyserver.com/) provides a simple solution:
+
+```caddyfile
+# Caddyfile
+myapp.example.com {
+    reverse_proxy localhost:3838
+    basicauth {
+        username password_hash
+    }
+}
+
+manage.myapp.example.com {
+    reverse_proxy localhost:3839
+    basicauth {
+        admin admin_password_hash
+    }
+}
+```
+
+This configuration automatically handles SSL certificates via Let's Encrypt and adds HTTP basic authentication.
+
+**Important**: When using Caddy, keep `proxy_host` set to `"localhost"` or `"127.0.0.1"` in your `config.json` to ensure the server only accepts connections from Caddy, not directly from external clients.
 
 ## Landing Page
 
@@ -319,6 +344,25 @@ R -e "rmarkdown::run('apps/reports/report.Rmd', shiny_args = list(port = 3003, h
 - System status: `GET /api/status` - Returns overall system health
 - Apps status: `GET /api/apps` - Returns detailed application status
 - Connections: `GET /api/connections` - Returns active connection details
+
+## Code Organization
+
+The project is organized into several key components:
+
+- `main.R` - Main server entry point
+- `R/` - Core server modules:
+  - `config.R` - Configuration management
+  - `connection_manager.R` - WebSocket connection handling
+  - `handlers.R` - HTTP request routing
+  - `management_api.R` - Management interface API
+  - `process_manager.R` - Application process management
+  - `template_manager.R` - HTML template rendering
+  - `utils.R` - Utility functions
+  - `validation.R` - Input validation
+- `templates/` - HTML templates and CSS styles
+- `apps/` - Shiny applications
+- `logs/` - Server and application logs
+- `config.json` - Server configuration
 
 ## Architecture
 
