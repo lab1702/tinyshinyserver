@@ -411,7 +411,7 @@ The server uses a multi-process architecture:
 │  ┌─WebSocket────────┤
 │  │  Handler         │
 │  │                  │
-│  │  ┌─HTTP─────────┤
+│  │  ┌─HTTP──────-───┤
 │  │  │  Handler      │
 └──┼──┼───────────────┘
    │  │
