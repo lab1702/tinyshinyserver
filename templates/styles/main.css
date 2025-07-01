@@ -87,8 +87,8 @@ body {
 .app-card {
   background: var(--card-bg);
   border: 1px solid var(--border-color);
-  border-radius: 12px;
-  padding: 24px;
+  border-radius: 8px;
+  padding: 12px 16px;
   transition: transform 0.2s, box-shadow 0.2s;
 }
 
@@ -274,10 +274,15 @@ body {
 .section {
   background: var(--card-bg);
   border: 1px solid var(--border-color);
-  padding: 20px;
-  border-radius: 12px;
-  margin-bottom: 20px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  margin-bottom: 12px;
   transition: all 0.3s;
+}
+
+.section h2 {
+  margin-bottom: 8px;
+  font-size: 1.3rem;
 }
 
 .status-grid {
@@ -317,9 +322,10 @@ body {
 
 .connections-table th,
 .connections-table td {
-  padding: 12px;
+  padding: 6px 8px;
   text-align: left;
   border-bottom: 1px solid var(--border-color);
+  font-size: 13px;
 }
 
 .connections-table th {
