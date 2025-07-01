@@ -102,6 +102,17 @@ body {
   margin-bottom: 16px;
 }
 
+.app-name-link {
+  color: var(--link-color);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.app-name-link:hover {
+  color: var(--link-hover);
+  text-decoration: underline;
+}
+
 .app-status {
   display: flex;
   justify-content: space-between;

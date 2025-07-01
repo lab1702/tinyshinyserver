@@ -180,7 +180,7 @@ The landing page at **http://localhost:3838** provides an overview of all hosted
 - **Color-coded Indicators**: Green for running, red for stopped, yellow for crashed apps
 
 #### **Application Access**
-- **Direct Links**: Click "Open App" to access any application directly
+- **Clickable App Names**: App names are clickable links for direct access to applications
 - **Clean Interface**: Modern, responsive design that works on all devices
 - **Dark Mode Support**: Automatically adapts to your system's theme preference
 

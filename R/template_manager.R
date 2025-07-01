@@ -90,13 +90,10 @@ TemplateManager <- setRefClass("TemplateManager",
 
         card_html <- sprintf('
     <div class="app-card" data-app="%1$s">
-      <h3>%1$s</h3>
+      <h3><a href="/proxy/%1$s/" class="app-name-link">%1$s</a></h3>
       <div class="app-status">
         <span class="status-badge" id="status-%1$s">Loading...</span>
         <span class="connections-count" id="connections-%1$s">0 connections</span>
-      </div>
-      <div class="app-links">
-        <a href="/proxy/%1$s/" class="proxy-link">Open App</a>
       </div>
     </div>', safe_name)
 
