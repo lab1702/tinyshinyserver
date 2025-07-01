@@ -32,6 +32,7 @@ A lightweight, WebSocket-enabled proxy server for hosting multiple Shiny applica
 - **Quarto CLI** (optional): Required for Quarto document apps
   - Download from https://quarto.org/docs/get-started/
   - Includes its own Pandoc, so can be used instead of separate Pandoc installation
+  - Windows: `winget install posit.quarto`
 
 ### Installation
 
