@@ -88,25 +88,22 @@ The server is configured via `config.json`:
   "apps": [
     {
       "name": "sales",
-      "path": "./apps/sales",
-      "port": 3001
+      "path": "./apps/sales"
     },
     {
       "name": "inventory", 
-      "path": "./apps/inventory",
-      "port": 3002
+      "path": "./apps/inventory"
     },
     {
       "name": "reports",
-      "path": "./apps/reports",
-      "port": 3003
+      "path": "./apps/reports"
     },
     {
       "name": "dashboard",
-      "path": "./apps/dashboard",
-      "port": 3004
+      "path": "./apps/dashboard"
     }
   ],
+  "starting_port": 3001,
   "proxy_port": 3838,
   "proxy_host": "localhost",
   "management_port": 3839,
@@ -116,6 +113,20 @@ The server is configured via `config.json`:
 }
 ```
 
+### Auto Port Assignment
+
+The server automatically assigns ports to applications starting from `starting_port`. In the example above:
+- `sales` will be assigned port 3001
+- `inventory` will be assigned port 3002
+- `reports` will be assigned port 3003
+- `dashboard` will be assigned port 3004
+
+The auto-assignment algorithm:
+- Starts at the `starting_port` value
+- Skips any reserved ports (`proxy_port` and `management_port`)
+- Assigns sequential ports to each application
+- Validates that enough ports are available before starting
+
 ### Configuration Options
 
 | Option | Description | Default |
@@ -123,7 +134,7 @@ The server is configured via `config.json`:
 | `apps` | Array of Shiny applications to host | Required |
 | `apps[].name` | Application identifier for URLs | Required |
 | `apps[].path` | Relative path to app directory | Required |
-| `apps[].port` | Port where app process runs | Required |
+| `starting_port` | Starting port for auto-assignment | Required |
 | `proxy_port` | Port for the proxy server | 3838 |
 | `proxy_host` | Host interface for proxy server (localhost, 127.0.0.1, 0.0.0.0, ::1, ::) | "127.0.0.1" |
 | `management_port` | Port for the management interface | 3839 |
@@ -356,8 +367,10 @@ R -e "quarto::quarto_serve('apps/dashboard/dashboard.qmd', port = 3004, host = '
 ### Adding New Applications
 
 1. Create your app in `apps/{app_name}/`
-2. Add configuration entry to `config.json`
+2. Add configuration entry to `config.json` (only name and path required)
 3. Restart the server
+
+The server will automatically assign the next available port to your new application.
 
 ### Health Endpoints
 

@@ -69,6 +69,10 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       config$management_port <<- config$management_port %||% 3839
       config$restart_delay <<- config$restart_delay %||% 5
       config$health_check_interval <<- config$health_check_interval %||% 10
+      config$starting_port <<- config$starting_port %||% 3001
+
+      # Auto-assign ports to apps
+      assign_app_ports()
 
       return(config)
     },
@@ -80,11 +84,32 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       }
 
       # Validate required fields
-      required_fields <- c("apps", "log_dir")
+      required_fields <- c("apps", "log_dir", "starting_port")
       for (field in required_fields) {
         if (!field %in% names(config)) {
           return(list(valid = FALSE, error = paste("Missing required field:", field)))
         }
+      }
+
+      # Validate starting_port (now required)
+      if (!is.numeric(config$starting_port) || length(config$starting_port) != 1 ||
+        config$starting_port < 1 || config$starting_port > 65535) {
+        return(list(valid = FALSE, error = "Invalid starting_port: must be a number between 1 and 65535"))
+      }
+
+      # Check if there's enough port range for all apps
+      num_apps <- length(config$apps)
+      reserved_ports <- c()
+      if ("proxy_port" %in% names(config)) reserved_ports <- c(reserved_ports, config$proxy_port)
+      if ("management_port" %in% names(config)) reserved_ports <- c(reserved_ports, config$management_port)
+
+      # Calculate maximum port that might be needed
+      max_possible_port <- config$starting_port + num_apps - 1 + length(reserved_ports)
+      if (max_possible_port > 65535) {
+        return(list(valid = FALSE, error = sprintf(
+          "Not enough port range: starting_port %d with %d apps could exceed port 65535",
+          config$starting_port, num_apps
+        )))
       }
 
       # Validate apps array
@@ -100,8 +125,8 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
           return(list(valid = FALSE, error = paste("App", i, "must be a list")))
         }
 
-        # Check required app fields
-        app_required <- c("name", "port", "path")
+        # Check required app fields (port is no longer required)
+        app_required <- c("name", "path")
         for (field in app_required) {
           if (!field %in% names(app)) {
             return(list(valid = FALSE, error = paste("App", i, "missing field:", field)))
@@ -119,11 +144,6 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
 
         if (nchar(app$name) > 50) {
           return(list(valid = FALSE, error = paste("App", i, "name too long")))
-        }
-
-        # Validate port
-        if (!is.numeric(app$port) || length(app$port) != 1 || app$port < 1 || app$port > 65535) {
-          return(list(valid = FALSE, error = paste("App", i, "invalid port")))
         }
 
         # Validate path
@@ -227,6 +247,96 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     get_all_app_processes = function() {
       "Get all app processes"
       return(app_processes)
+    },
+    assign_app_ports = function() {
+      "Auto-assign ports to apps starting from starting_port"
+
+      starting_port <- config$starting_port
+      # Create a set of reserved ports for O(1) lookup
+      reserved_ports <- c(config$proxy_port, config$management_port)
+      reserved_set <- new.env(hash = TRUE, parent = emptyenv())
+      for (port in reserved_ports) {
+        if (!is.null(port)) {
+          assign(as.character(port), TRUE, envir = reserved_set)
+        }
+      }
+
+      current_port <- starting_port
+
+      for (i in seq_along(config$apps)) {
+        # Skip reserved ports efficiently
+        while (exists(as.character(current_port), envir = reserved_set)) {
+          current_port <- current_port + 1
+
+          # Safety check to prevent infinite loop
+          if (current_port > 65535) {
+            stop(sprintf(
+              "Port assignment failed: exceeded maximum port 65535 while assigning port for app '%s'",
+              config$apps[[i]]$name
+            ))
+          }
+        }
+
+        # Assign port to app
+        config$apps[[i]]$port <<- current_port
+
+        # Move to next port
+        current_port <- current_port + 1
+      }
+
+      # Validate no port conflicts
+      validate_port_assignments()
+    },
+    validate_port_assignments = function() {
+      "Validate that all assigned ports are unique and don't conflict"
+
+      all_ports <- c()
+
+      # Collect all app ports
+      for (app in config$apps) {
+        if (!is.null(app$port)) {
+          all_ports <- c(all_ports, app$port)
+        }
+      }
+
+      # Add system ports
+      all_ports <- c(all_ports, config$proxy_port, config$management_port)
+
+      # Check for duplicates
+      if (length(all_ports) != length(unique(all_ports))) {
+        duplicates <- all_ports[duplicated(all_ports)]
+
+        # Find which apps/services are using duplicate ports
+        port_usage <- list()
+        for (app in config$apps) {
+          if (app$port %in% duplicates) {
+            port_usage[[as.character(app$port)]] <- c(port_usage[[as.character(app$port)]], paste("app", app$name))
+          }
+        }
+        if (config$proxy_port %in% duplicates) {
+          port_usage[[as.character(config$proxy_port)]] <- c(port_usage[[as.character(config$proxy_port)]], "proxy")
+        }
+        if (config$management_port %in% duplicates) {
+          port_usage[[as.character(config$management_port)]] <- c(port_usage[[as.character(config$management_port)]], "management")
+        }
+
+        conflict_details <- sapply(names(port_usage), function(port) {
+          sprintf("port %s used by: %s", port, paste(port_usage[[port]], collapse = " and "))
+        })
+
+        stop(sprintf(
+          "Port conflict detected! %s",
+          paste(conflict_details, collapse = "; ")
+        ))
+      }
+
+      # Log port assignments
+      log_info("Port assignments:")
+      for (app in config$apps) {
+        log_info("  App '{name}' -> port {port}", name = app$name, port = app$port)
+      }
+      log_info("  Proxy -> port {port}", port = config$proxy_port)
+      log_info("  Management -> port {port}", port = config$management_port)
     }
   )
 )

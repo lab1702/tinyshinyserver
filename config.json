@@ -2,25 +2,22 @@
   "apps": [
     {
       "name": "sales",
-      "path": "./apps/sales",
-      "port": 3001
+      "path": "./apps/sales"
     },
     {
       "name": "inventory", 
-      "path": "./apps/inventory",
-      "port": 3002
+      "path": "./apps/inventory"
     },
     {
       "name": "reports",
-      "path": "./apps/reports",
-      "port": 3003
+      "path": "./apps/reports"
     },
     {
       "name": "dashboard",
-      "path": "./apps/dashboard",
-      "port": 3004
+      "path": "./apps/dashboard"
     }
   ],
+  "starting_port": 3001,
   "proxy_port": 3838,
   "proxy_host": "localhost",
   "management_port": 3839,
