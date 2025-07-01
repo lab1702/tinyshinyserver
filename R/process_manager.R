@@ -29,9 +29,13 @@ ProcessManager <- setRefClass("ProcessManager",
       has_traditional_shiny <- has_app_r || has_ui_server
 
       rmd_files <- list.files(app_path, pattern = "\\.Rmd$", full.names = TRUE)
+      qmd_files <- list.files(app_path, pattern = "\\.qmd$", full.names = TRUE)
       is_rmd_app <- !has_traditional_shiny && length(rmd_files) > 0
+      is_qmd_app <- !has_traditional_shiny && !is_rmd_app && length(qmd_files) > 0
 
-      if (is_rmd_app) {
+      if (is_qmd_app) {
+        log_info("Detected Quarto document for {app_name}, using quarto::quarto_serve", app_name = app_name)
+      } else if (is_rmd_app) {
         log_info("Detected R Markdown app for {app_name}, using rmarkdown::run", app_name = app_name)
       } else if (has_traditional_shiny) {
         log_info("Detected traditional Shiny app for {app_name}", app_name = app_name)
@@ -43,7 +47,7 @@ ProcessManager <- setRefClass("ProcessManager",
 
       # Start the app process
       process <- r_bg(
-        function(app_path, port, output_log, error_log, is_rmd_app, rmd_files) {
+        function(app_path, port, output_log, error_log, is_rmd_app, rmd_files, is_qmd_app, qmd_files) {
           # Redirect output to log files
           output_con <- file(output_log, open = "w", encoding = "UTF-8")
           error_con <- file(error_log, open = "w", encoding = "UTF-8")
@@ -67,7 +71,34 @@ ProcessManager <- setRefClass("ProcessManager",
           sink(output_con, type = "output")
           sink(error_con, type = "message")
 
-          if (is_rmd_app && length(rmd_files) > 0) {
+          if (is_qmd_app && length(qmd_files) > 0) {
+            # Load quarto library with error handling
+            tryCatch(
+              {
+                library(quarto)
+              },
+              error = function(e) {
+                stop("quarto package required. Install with: install.packages('quarto')")
+              }
+            )
+
+            # Use the first .qmd file found (use absolute path for security)
+            qmd_file <- qmd_files[1]
+
+            # Validate that the qmd file exists and is readable
+            if (!file.exists(qmd_file)) {
+              stop("Quarto document not found: ", qmd_file)
+            }
+
+            # Start the Quarto app using quarto::quarto_serve
+            quarto::quarto_serve(
+              input = qmd_file,
+              render = TRUE,
+              port = port,
+              host = "127.0.0.1",
+              browse = FALSE
+            )
+          } else if (is_rmd_app && length(rmd_files) > 0) {
             # Load rmarkdown library with error handling
             tryCatch(
               {
@@ -111,7 +142,9 @@ ProcessManager <- setRefClass("ProcessManager",
           output_log = output_log,
           error_log = error_log,
           is_rmd_app = is_rmd_app,
-          rmd_files = rmd_files
+          rmd_files = rmd_files,
+          is_qmd_app = is_qmd_app,
+          qmd_files = qmd_files
         )
       )
 

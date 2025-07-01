@@ -14,6 +14,11 @@
       "name": "reports",
       "path": "./apps/reports",
       "port": 3003
+    },
+    {
+      "name": "dashboard",
+      "path": "./apps/dashboard",
+      "port": 3004
     }
   ],
   "proxy_port": 3838,

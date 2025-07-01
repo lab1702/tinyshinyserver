@@ -1,0 +1,290 @@
+---
+title: "Interactive Business Dashboard"
+format: dashboard
+server: shiny
+---
+
+```{r}
+library(shiny)
+library(plotly)
+library(DT)
+library(dplyr)
+
+# Generate sample data
+set.seed(42)
+n_days <- 90
+dates <- seq(from = Sys.Date() - n_days, to = Sys.Date(), by = "day")
+
+performance_data <- data.frame(
+  Date = dates,
+  Revenue = cumsum(rnorm(length(dates), mean = 1000, sd = 200)),
+  Users = round(runif(length(dates), 50, 500)),
+  Conversion_Rate = runif(length(dates), 0.02, 0.08),
+  Category = sample(c("Web", "Mobile", "API"), length(dates), replace = TRUE)
+)
+```
+
+# {.sidebar}
+
+```{r}
+selectInput("metric",
+  "Select Metric:",
+  choices = c("Revenue", "Users", "Conversion_Rate"),
+  selected = "Revenue"
+)
+
+selectInput("category_filter",
+  "Filter by Category:",
+  choices = c("All", unique(performance_data$Category)),
+  selected = "All"
+)
+
+dateRangeInput("date_range",
+  "Date Range:",
+  start = min(performance_data$Date),
+  end = max(performance_data$Date),
+  min = min(performance_data$Date),
+  max = max(performance_data$Date)
+)
+```
+
+# Overview
+
+## Row
+
+### Key Performance Indicators
+
+```{r}
+uiOutput("kpi_cards")
+```
+
+```{r}
+#| context: server
+library(shiny)
+library(plotly)
+library(DT)
+library(dplyr)
+
+# Make data available in server context
+set.seed(42)
+n_days <- 90
+dates <- seq(from = Sys.Date() - n_days, to = Sys.Date(), by = "day")
+
+performance_data <- data.frame(
+  Date = dates,
+  Revenue = cumsum(rnorm(length(dates), mean = 1000, sd = 200)),
+  Users = round(runif(length(dates), 50, 500)),
+  Conversion_Rate = runif(length(dates), 0.02, 0.08),
+  Category = sample(c("Web", "Mobile", "API"), length(dates), replace = TRUE)
+)
+
+# KPI Cards
+output$kpi_cards <- renderUI({
+  # Filter data based on inputs
+  filtered_data <- performance_data
+
+  if (input$category_filter != "All") {
+    filtered_data <- filtered_data[filtered_data$Category == input$category_filter, ]
+  }
+
+  filtered_data <- filtered_data[
+    filtered_data$Date >= input$date_range[1] &
+      filtered_data$Date <= input$date_range[2],
+  ]
+
+  # Calculate metrics
+  total_rev <- sum(filtered_data$Revenue)
+  total_usr <- sum(filtered_data$Users)
+  avg_conv <- mean(filtered_data$Conversion_Rate) * 100
+
+  div(
+    class = "row",
+    div(
+      class = "col-md-4",
+      div(
+        class = "card text-center",
+        div(
+          class = "card-body",
+          h3(paste0("$", format(round(total_rev), big.mark = ",")),
+            style = "color: #28a745;"
+          ),
+          p("Total Revenue", class = "card-text")
+        )
+      )
+    ),
+    div(
+      class = "col-md-4",
+      div(
+        class = "card text-center",
+        div(
+          class = "card-body",
+          h3(format(total_usr, big.mark = ","),
+            style = "color: #007bff;"
+          ),
+          p("Total Users", class = "card-text")
+        )
+      )
+    ),
+    div(
+      class = "col-md-4",
+      div(
+        class = "card text-center",
+        div(
+          class = "card-body",
+          h3(paste0(round(avg_conv, 2), "%"),
+            style = "color: #ffc107;"
+          ),
+          p("Avg Conversion", class = "card-text")
+        )
+      )
+    )
+  )
+})
+
+# Time Series Plot
+output$trend_plot <- renderPlotly({
+  # Filter data
+  filtered_data <- performance_data
+
+  if (input$category_filter != "All") {
+    filtered_data <- filtered_data[filtered_data$Category == input$category_filter, ]
+  }
+
+  filtered_data <- filtered_data[
+    filtered_data$Date >= input$date_range[1] &
+      filtered_data$Date <= input$date_range[2],
+  ]
+
+  # Create plot based on selected metric
+  y_col <- switch(input$metric,
+    "Revenue" = filtered_data$Revenue,
+    "Users" = filtered_data$Users,
+    "Conversion_Rate" = filtered_data$Conversion_Rate * 100
+  )
+
+  y_title <- switch(input$metric,
+    "Revenue" = "Revenue ($)",
+    "Users" = "Number of Users",
+    "Conversion_Rate" = "Conversion Rate (%)"
+  )
+
+  p <- plot_ly(filtered_data,
+    x = ~Date,
+    y = y_col,
+    type = "scatter",
+    mode = "lines+markers",
+    line = list(color = "#007bff", width = 2),
+    marker = list(color = "#007bff", size = 4)
+  ) %>%
+    layout(
+      title = paste(input$metric, "Over Time"),
+      xaxis = list(title = "Date"),
+      yaxis = list(title = y_title)
+    )
+
+  p
+})
+
+# Category Plot
+output$category_plot <- renderPlotly({
+  # Filter data by date range
+  filtered_data <- performance_data[
+    performance_data$Date >= input$date_range[1] &
+      performance_data$Date <= input$date_range[2],
+  ]
+
+  # Aggregate by category
+  category_summary <- filtered_data %>%
+    group_by(Category) %>%
+    summarise(
+      Revenue = sum(Revenue),
+      Users = sum(Users),
+      Conversion_Rate = mean(Conversion_Rate) * 100,
+      .groups = "drop"
+    )
+
+  # Select metric for plotting
+  y_col <- switch(input$metric,
+    "Revenue" = category_summary$Revenue,
+    "Users" = category_summary$Users,
+    "Conversion_Rate" = category_summary$Conversion_Rate
+  )
+
+  y_title <- switch(input$metric,
+    "Revenue" = "Total Revenue ($)",
+    "Users" = "Total Users",
+    "Conversion_Rate" = "Average Conversion Rate (%)"
+  )
+
+  colors <- c("#007bff", "#28a745", "#ffc107")
+
+  p <- plot_ly(category_summary,
+    x = ~Category,
+    y = y_col,
+    type = "bar",
+    marker = list(color = colors)
+  ) %>%
+    layout(
+      title = paste(input$metric, "by Category"),
+      xaxis = list(title = "Category"),
+      yaxis = list(title = y_title)
+    )
+
+  p
+})
+
+# Data Table
+output$data_table <- DT::renderDataTable({
+  # Filter data
+  filtered_data <- performance_data
+
+  if (input$category_filter != "All") {
+    filtered_data <- filtered_data[filtered_data$Category == input$category_filter, ]
+  }
+
+  filtered_data <- filtered_data[
+    filtered_data$Date >= input$date_range[1] &
+      filtered_data$Date <= input$date_range[2],
+  ]
+
+  # Format data for display
+  display_data <- filtered_data %>%
+    mutate(
+      Revenue = round(Revenue, 2),
+      Conversion_Rate = round(Conversion_Rate * 100, 2)
+    ) %>%
+    arrange(desc(Date))
+
+  DT::datatable(display_data,
+    options = list(
+      pageLength = 10,
+      scrollX = TRUE
+    ),
+    rownames = FALSE
+  ) %>%
+    DT::formatCurrency("Revenue", currency = "$") %>%
+    DT::formatRound("Conversion_Rate", digits = 2)
+})
+```
+
+## Row
+
+### Time Series Analysis
+
+```{r}
+plotlyOutput("trend_plot")
+```
+
+### Category Breakdown
+
+```{r}
+plotlyOutput("category_plot")
+```
+
+## Row
+
+### Data Table
+
+```{r}
+DT::dataTableOutput("data_table")
+```

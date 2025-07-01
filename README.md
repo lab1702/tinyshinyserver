@@ -15,6 +15,7 @@ A lightweight, WebSocket-enabled proxy server for hosting multiple Shiny applica
 - **Graceful Shutdown**: Multiple shutdown options including web-based controls
 - **Dark Mode Support**: Automatic theme detection for better user experience
 - **R Markdown Support**: Native support for interactive R Markdown documents with `runtime: shiny`
+- **Quarto Support**: Full support for interactive Quarto dashboards with `server: shiny`
 - **Binary Asset Support**: Handles images, fonts, and other binary files correctly
 - **Comprehensive Logging**: Structured logging with per-app log files
 
@@ -28,6 +29,9 @@ A lightweight, WebSocket-enabled proxy server for hosting multiple Shiny applica
   - Linux: `sudo apt install pandoc` (Ubuntu/Debian) or equivalent for your distribution
   - Windows: `winget install JohnMacFarlane.Pandoc`
   - macOS: Available via Homebrew or direct download from pandoc.org
+- **Quarto CLI** (optional): Required for Quarto document apps
+  - Download from https://quarto.org/docs/get-started/
+  - Includes its own Pandoc, so can be used instead of separate Pandoc installation
 
 ### Installation
 
@@ -95,6 +99,11 @@ The server is configured via `config.json`:
       "name": "reports",
       "path": "./apps/reports",
       "port": 3003
+    },
+    {
+      "name": "dashboard",
+      "path": "./apps/dashboard",
+      "port": 3004
     }
   ],
   "proxy_port": 3838,
@@ -267,14 +276,20 @@ apps/myapp/
 ### R Markdown App
 ```
 apps/myapp/
-├── app.R          # Wrapper to run R Markdown
 ├── report.Rmd     # R Markdown with runtime: shiny
+└── [other files]
+```
+
+### Quarto App
+```
+apps/myapp/
+├── dashboard.qmd  # Quarto document with server: shiny
 └── [other files]
 ```
 
 ## Example Applications
 
-The project includes three example applications:
+The project includes four example applications demonstrating different application types:
 
 ### 1. Sales Dashboard (`apps/sales/`)
 - Single-file Shiny app demonstrating basic dashboard
@@ -288,6 +303,12 @@ The project includes three example applications:
 - R Markdown flexdashboard with `runtime: shiny`
 - Interactive charts, KPIs, and data tables
 - Demonstrates plotly integration and responsive design
+
+### 4. Interactive Dashboard (`apps/dashboard/`)
+- Quarto dashboard with `server: shiny`
+- Professional dashboard layout with sidebar controls
+- Real-time filtering, interactive plots, and data tables
+- Demonstrates modern dashboard design with `format: dashboard`
 
 ## Memory Management
 
@@ -326,6 +347,9 @@ R -e "shiny::runApp('apps/sales', port = 3001)"
 
 # R Markdown app
 R -e "rmarkdown::run('apps/reports/report.Rmd', shiny_args = list(port = 3003, host = '127.0.0.1'))"
+
+# Quarto app
+R -e "quarto::quarto_serve('apps/dashboard/dashboard.qmd', port = 3004, host = '127.0.0.1')"
 ```
 
 ### Adding New Applications
@@ -395,11 +419,11 @@ The server uses a multi-process architecture:
    └── WebSocket ─────────┼───┐
        Messages           │   │
                           ▼   ▼
-              ┌──────────┐ ┌──────────┐ ┌──────────┐
-              │ Sales    │ │Inventory │ │ Reports  │
-              │(Port     │ │(Port     │ │(Port     │
-              │ 3001)    │ │ 3002)    │ │ 3003)    │
-              └──────────┘ └──────────┘ └──────────┘
+              ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐
+              │ Sales    │ │Inventory │ │ Reports  │ │Dashboard │
+              │(Port     │ │(Port     │ │(Port     │ │(Port     │
+              │ 3001)    │ │ 3002)    │ │ 3003)    │ │ 3004)    │
+              └──────────┘ └──────────┘ └──────────┘ └──────────┘
 ```
 
 ### Key Components
@@ -493,6 +517,7 @@ tail -f logs/sales_error.log
 - `promises` - Promise-based async programming
 - `logger` - Structured logging
 - `rmarkdown` - R Markdown support
+- `quarto` - Quarto document support
 - `flexdashboard` - Dashboard layouts
 - `DT` - Interactive data tables
 - `plotly` - Interactive plots
