@@ -89,13 +89,15 @@ TemplateManager <- setRefClass("TemplateManager",
         safe_name <- html_escape(app_config$name)
 
         card_html <- sprintf('
-    <div class="app-card" data-app="%1$s">
-      <h3><a href="/proxy/%1$s/" class="app-name-link">%1$s</a></h3>
-      <div class="app-status">
-        <span class="status-badge" id="status-%1$s">Loading...</span>
-        <span class="connections-count" id="connections-%1$s">0 connections</span>
+    <a href="/proxy/%1$s/" class="app-card-link">
+      <div class="app-card" data-app="%1$s">
+        <h3>%1$s</h3>
+        <div class="app-status">
+          <span class="status-badge" id="status-%1$s">Loading...</span>
+          <span class="connections-count" id="connections-%1$s">0 connections</span>
+        </div>
       </div>
-    </div>', safe_name)
+    </a>', safe_name)
 
         cards_html <- paste0(cards_html, card_html)
       }

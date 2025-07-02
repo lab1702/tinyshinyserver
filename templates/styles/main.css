@@ -84,33 +84,33 @@ body {
   margin-bottom: 40px;
 }
 
+.app-card-link {
+  text-decoration: none;
+  color: inherit;
+  display: block;
+}
+
 .app-card {
   background: var(--card-bg);
   border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 12px 16px;
-  transition: transform 0.2s, box-shadow 0.2s;
+  transition: all 0.2s ease;
+  cursor: pointer;
+  position: relative;
 }
 
 .app-card:hover {
   transform: translateY(-2px);
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  background: var(--bg-color);
+  border-color: var(--link-color);
 }
 
 .app-card h3 {
   font-size: 1.4rem;
   margin-bottom: 16px;
-}
-
-.app-name-link {
   color: var(--link-color);
-  text-decoration: none;
-  transition: color 0.2s;
-}
-
-.app-name-link:hover {
-  color: var(--link-hover);
-  text-decoration: underline;
 }
 
 .app-status {
