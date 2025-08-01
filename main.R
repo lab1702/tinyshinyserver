@@ -190,7 +190,7 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
           later::run_now()
 
           # Service HTTP events
-          httpuv::service(0.5)
+          httpuv::service()
         }
       }, interrupt = function(e) {
         log_info("Interrupt received, shutting down...")
