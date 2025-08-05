@@ -122,7 +122,7 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       proxy_host <- config$get_proxy_host()
       proxy_port <- config$config$proxy_port %||% 3838
 
-      log_info("Starting proxy server on {proxy_host}:{proxy_port}",
+      log_info("Starting proxy server on http://{proxy_host}:{proxy_port}",
         proxy_host = proxy_host, proxy_port = proxy_port
       )
 
@@ -138,7 +138,7 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       # Start management server
       management_port <- config$config$management_port %||% 3839
 
-      log_info("Starting management server on localhost:{management_port}",
+      log_info("Starting management server on http://127.0.0.1:{management_port}",
         management_port = management_port
       )
 
