@@ -5,7 +5,7 @@ library(httr)
 library(logger)
 
 # HTTP request handler
-handle_http_request <- function(req, config, template_manager, connection_manager) {
+handle_http_request <- function(req, config, template_manager, connection_manager, process_manager = NULL) {
   "Main HTTP request handler with routing"
 
   # Validate request inputs
@@ -24,6 +24,10 @@ handle_http_request <- function(req, config, template_manager, connection_manage
   query_string <- validation_result$query_string
 
   log_debug("HTTP request: {method} {path}", method = method, path = path)
+
+  # Attach managers to request for routing
+  req$process_manager <- process_manager
+  req$connection_manager <- connection_manager
 
   # Route handling
   return(route_http_request(path, method, query_string, req, config, template_manager, connection_manager))
@@ -44,7 +48,7 @@ route_http_request <- function(path, method, query_string, req, config, template
 
   # API endpoint for app status
   if (path == "/api/apps") {
-    return(handle_apps_api(config))
+    return(handle_apps_api(config, req$process_manager))
   }
 
   # Static files (CSS, JS, images)
@@ -54,7 +58,10 @@ route_http_request <- function(path, method, query_string, req, config, template
 
   # Proxy requests to apps
   if (startsWith(path, "/proxy/")) {
-    return(handle_proxy_request(path, method, query_string, req, config))
+    # We need to get references to process_manager and connection_manager
+    # This will be passed from the main HTTP handler
+    return(handle_proxy_request(path, method, query_string, req, config, 
+                               req$process_manager, req$connection_manager))
   }
 
   # 404 for unknown paths
@@ -82,45 +89,52 @@ handle_health_check <- function() {
   return(create_json_response(list(status = "healthy")))
 }
 
-handle_apps_api <- function(config) {
+handle_apps_api <- function(config, process_manager = NULL) {
   "Handle API requests for app status"
 
   # This would normally be in management_api.R but needed here for landing page
   tryCatch(
     {
-      apps_status <- list()
-
-      # Sort apps alphabetically by name
-      sorted_apps <- config$config$apps[order(sapply(config$config$apps, function(app) app$name))]
-
-      for (app_config in sorted_apps) {
-        app_name <- app_config$name
-        process <- config$get_app_process(app_name)
-
-        status <- if (is.null(process)) {
-          "stopped"
-        } else if (is_process_alive(process)) {
-          "running"
-        } else {
-          "crashed"
-        }
-
-        # Count connections for this app
-        app_connections <- 0
-        for (conn in config$get_all_ws_connections()) {
-          if (!is.null(conn$app_name) && conn$app_name == app_name) {
-            app_connections <- app_connections + 1
+      if (!is.null(process_manager)) {
+        # Use the enhanced status from process manager
+        apps_status <- process_manager$get_all_app_status()
+      } else {
+        # Fallback to basic status if no process manager available
+        apps_status <- list()
+        
+        # Sort apps alphabetically by name
+        sorted_apps <- config$config$apps[order(sapply(config$config$apps, function(app) app$name))]
+        
+        for (app_config in sorted_apps) {
+          app_name <- app_config$name
+          process <- config$get_app_process(app_name)
+          
+          status <- if (is.null(process)) {
+            if (app_config$resident) "stopped" else "dormant"
+          } else if (is_process_alive(process)) {
+            "running"
+          } else {
+            "crashed"
           }
+          
+          # Count connections for this app
+          app_connections <- 0
+          for (conn in config$get_all_ws_connections()) {
+            if (!is.null(conn$app_name) && conn$app_name == app_name) {
+              app_connections <- app_connections + 1
+            }
+          }
+          
+          apps_status[[app_name]] <- list(
+            name = app_name,
+            status = status,
+            resident = app_config$resident,
+            port = app_config$port,
+            path = app_config$path,
+            connections = app_connections,
+            pid = if (!is.null(process) && is_process_alive(process)) process$get_pid() else NULL
+          )
         }
-
-        apps_status[[app_name]] <- list(
-          name = app_name,
-          status = status,
-          port = app_config$port,
-          path = app_config$path,
-          connections = app_connections,
-          pid = if (!is.null(process) && is_process_alive(process)) process$get_pid() else NULL
-        )
       }
 
       return(create_json_response(apps_status))
@@ -141,7 +155,7 @@ handle_static_file <- function(path, template_manager) {
   return(template_manager$serve_static_file(file_path))
 }
 
-handle_proxy_request <- function(path, method, query_string, req, config) {
+handle_proxy_request <- function(path, method, query_string, req, config, process_manager = NULL, connection_manager = NULL) {
   "Handle proxy requests to Shiny apps"
 
   path_parts <- strsplit(path, "/")[[1]]
@@ -164,6 +178,23 @@ handle_proxy_request <- function(path, method, query_string, req, config) {
     return(create_error_response("App not found", 404))
   }
 
+  # Start app on demand if it's non-resident and not running
+  if (!app_config$resident && !is.null(process_manager)) {
+    process <- config$get_app_process(app_name)
+    if (is.null(process) || !is_process_alive(process)) {
+      log_info("Starting non-resident app {app_name} on demand for HTTP request", app_name = app_name)
+      success <- process_manager$start_app_on_demand(app_name)
+      if (!success) {
+        return(create_error_response("Failed to start app on demand", 502))
+      }
+    }
+  }
+
+  # Increment connection count for HTTP requests
+  if (!is.null(connection_manager)) {
+    connection_manager$increment_connection_count(app_name)
+  }
+
   # Build target URL
   if (length(path_parts) > 2) {
     target_path <- paste0("/", paste(path_parts[3:length(path_parts)], collapse = "/"))
@@ -179,7 +210,14 @@ handle_proxy_request <- function(path, method, query_string, req, config) {
   }
 
   # Forward the request
-  return(forward_request(method, target_url, req, app_name))
+  response <- forward_request(method, target_url, req, app_name)
+
+  # Decrement connection count after the request is complete
+  if (!is.null(connection_manager)) {
+    connection_manager$decrement_connection_count(app_name)
+  }
+
+  return(response)
 }
 
 forward_request <- function(method, target_url, req, app_name) {
@@ -243,7 +281,7 @@ forward_request <- function(method, target_url, req, app_name) {
 }
 
 # WebSocket handler
-handle_websocket_connection <- function(ws, config, connection_manager) {
+handle_websocket_connection <- function(ws, config, connection_manager, process_manager = NULL) {
   "Handle new WebSocket connections"
 
   log_info("WebSocket connection opened")
@@ -269,6 +307,21 @@ handle_websocket_connection <- function(ws, config, connection_manager) {
   }
 
   log_info("WebSocket routed to app: {app_name}", app_name = app_name)
+
+  # Start app on demand if it's non-resident and not running
+  app_config <- config$get_app_config(app_name)
+  if (!is.null(app_config) && !app_config$resident && !is.null(process_manager)) {
+    process <- config$get_app_process(app_name)
+    if (is.null(process) || !is_process_alive(process)) {
+      log_info("Starting non-resident app {app_name} on demand for WebSocket connection", app_name = app_name)
+      success <- process_manager$start_app_on_demand(app_name)
+      if (!success) {
+        log_error("Failed to start app {app_name} on demand for WebSocket", app_name = app_name)
+        ws$close()
+        return()
+      }
+    }
+  }
 
   # Get client connection info
   client_ip <- get_client_ip(ws$request)

@@ -5,6 +5,7 @@ A lightweight, WebSocket-enabled proxy server for hosting multiple Shiny applica
 ## Features
 
 - **Multi-App Hosting**: Host multiple Shiny applications on different ports behind a single proxy
+- **Resident & On-Demand Apps**: Choose between always-running apps for immediate access or on-demand apps for resource efficiency
 - **WebSocket Support**: Full WebSocket proxy with session affinity for real-time Shiny apps
 - **Real-time Status Updates**: Landing page shows live app status and connection counts with auto-refresh
 - **Management Interface**: Professional web-based dashboard for monitoring and controlling all applications
@@ -88,7 +89,8 @@ The server is configured via `config.json`:
   "apps": [
     {
       "name": "sales",
-      "path": "./apps/sales"
+      "path": "./apps/sales",
+      "resident": true
     },
     {
       "name": "inventory", 
@@ -96,11 +98,13 @@ The server is configured via `config.json`:
     },
     {
       "name": "reports",
-      "path": "./apps/reports"
+      "path": "./apps/reports",
+      "resident": false
     },
     {
       "name": "dashboard",
-      "path": "./apps/dashboard"
+      "path": "./apps/dashboard",
+      "resident": true
     }
   ],
   "starting_port": 3001,
@@ -127,6 +131,50 @@ The auto-assignment algorithm:
 - Assigns sequential ports to each application
 - Validates that enough ports are available before starting
 
+### Resident vs On-Demand Apps
+
+The server supports two application lifecycle modes controlled by the `resident` configuration option:
+
+#### **Resident Apps** (`"resident": true`)
+- **Always Running**: Started when the server starts and keep running continuously
+- **Immediate Response**: No startup delay when users access the app
+- **Higher Resource Usage**: Consumes memory and CPU even when unused
+- **Best For**: Frequently accessed apps, apps with long startup times, production apps requiring immediate availability
+
+#### **On-Demand Apps** (`"resident": false`, default)
+- **Start on Access**: Only started when a user first accesses the app (HTTP request or WebSocket connection)
+- **Automatic Shutdown**: Stopped 30 seconds after the last connection closes
+- **Resource Efficient**: Only consumes resources when actively being used
+- **Startup Delay**: Users may experience a brief delay on first access while the app starts
+- **Best For**: Infrequently used apps, development/testing environments, resource-constrained servers
+
+#### **Status Indicators**
+- **Resident apps**: Show as "running" (green) or "stopped" (red) in the management interface
+- **On-demand apps**: Show as "dormant" (blue) when stopped normally, "running" (green) when active
+
+**Example Configuration:**
+```json
+{
+  "apps": [
+    {
+      "name": "critical-dashboard",
+      "path": "./apps/dashboard",
+      "resident": true  // Always running for immediate access
+    },
+    {
+      "name": "occasional-report",
+      "path": "./apps/reports",
+      "resident": false  // Starts only when needed
+    },
+    {
+      "name": "dev-prototype",
+      "path": "./apps/prototype"
+      // "resident" defaults to false
+    }
+  ]
+}
+```
+
 ### Configuration Options
 
 | Option | Description | Default |
@@ -134,6 +182,7 @@ The auto-assignment algorithm:
 | `apps` | Array of Shiny applications to host | Required |
 | `apps[].name` | Application identifier for URLs | Required |
 | `apps[].path` | Relative path to app directory | Required |
+| `apps[].resident` | Keep app running continuously (true) or start on-demand (false) | false |
 | `starting_port` | Starting port for auto-assignment | Required |
 | `proxy_port` | Port for the proxy server | 3838 |
 | `proxy_host` | Host interface for proxy server (localhost, 127.0.0.1, 0.0.0.0, ::1, ::) | "127.0.0.1" |

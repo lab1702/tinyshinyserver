@@ -7,11 +7,15 @@ library(logger)
 # Connection Manager Class
 ConnectionManager <- setRefClass("ConnectionManager",
   fields = list(
-    config = "ANY"
+    config = "ANY",
+    process_manager = "ANY",  # Reference to process manager for scheduling stops
+    connection_counts = "list"  # Track active connections per app
   ),
   methods = list(
-    initialize = function(server_config) {
+    initialize = function(server_config, proc_manager = NULL) {
       config <<- server_config
+      process_manager <<- proc_manager
+      connection_counts <<- list()
     },
     create_backend_connection = function(app_name, session_id, client_ws) {
       "Create WebSocket connection to backend Shiny app"
@@ -160,6 +164,9 @@ ConnectionManager <- setRefClass("ConnectionManager",
         created_at = Sys.time()
       ))
 
+      # Increment connection count for this app
+      increment_connection_count(app_name)
+
       log_info("WebSocket connection added for app {app_name} from {client_ip}",
         app_name = app_name, client_ip = client_ip
       )
@@ -169,8 +176,17 @@ ConnectionManager <- setRefClass("ConnectionManager",
 
       log_info("WebSocket connection closed for session {session_id}", session_id = session_id)
 
+      # Get the app name before removing the connection
+      conn_info <- config$get_ws_connection(session_id)
+      app_name <- if (!is.null(conn_info)) conn_info$app_name else NULL
+
       # Clean up client connection
       config$remove_ws_connection(session_id)
+
+      # Decrement connection count for this app
+      if (!is.null(app_name)) {
+        decrement_connection_count(app_name)
+      }
 
       # Clean up backend connection
       backend_conn <- config$get_backend_connection(session_id)
@@ -224,11 +240,50 @@ ConnectionManager <- setRefClass("ConnectionManager",
       }
 
       return(connections)
+    },
+    increment_connection_count = function(app_name) {
+      "Increment the connection count for an app"
+      
+      if (is.null(connection_counts[[app_name]])) {
+        connection_counts[[app_name]] <<- 0
+      }
+      
+      connection_counts[[app_name]] <<- connection_counts[[app_name]] + 1
+      log_debug("Connection count for {app_name}: {count}", app_name = app_name, count = connection_counts[[app_name]])
+    },
+    decrement_connection_count = function(app_name) {
+      "Decrement the connection count for an app and schedule stop if needed"
+      
+      if (is.null(connection_counts[[app_name]])) {
+        connection_counts[[app_name]] <<- 0
+      } else {
+        connection_counts[[app_name]] <<- max(0, connection_counts[[app_name]] - 1)
+      }
+      
+      count <- connection_counts[[app_name]]
+      log_debug("Connection count for {app_name}: {count}", app_name = app_name, count = count)
+      
+      # If no connections remain and we have a process manager reference, schedule stop for non-resident apps
+      if (count == 0 && !is.null(process_manager)) {
+        app_config <- config$get_app_config(app_name)
+        if (!is.null(app_config) && !app_config$resident) {
+          log_info("No connections remain for non-resident app {app_name}, scheduling stop", app_name = app_name)
+          process_manager$schedule_stop(app_name, 30)
+        }
+      }
+    },
+    get_connection_count = function(app_name) {
+      "Get the current connection count for an app"
+      
+      if (is.null(connection_counts[[app_name]])) {
+        return(0)
+      }
+      return(connection_counts[[app_name]])
     }
   )
 )
 
 # Create connection manager factory function
-create_connection_manager <- function(server_config) {
-  return(ConnectionManager$new(server_config))
+create_connection_manager <- function(server_config, process_manager = NULL) {
+  return(ConnectionManager$new(server_config, process_manager))
 }

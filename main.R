@@ -48,7 +48,7 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       # Initialize other components
       process_manager <<- create_process_manager(config)
       template_manager <<- create_template_manager()
-      connection_manager <<- create_connection_manager(config)
+      connection_manager <<- create_connection_manager(config, process_manager)
 
       log_info("Tiny Shiny Server initialized")
     },
@@ -77,14 +77,18 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       run_event_loop()
     },
     start_all_apps = function() {
-      "Start all configured Shiny applications"
+      "Start all configured resident Shiny applications"
 
-      log_info("Starting applications...")
+      log_info("Starting resident applications...")
 
       for (app_config in config$config$apps) {
-        success <- process_manager$start_app(app_config)
-        if (!success) {
-          log_error("Failed to start app: {app_name}", app_name = app_config$name)
+        if (app_config$resident) {
+          success <- process_manager$start_app(app_config)
+          if (!success) {
+            log_error("Failed to start resident app: {app_name}", app_name = app_config$name)
+          }
+        } else {
+          log_info("Skipping non-resident app: {app_name} (will start on-demand)", app_name = app_config$name)
         }
       }
     },
@@ -130,8 +134,8 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
         host = proxy_host,
         port = proxy_port,
         app = list(
-          call = function(req) handle_http_request(req, config, template_manager, connection_manager),
-          onWSOpen = function(ws) handle_websocket_connection(ws, config, connection_manager)
+          call = function(req) handle_http_request(req, config, template_manager, connection_manager, process_manager),
+          onWSOpen = function(ws) handle_websocket_connection(ws, config, connection_manager, process_manager)
         )
       )
 

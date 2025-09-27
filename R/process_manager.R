@@ -8,11 +8,13 @@ library(logger)
 # Process Manager Class
 ProcessManager <- setRefClass("ProcessManager",
   fields = list(
-    config = "ANY"
+    config = "ANY",
+    stop_timers = "list"  # Track scheduled stop timers for non-resident apps
   ),
   methods = list(
     initialize = function(server_config) {
       config <<- server_config
+      stop_timers <<- list()
     },
     start_app = function(app_config) {
       "Start a Shiny application process"
@@ -162,6 +164,39 @@ ProcessManager <- setRefClass("ProcessManager",
         return(FALSE)
       }
     },
+    start_app_on_demand = function(app_name) {
+      "Start a non-resident app on demand if not already running"
+      
+      app_config <- config$get_app_config(app_name)
+      if (is.null(app_config)) {
+        log_error("Cannot start app on demand: {app_name} not found in configuration", app_name = app_name)
+        return(FALSE)
+      }
+      
+      # Check if app is already running
+      process <- config$get_app_process(app_name)
+      if (!is.null(process) && is_process_alive(process)) {
+        log_debug("App {app_name} already running on demand", app_name = app_name)
+        # Cancel any scheduled stop since the app is being accessed
+        clear_scheduled_stop(app_name)
+        return(TRUE)
+      }
+      
+      log_info("Starting app {app_name} on demand", app_name = app_name)
+      
+      # Cancel any scheduled stop timer
+      clear_scheduled_stop(app_name)
+      
+      # Start the app
+      success <- start_app(app_config)
+      if (success) {
+        log_info("Successfully started app {app_name} on demand", app_name = app_name)
+      } else {
+        log_error("Failed to start app {app_name} on demand", app_name = app_name)
+      }
+      
+      return(success)
+    },
     restart_app = function(app_name) {
       "Restart a specific application"
 
@@ -235,14 +270,22 @@ ProcessManager <- setRefClass("ProcessManager",
             # Remove dead process
             config$remove_app_process(app_name)
 
-            # Restart the app
-            Sys.sleep(config$config$restart_delay %||% 5)
-            start_app(app_config)
+            # Only restart if it's a resident app
+            if (app_config$resident) {
+              Sys.sleep(config$config$restart_delay %||% 5)
+              start_app(app_config)
+            } else {
+              log_info("Non-resident app {app_name} died, will start on next request", app_name = app_name)
+            }
           }
         } else {
-          # App not running, start it
-          log_info("App {app_name} not running, starting", app_name = app_name)
-          start_app(app_config)
+          # App not running - only start if it's resident
+          if (app_config$resident) {
+            log_info("Resident app {app_name} not running, starting", app_name = app_name)
+            start_app(app_config)
+          } else {
+            log_debug("Non-resident app {app_name} is stopped (normal state)", app_name = app_name)
+          }
         }
       }
     },
@@ -354,7 +397,11 @@ ProcessManager <- setRefClass("ProcessManager",
       }
 
       status <- if (is.null(process)) {
-        "stopped"
+        if (app_config$resident) {
+          "stopped"  # Resident app should be running
+        } else {
+          "dormant"  # Non-resident app is normally stopped
+        }
       } else if (is_process_alive(process)) {
         "running"
       } else {
@@ -369,13 +416,23 @@ ProcessManager <- setRefClass("ProcessManager",
         }
       }
 
+      # Get scheduled stop info
+      stop_info <- get_scheduled_stop_info(app_name)
+      scheduled_stop_at <- if (!is.null(stop_info)) {
+        stop_info$scheduled_at + stop_info$delay
+      } else {
+        NULL
+      }
+
       return(list(
         name = app_name,
         status = status,
+        resident = app_config$resident,
         port = app_config$port,
         path = app_config$path,
         connections = app_connections,
-        pid = if (!is.null(process) && is_process_alive(process)) process$get_pid() else NULL
+        pid = if (!is.null(process) && is_process_alive(process)) process$get_pid() else NULL,
+        scheduled_stop_at = if (!is.null(scheduled_stop_at)) format(scheduled_stop_at, "%Y-%m-%d %H:%M:%S") else NULL
       ))
     },
     get_all_app_status = function() {
@@ -395,6 +452,80 @@ ProcessManager <- setRefClass("ProcessManager",
       }
 
       return(apps_status)
+    },
+    schedule_stop = function(app_name, delay = 30) {
+      "Schedule an app to stop after a delay (for non-resident apps with no connections)"
+      
+      app_config <- config$get_app_config(app_name)
+      if (is.null(app_config)) {
+        log_error("Cannot schedule stop for unknown app: {app_name}", app_name = app_name)
+        return(FALSE)
+      }
+      
+      # Only schedule stops for non-resident apps
+      if (app_config$resident) {
+        log_debug("Not scheduling stop for resident app: {app_name}", app_name = app_name)
+        return(FALSE)
+      }
+      
+      # Cancel any existing timer first
+      clear_scheduled_stop(app_name)
+      
+      log_info("Scheduling stop for app {app_name} in {delay} seconds", app_name = app_name, delay = delay)
+      
+      # Schedule the stop using later::later
+      timer <- later::later(function() {
+        # Remove the timer from tracking
+        stop_timers[[app_name]] <<- NULL
+        
+        # Check if app still has no connections before stopping
+        # We'll get the connection count from the connection manager
+        app_connections <- get_app_connection_count(app_name)
+        
+        if (app_connections == 0) {
+          log_info("Stopping non-resident app {app_name} after timeout (no active connections)", app_name = app_name)
+          stop_app(app_name)
+        } else {
+          log_info("Not stopping app {app_name} - it has {count} active connections", app_name = app_name, count = app_connections)
+        }
+      }, delay)
+      
+      # Store the timer reference
+      stop_timers[[app_name]] <<- list(
+        timer = timer,
+        scheduled_at = Sys.time(),
+        delay = delay
+      )
+      
+      return(TRUE)
+    },
+    clear_scheduled_stop = function(app_name) {
+      "Cancel any scheduled stop for an app"
+      
+      if (app_name %in% names(stop_timers)) {
+        log_debug("Clearing scheduled stop for app: {app_name}", app_name = app_name)
+        stop_timers[[app_name]] <<- NULL
+      }
+    },
+    get_scheduled_stop_info = function(app_name) {
+      "Get information about scheduled stop for an app"
+      
+      if (app_name %in% names(stop_timers)) {
+        return(stop_timers[[app_name]])
+      }
+      return(NULL)
+    },
+    get_app_connection_count = function(app_name) {
+      "Get the current connection count for a specific app"
+      
+      app_connections <- 0
+      for (conn in config$get_all_ws_connections()) {
+        if (!is.null(conn$app_name) && conn$app_name == app_name) {
+          app_connections <- app_connections + 1
+        }
+      }
+      
+      return(app_connections)
     },
     stop_all_apps = function() {
       "Stop all running applications"

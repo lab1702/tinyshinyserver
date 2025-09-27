@@ -71,6 +71,13 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       config$health_check_interval <<- config$health_check_interval %||% 10
       config$starting_port <<- config$starting_port %||% 3001
 
+      # Set default values for optional app fields
+      for (i in seq_along(config$apps)) {
+        if (!"resident" %in% names(config$apps[[i]])) {
+          config$apps[[i]]$resident <<- FALSE
+        }
+      }
+
       # Auto-assign ports to apps
       assign_app_ports()
 
@@ -130,6 +137,13 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         for (field in app_required) {
           if (!field %in% names(app)) {
             return(list(valid = FALSE, error = paste("App", i, "missing field:", field)))
+          }
+        }
+
+        # Validate optional resident field
+        if ("resident" %in% names(app)) {
+          if (!is.logical(app$resident) || length(app$resident) != 1) {
+            return(list(valid = FALSE, error = paste("App", i, "resident field must be a single logical value (TRUE/FALSE)")))
           }
         }
 
