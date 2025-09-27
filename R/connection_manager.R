@@ -8,14 +8,12 @@ library(logger)
 ConnectionManager <- setRefClass("ConnectionManager",
   fields = list(
     config = "ANY",
-    process_manager = "ANY",  # Reference to process manager for scheduling stops
-    connection_counts = "list"  # Track active connections per app
+    process_manager = "ANY"  # Reference to process manager for immediate stops
   ),
   methods = list(
     initialize = function(server_config, proc_manager = NULL) {
       config <<- server_config
       process_manager <<- proc_manager
-      connection_counts <<- list()
     },
     create_backend_connection = function(app_name, session_id, client_ws) {
       "Create WebSocket connection to backend Shiny app"
@@ -164,9 +162,6 @@ ConnectionManager <- setRefClass("ConnectionManager",
         created_at = Sys.time()
       ))
 
-      # Increment connection count for this app
-      increment_connection_count(app_name)
-
       log_info("WebSocket connection added for app {app_name} from {client_ip}",
         app_name = app_name, client_ip = client_ip
       )
@@ -241,45 +236,29 @@ ConnectionManager <- setRefClass("ConnectionManager",
 
       return(connections)
     },
-    increment_connection_count = function(app_name) {
-      "Increment the connection count for an app"
-      
-      if (is.null(connection_counts[[app_name]])) {
-        connection_counts[[app_name]] <<- 0
-      }
-      
-      connection_counts[[app_name]] <<- connection_counts[[app_name]] + 1
-      log_debug("Connection count for {app_name}: {count}", app_name = app_name, count = connection_counts[[app_name]])
-    },
     decrement_connection_count = function(app_name) {
-      "Decrement the connection count for an app and stop immediately if needed"
+      "Check WebSocket connections and stop app immediately if needed"
       
-      if (is.null(connection_counts[[app_name]])) {
-        connection_counts[[app_name]] <<- 0
-      } else {
-        connection_counts[[app_name]] <<- max(0, connection_counts[[app_name]] - 1)
+      # Use actual WebSocket connection count instead of our custom counter
+      # This ensures we only stop when there are no active WebSocket connections
+      ws_count <- 0
+      for (conn in config$get_all_ws_connections()) {
+        if (!is.null(conn$app_name) && conn$app_name == app_name) {
+          ws_count <- ws_count + 1
+        }
       }
       
-      count <- connection_counts[[app_name]]
-      log_debug("Connection count for {app_name}: {count}", app_name = app_name, count = count)
+      log_debug("WebSocket connections for {app_name}: {count}", app_name = app_name, count = ws_count)
       
-      # If no connections remain and we have a process manager reference, immediately stop non-resident apps
-      if (count == 0 && !is.null(process_manager)) {
+      # If no WebSocket connections remain and we have a process manager reference, immediately stop non-resident apps
+      if (ws_count == 0 && !is.null(process_manager)) {
         app_config <- config$get_app_config(app_name)
         if (!is.null(app_config) && !app_config$resident) {
-          log_info("No connections remain for non-resident app {app_name}, stopping immediately", app_name = app_name)
+          log_info("No WebSocket connections remain for non-resident app {app_name}, stopping immediately", app_name = app_name)
           process_manager$stop_app_immediately(app_name)
         }
       }
     },
-    get_connection_count = function(app_name) {
-      "Get the current connection count for an app"
-      
-      if (is.null(connection_counts[[app_name]])) {
-        return(0)
-      }
-      return(connection_counts[[app_name]])
-    }
   )
 )
 

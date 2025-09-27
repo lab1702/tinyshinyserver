@@ -190,11 +190,6 @@ handle_proxy_request <- function(path, method, query_string, req, config, proces
     }
   }
 
-  # Increment connection count for HTTP requests
-  if (!is.null(connection_manager)) {
-    connection_manager$increment_connection_count(app_name)
-  }
-
   # Build target URL
   if (length(path_parts) > 2) {
     target_path <- paste0("/", paste(path_parts[3:length(path_parts)], collapse = "/"))
@@ -210,14 +205,7 @@ handle_proxy_request <- function(path, method, query_string, req, config, proces
   }
 
   # Forward the request
-  response <- forward_request(method, target_url, req, app_name)
-
-  # Decrement connection count after the request is complete
-  if (!is.null(connection_manager)) {
-    connection_manager$decrement_connection_count(app_name)
-  }
-
-  return(response)
+  return(forward_request(method, target_url, req, app_name))
 }
 
 forward_request <- function(method, target_url, req, app_name) {
