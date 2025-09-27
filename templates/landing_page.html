@@ -94,24 +94,27 @@
             
             // Enable/disable link based on app status
             if (linkElement && cardElement) {
-              if (app.status === "running") {
-                // App is running - make it clickable
+              if (app.status === "running" || app.status === "dormant") {
+                // App is running or dormant (can be started on-demand) - make it clickable
                 linkElement.href = "/proxy/" + app.name + "/";
                 linkElement.style.pointerEvents = "auto";
                 linkElement.style.cursor = "pointer";
                 cardElement.classList.remove("app-disabled");
-                linkElement.title = "Click to open " + app.name;
+                
+                if (app.status === "running") {
+                  linkElement.title = "Click to open " + app.name;
+                } else {
+                  linkElement.title = "Click to start and open " + app.name + " (on-demand app)";
+                }
               } else {
-                // App is not running - disable clicking
+                // App is stopped or crashed - disable clicking
                 linkElement.removeAttribute("href");
                 linkElement.style.pointerEvents = "none";
                 linkElement.style.cursor = "not-allowed";
                 cardElement.classList.add("app-disabled");
                 
                 // Set appropriate tooltip based on status
-                if (app.status === "dormant") {
-                  linkElement.title = "App is dormant - it will start when accessed via direct URL";
-                } else if (app.status === "stopped") {
+                if (app.status === "stopped") {
                   linkElement.title = "App is stopped - use management interface to start it";
                 } else if (app.status === "crashed") {
                   linkElement.title = "App has crashed - use management interface to restart it";
