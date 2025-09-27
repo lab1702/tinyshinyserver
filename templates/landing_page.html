@@ -9,7 +9,7 @@
   <div class="container">
     <div class="connection-status" id="connectionStatus">
       <span class="status-indicator" id="statusIndicator"></span>
-      <span class="status-text" id="statusText">Connected</span>
+      <span class="status-text" id="statusText">Connecting...</span>
     </div>
 
     <div class="header">
@@ -29,7 +29,7 @@
 
   <script>
     let refreshInterval;
-    let isConnected = true;
+    let isConnected = false; // Start as disconnected until we verify connection
 
     function setConnectionStatus(connected) {
       const indicator = document.getElementById("statusIndicator");
@@ -49,7 +49,18 @@
     }
 
     function updateAppStatus() {
-      fetch("/api/apps")
+      // Create abort controller for timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 second timeout
+      
+      fetch("/api/apps", {
+        method: 'GET',
+        cache: 'no-cache',
+        headers: {
+          'Cache-Control': 'no-cache'
+        },
+        signal: controller.signal
+      })
         .then(response => {
           if (!response.ok) {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -57,6 +68,9 @@
           return response.json();
         })
         .then(data => {
+          // Clear timeout since request succeeded
+          clearTimeout(timeoutId);
+          
           // Update connection status to connected if we were disconnected
           if (!isConnected) {
             setConnectionStatus(true);
@@ -78,6 +92,9 @@
           });
         })
         .catch(error => {
+          // Clear timeout
+          clearTimeout(timeoutId);
+          
           console.error("Error fetching app status:", error);
 
           // Update connection status to disconnected
@@ -91,8 +108,7 @@
         });
     }
 
-    // Initial load
-    setConnectionStatus(true);
+    // Initial load - don't assume connected, let updateAppStatus determine status
     updateAppStatus();
 
     // Auto-refresh every 5 seconds
