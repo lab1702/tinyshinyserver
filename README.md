@@ -234,13 +234,19 @@ The landing page at **http://localhost:3838** provides an overview of all hosted
 ### Features
 
 #### **Real-time Status Display**
-- **Live Status Badges**: Visual indicators showing if each app is running, stopped, or crashed
+- **Live Status Badges**: Visual indicators showing if each app is running, dormant, stopped, or crashed
 - **Connection Counts**: Real-time display of active connections per application
 - **Auto-refresh**: Status updates automatically every 5 seconds
-- **Color-coded Indicators**: Green for running, red for stopped, yellow for crashed apps
+- **Color-coded Indicators**: Green for running, blue for dormant, red for stopped, yellow for crashed apps
+- **Connection Status**: Shows server connectivity with automatic timeout detection
 
 #### **Application Access**
-- **Clickable App Names**: App names are clickable links for direct access to applications
+- **Smart Clickable Tiles**: App accessibility based on status
+  - **Running apps**: Immediately clickable ("Click to open [app name]")
+  - **Dormant apps**: Clickable for on-demand starting ("Click to start and open [app name]")
+  - **Stopped/Crashed apps**: Disabled with helpful tooltips explaining next steps
+  - **Server down**: All tiles disabled when server is unreachable
+- **Visual Feedback**: Disabled apps are dimmed with "not-allowed" cursor
 - **Clean Interface**: Modern, responsive design that works on all devices
 - **Dark Mode Support**: Automatically adapts to your system's theme preference
 
@@ -269,10 +275,14 @@ Visit **http://localhost:3839** to access the management dashboard.
 - Real-time auto-refresh (every 5 seconds)
 
 #### **Application Management**
-- **Status Monitoring**: See if each app is running, stopped, or crashed
+- **Enhanced Status Monitoring**: See if each app is running, dormant, stopped, or crashed
+- **App Type Display**: Shows whether apps are "Resident" (always-on) or "On-Demand"
 - **Connection Counts**: View active connections per application
 - **Process Information**: See process IDs and ports for each app
-- **Individual Restart**: Restart specific applications without affecting others
+- **Smart Restart Controls**: 
+  - **Running/Stopped/Crashed apps**: Show restart button
+  - **Dormant apps**: No restart button (start automatically on access)
+  - **Helpful messages**: "This app will start automatically when accessed"
 - **Resource Details**: Monitor app paths and configuration
 
 #### **Connection Tracking**
