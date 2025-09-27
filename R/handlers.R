@@ -60,8 +60,10 @@ route_http_request <- function(path, method, query_string, req, config, template
   if (startsWith(path, "/proxy/")) {
     # We need to get references to process_manager and connection_manager
     # This will be passed from the main HTTP handler
-    return(handle_proxy_request(path, method, query_string, req, config, 
-                               req$process_manager, req$connection_manager))
+    return(handle_proxy_request(
+      path, method, query_string, req, config,
+      req$process_manager, req$connection_manager
+    ))
   }
 
   # 404 for unknown paths
@@ -101,14 +103,14 @@ handle_apps_api <- function(config, process_manager = NULL) {
       } else {
         # Fallback to basic status if no process manager available
         apps_status <- list()
-        
+
         # Sort apps alphabetically by name
         sorted_apps <- config$config$apps[order(sapply(config$config$apps, function(app) app$name))]
-        
+
         for (app_config in sorted_apps) {
           app_name <- app_config$name
           process <- config$get_app_process(app_name)
-          
+
           status <- if (is.null(process)) {
             if (app_config$resident) "stopped" else "dormant"
           } else if (is_process_alive(process)) {
@@ -116,7 +118,7 @@ handle_apps_api <- function(config, process_manager = NULL) {
           } else {
             "crashed"
           }
-          
+
           # Count connections for this app
           app_connections <- 0
           for (conn in config$get_all_ws_connections()) {
@@ -124,7 +126,7 @@ handle_apps_api <- function(config, process_manager = NULL) {
               app_connections <- app_connections + 1
             }
           }
-          
+
           apps_status[[app_name]] <- list(
             name = app_name,
             status = status,

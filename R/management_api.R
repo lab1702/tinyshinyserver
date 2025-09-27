@@ -189,7 +189,7 @@ handle_app_restart <- function(path, process_manager) {
           message = "Cannot restart dormant app. Dormant apps start automatically when accessed."
         )))
       }
-      
+
       result <- process_manager$restart_app(app_name)
 
       if (result$success) {

@@ -8,7 +8,7 @@ library(logger)
 ConnectionManager <- setRefClass("ConnectionManager",
   fields = list(
     config = "ANY",
-    process_manager = "ANY"  # Reference to process manager for immediate stops
+    process_manager = "ANY" # Reference to process manager for immediate stops
   ),
   methods = list(
     initialize = function(server_config, proc_manager = NULL) {
@@ -238,7 +238,7 @@ ConnectionManager <- setRefClass("ConnectionManager",
     },
     decrement_connection_count = function(app_name) {
       "Check WebSocket connections and stop app immediately if needed"
-      
+
       # Use actual WebSocket connection count instead of our custom counter
       # This ensures we only stop when there are no active WebSocket connections
       ws_count <- 0
@@ -247,9 +247,9 @@ ConnectionManager <- setRefClass("ConnectionManager",
           ws_count <- ws_count + 1
         }
       }
-      
+
       log_debug("WebSocket connections for {app_name}: {count}", app_name = app_name, count = ws_count)
-      
+
       # If no WebSocket connections remain and we have a process manager reference, immediately stop non-resident apps
       if (ws_count == 0 && !is.null(process_manager)) {
         app_config <- config$get_app_config(app_name)

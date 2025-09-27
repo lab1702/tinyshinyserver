@@ -164,22 +164,22 @@ ProcessManager <- setRefClass("ProcessManager",
     },
     start_app_on_demand = function(app_name) {
       "Start a non-resident app on demand if not already running"
-      
+
       app_config <- config$get_app_config(app_name)
       if (is.null(app_config)) {
         log_error("Cannot start app on demand: {app_name} not found in configuration", app_name = app_name)
         return(FALSE)
       }
-      
+
       # Check if app is already running
       process <- config$get_app_process(app_name)
       if (!is.null(process) && is_process_alive(process)) {
         log_debug("App {app_name} already running on demand", app_name = app_name)
         return(TRUE)
       }
-      
+
       log_info("Starting app {app_name} on demand", app_name = app_name)
-      
+
       # Start the app
       success <- start_app(app_config)
       if (success) {
@@ -187,7 +187,7 @@ ProcessManager <- setRefClass("ProcessManager",
       } else {
         log_error("Failed to start app {app_name} on demand", app_name = app_name)
       }
-      
+
       return(success)
     },
     restart_app = function(app_name) {
@@ -248,19 +248,19 @@ ProcessManager <- setRefClass("ProcessManager",
     },
     stop_app_immediately = function(app_name) {
       "Stop a non-resident app immediately when connections reach zero"
-      
+
       app_config <- config$get_app_config(app_name)
       if (is.null(app_config)) {
         log_error("Cannot stop unknown app: {app_name}", app_name = app_name)
         return(FALSE)
       }
-      
+
       # Only allow immediate stops for non-resident apps
       if (app_config$resident) {
         log_debug("Not stopping resident app: {app_name}", app_name = app_name)
         return(FALSE)
       }
-      
+
       log_info("Immediately stopping non-resident app {app_name} (no active connections)", app_name = app_name)
       result <- stop_app(app_name)
       return(result$success)
@@ -410,9 +410,9 @@ ProcessManager <- setRefClass("ProcessManager",
 
       status <- if (is.null(process)) {
         if (app_config$resident) {
-          "stopped"  # Resident app should be running
+          "stopped" # Resident app should be running
         } else {
-          "dormant"  # Non-resident app is normally stopped
+          "dormant" # Non-resident app is normally stopped
         }
       } else if (is_process_alive(process)) {
         "running"
@@ -458,14 +458,14 @@ ProcessManager <- setRefClass("ProcessManager",
     },
     get_app_connection_count = function(app_name) {
       "Get the current connection count for a specific app"
-      
+
       app_connections <- 0
       for (conn in config$get_all_ws_connections()) {
         if (!is.null(conn$app_name) && conn$app_name == app_name) {
           app_connections <- app_connections + 1
         }
       }
-      
+
       return(app_connections)
     },
     stop_all_apps = function() {
