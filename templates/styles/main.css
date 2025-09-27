@@ -113,6 +113,28 @@ body {
   color: var(--link-color);
 }
 
+/* Disabled app cards */
+.app-card.app-disabled {
+  opacity: 0.6;
+  background: var(--surface-color);
+  border-color: var(--border-color);
+}
+
+.app-card.app-disabled h3 {
+  color: var(--muted-text);
+}
+
+.app-card.app-disabled:hover {
+  transform: none;
+  box-shadow: none;
+  background: var(--surface-color);
+  border-color: var(--border-color);
+}
+
+.app-card-link[style*="pointer-events: none"] {
+  cursor: not-allowed;
+}
+
 .app-status {
   display: flex;
   justify-content: space-between;
@@ -142,6 +164,18 @@ body {
 .status-crashed {
   background-color: var(--warning-bg);
   color: var(--warning-text);
+}
+
+.status-dormant {
+  background-color: #e3f2fd;
+  color: #1565c0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .status-dormant {
+    background-color: #1a2332;
+    color: #64b5f6;
+  }
 }
 
 .connections-count {

@@ -89,8 +89,8 @@ TemplateManager <- setRefClass("TemplateManager",
         safe_name <- html_escape(app_config$name)
 
         card_html <- sprintf('
-    <a href="/proxy/%1$s/" class="app-card-link">
-      <div class="app-card" data-app="%1$s">
+    <a class="app-card-link" style="pointer-events: none; cursor: not-allowed;" title="Loading...">
+      <div class="app-card app-disabled" data-app="%1$s">
         <h3>%1$s</h3>
         <div class="app-status">
           <span class="status-badge" id="status-%1$s">Loading...</span>

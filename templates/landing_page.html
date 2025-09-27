@@ -79,6 +79,8 @@
           Object.values(data).forEach(app => {
             const statusElement = document.getElementById("status-" + app.name);
             const connectionsElement = document.getElementById("connections-" + app.name);
+            const cardElement = document.querySelector(`[data-app="${app.name}"]`);
+            const linkElement = cardElement ? cardElement.closest('a') : null;
 
             if (statusElement) {
               statusElement.textContent = app.status;
@@ -88,6 +90,35 @@
             if (connectionsElement) {
               const connectionText = app.connections === 1 ? "1 connection" : app.connections + " connections";
               connectionsElement.textContent = connectionText;
+            }
+            
+            // Enable/disable link based on app status
+            if (linkElement && cardElement) {
+              if (app.status === "running") {
+                // App is running - make it clickable
+                linkElement.href = "/proxy/" + app.name + "/";
+                linkElement.style.pointerEvents = "auto";
+                linkElement.style.cursor = "pointer";
+                cardElement.classList.remove("app-disabled");
+                linkElement.title = "Click to open " + app.name;
+              } else {
+                // App is not running - disable clicking
+                linkElement.removeAttribute("href");
+                linkElement.style.pointerEvents = "none";
+                linkElement.style.cursor = "not-allowed";
+                cardElement.classList.add("app-disabled");
+                
+                // Set appropriate tooltip based on status
+                if (app.status === "dormant") {
+                  linkElement.title = "App is dormant - it will start when accessed via direct URL";
+                } else if (app.status === "stopped") {
+                  linkElement.title = "App is stopped - use management interface to start it";
+                } else if (app.status === "crashed") {
+                  linkElement.title = "App has crashed - use management interface to restart it";
+                } else {
+                  linkElement.title = "App is not available (" + app.status + ")";
+                }
+              }
             }
           });
         })
