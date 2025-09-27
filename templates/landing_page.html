@@ -134,10 +134,27 @@
           // Update connection status to disconnected
           setConnectionStatus(false);
 
-          // Update all status badges to show error state
-          document.querySelectorAll(".status-badge").forEach(badge => {
-            badge.textContent = "error";
-            badge.className = "status-badge status-stopped";
+          // Update all status badges to show error state and disable all app tiles
+          document.querySelectorAll(".app-card").forEach(card => {
+            const linkElement = card.closest('a');
+            const statusBadge = card.querySelector('.status-badge');
+            
+            // Update status badge
+            if (statusBadge) {
+              statusBadge.textContent = "server down";
+              statusBadge.className = "status-badge status-stopped";
+            }
+            
+            // Disable the app tile
+            if (linkElement) {
+              linkElement.removeAttribute("href");
+              linkElement.style.pointerEvents = "none";
+              linkElement.style.cursor = "not-allowed";
+              linkElement.title = "Server is down - apps are not accessible";
+            }
+            
+            // Add disabled styling
+            card.classList.add("app-disabled");
           });
         });
     }
