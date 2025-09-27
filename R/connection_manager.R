@@ -252,7 +252,7 @@ ConnectionManager <- setRefClass("ConnectionManager",
       log_debug("Connection count for {app_name}: {count}", app_name = app_name, count = connection_counts[[app_name]])
     },
     decrement_connection_count = function(app_name) {
-      "Decrement the connection count for an app and schedule stop if needed"
+      "Decrement the connection count for an app and stop immediately if needed"
       
       if (is.null(connection_counts[[app_name]])) {
         connection_counts[[app_name]] <<- 0
@@ -263,12 +263,12 @@ ConnectionManager <- setRefClass("ConnectionManager",
       count <- connection_counts[[app_name]]
       log_debug("Connection count for {app_name}: {count}", app_name = app_name, count = count)
       
-      # If no connections remain and we have a process manager reference, schedule stop for non-resident apps
+      # If no connections remain and we have a process manager reference, immediately stop non-resident apps
       if (count == 0 && !is.null(process_manager)) {
         app_config <- config$get_app_config(app_name)
         if (!is.null(app_config) && !app_config$resident) {
-          log_info("No connections remain for non-resident app {app_name}, scheduling stop", app_name = app_name)
-          process_manager$schedule_stop(app_name, 30)
+          log_info("No connections remain for non-resident app {app_name}, stopping immediately", app_name = app_name)
+          process_manager$stop_app_immediately(app_name)
         }
       }
     },

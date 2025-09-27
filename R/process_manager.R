@@ -177,15 +177,10 @@ ProcessManager <- setRefClass("ProcessManager",
       process <- config$get_app_process(app_name)
       if (!is.null(process) && is_process_alive(process)) {
         log_debug("App {app_name} already running on demand", app_name = app_name)
-        # Cancel any scheduled stop since the app is being accessed
-        clear_scheduled_stop(app_name)
         return(TRUE)
       }
       
       log_info("Starting app {app_name} on demand", app_name = app_name)
-      
-      # Cancel any scheduled stop timer
-      clear_scheduled_stop(app_name)
       
       # Start the app
       success <- start_app(app_config)
@@ -252,6 +247,28 @@ ProcessManager <- setRefClass("ProcessManager",
       }
 
       return(list(success = FALSE, message = paste("App", app_name, "not found or already stopped")))
+    },
+    stop_app_immediately = function(app_name) {
+      "Stop a non-resident app immediately when connections reach zero"
+      
+      app_config <- config$get_app_config(app_name)
+      if (is.null(app_config)) {
+        log_error("Cannot stop unknown app: {app_name}", app_name = app_name)
+        return(FALSE)
+      }
+      
+      # Only allow immediate stops for non-resident apps
+      if (app_config$resident) {
+        log_debug("Not stopping resident app: {app_name}", app_name = app_name)
+        return(FALSE)
+      }
+      
+      # Cancel any scheduled stop timer (cleanup)
+      clear_scheduled_stop(app_name)
+      
+      log_info("Immediately stopping non-resident app {app_name} (no active connections)", app_name = app_name)
+      result <- stop_app(app_name)
+      return(result$success)
     },
     health_check = function() {
       "Check health of all applications and restart if necessary"
@@ -416,14 +433,6 @@ ProcessManager <- setRefClass("ProcessManager",
         }
       }
 
-      # Get scheduled stop info
-      stop_info <- get_scheduled_stop_info(app_name)
-      scheduled_stop_at <- if (!is.null(stop_info)) {
-        stop_info$scheduled_at + stop_info$delay
-      } else {
-        NULL
-      }
-
       return(list(
         name = app_name,
         status = status,
@@ -431,8 +440,7 @@ ProcessManager <- setRefClass("ProcessManager",
         port = app_config$port,
         path = app_config$path,
         connections = app_connections,
-        pid = if (!is.null(process) && is_process_alive(process)) process$get_pid() else NULL,
-        scheduled_stop_at = if (!is.null(scheduled_stop_at)) format(scheduled_stop_at, "%Y-%m-%d %H:%M:%S") else NULL
+        pid = if (!is.null(process) && is_process_alive(process)) process$get_pid() else NULL
       ))
     },
     get_all_app_status = function() {

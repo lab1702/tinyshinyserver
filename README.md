@@ -5,7 +5,7 @@ A lightweight, WebSocket-enabled proxy server for hosting multiple Shiny applica
 ## Features
 
 - **Multi-App Hosting**: Host multiple Shiny applications on different ports behind a single proxy
-- **Resident & On-Demand Apps**: Choose between always-running apps for immediate access or on-demand apps for resource efficiency
+- **Resident & On-Demand Apps**: Choose between always-running apps for immediate access or on-demand apps that start when accessed and stop immediately when unused
 - **WebSocket Support**: Full WebSocket proxy with session affinity for real-time Shiny apps
 - **Real-time Status Updates**: Landing page shows live app status and connection counts with auto-refresh
 - **Management Interface**: Professional web-based dashboard for monitoring and controlling all applications
@@ -143,7 +143,7 @@ The server supports two application lifecycle modes controlled by the `resident`
 
 #### **On-Demand Apps** (`"resident": false`, default)
 - **Start on Access**: Only started when a user first accesses the app (HTTP request or WebSocket connection)
-- **Automatic Shutdown**: Stopped 30 seconds after the last connection closes
+- **Immediate Shutdown**: Stopped immediately when the last connection closes
 - **Resource Efficient**: Only consumes resources when actively being used
 - **Startup Delay**: Users may experience a brief delay on first access while the app starts
 - **Best For**: Infrequently used apps, development/testing environments, resource-constrained servers
