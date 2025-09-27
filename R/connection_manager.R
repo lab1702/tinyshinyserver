@@ -258,7 +258,7 @@ ConnectionManager <- setRefClass("ConnectionManager",
           process_manager$stop_app_immediately(app_name)
         }
       }
-    },
+    }
   )
 )
 
