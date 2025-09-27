@@ -213,7 +213,7 @@ forward_request <- function(method, target_url, req, app_name) {
 
   tryCatch(
     {
-      log_info("Forwarding {method} to {target_url} for app {app_name}",
+      log_debug("Forwarding {method} to {target_url} for app {app_name}",
         method = method, target_url = target_url, app_name = app_name
       )
 
