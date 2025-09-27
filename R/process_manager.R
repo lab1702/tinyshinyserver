@@ -8,13 +8,11 @@ library(logger)
 # Process Manager Class
 ProcessManager <- setRefClass("ProcessManager",
   fields = list(
-    config = "ANY",
-    stop_timers = "list"  # Track scheduled stop timers for non-resident apps
+    config = "ANY"
   ),
   methods = list(
     initialize = function(server_config) {
       config <<- server_config
-      stop_timers <<- list()
     },
     start_app = function(app_config) {
       "Start a Shiny application process"
@@ -263,9 +261,6 @@ ProcessManager <- setRefClass("ProcessManager",
         return(FALSE)
       }
       
-      # Cancel any scheduled stop timer (cleanup)
-      clear_scheduled_stop(app_name)
-      
       log_info("Immediately stopping non-resident app {app_name} (no active connections)", app_name = app_name)
       result <- stop_app(app_name)
       return(result$success)
@@ -460,68 +455,6 @@ ProcessManager <- setRefClass("ProcessManager",
       }
 
       return(apps_status)
-    },
-    schedule_stop = function(app_name, delay = 30) {
-      "Schedule an app to stop after a delay (for non-resident apps with no connections)"
-      
-      app_config <- config$get_app_config(app_name)
-      if (is.null(app_config)) {
-        log_error("Cannot schedule stop for unknown app: {app_name}", app_name = app_name)
-        return(FALSE)
-      }
-      
-      # Only schedule stops for non-resident apps
-      if (app_config$resident) {
-        log_debug("Not scheduling stop for resident app: {app_name}", app_name = app_name)
-        return(FALSE)
-      }
-      
-      # Cancel any existing timer first
-      clear_scheduled_stop(app_name)
-      
-      log_info("Scheduling stop for app {app_name} in {delay} seconds", app_name = app_name, delay = delay)
-      
-      # Schedule the stop using later::later
-      timer <- later::later(function() {
-        # Remove the timer from tracking
-        stop_timers[[app_name]] <<- NULL
-        
-        # Check if app still has no connections before stopping
-        # We'll get the connection count from the connection manager
-        app_connections <- get_app_connection_count(app_name)
-        
-        if (app_connections == 0) {
-          log_info("Stopping non-resident app {app_name} after timeout (no active connections)", app_name = app_name)
-          stop_app(app_name)
-        } else {
-          log_info("Not stopping app {app_name} - it has {count} active connections", app_name = app_name, count = app_connections)
-        }
-      }, delay)
-      
-      # Store the timer reference
-      stop_timers[[app_name]] <<- list(
-        timer = timer,
-        scheduled_at = Sys.time(),
-        delay = delay
-      )
-      
-      return(TRUE)
-    },
-    clear_scheduled_stop = function(app_name) {
-      "Cancel any scheduled stop for an app"
-      
-      if (app_name %in% names(stop_timers)) {
-        log_debug("Clearing scheduled stop for app: {app_name}", app_name = app_name)
-        stop_timers[[app_name]] <<- NULL
-      }
-    },
-    get_scheduled_stop_info = function(app_name) {
-      "Get information about scheduled stop for an app"
-      
-      if (app_name %in% names(stop_timers)) {
-        return(stop_timers[[app_name]])
-      }
-      return(NULL)
     },
     get_app_connection_count = function(app_name) {
       "Get the current connection count for a specific app"
