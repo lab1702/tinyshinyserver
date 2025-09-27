@@ -22,7 +22,7 @@ handle_management_request <- function(req, config, process_manager, template_man
   path <- validation_result$path
   method <- validation_result$method
 
-  log_info("Management {method} {path}", method = method, path = path)
+  log_debug("Management {method} {path}", method = method, path = path)
 
   # Route management requests
   return(route_management_request(path, method, req, config, process_manager, template_manager))
