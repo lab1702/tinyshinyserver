@@ -54,6 +54,17 @@
             font-size: 0.9rem;
             margin: 0;
         }
+        .app-info {
+            color: var(--muted-text);
+            font-style: italic;
+            font-size: 13px;
+            padding: 8px;
+            background: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            text-align: center;
+            margin-top: 6px;
+        }
     </style>
 </head>
 <body>
@@ -188,7 +199,9 @@
                     Object.values(data).forEach(app => {
                         const appDiv = document.createElement("div");
                         appDiv.className = "app-card";
-                        appDiv.innerHTML =
+                        
+                        // Build the basic app info HTML
+                        let appHTML = 
                             "<div class=\"app-header\">" +
                                 "<div class=\"app-name\">" + app.name + "</div>" +
                                 "<span class=\"status-badge status-" + app.status + "\">" + app.status + "</span>" +
@@ -197,9 +210,24 @@
                                 "<div class=\"app-detail\"><strong>Port:</strong> " + app.port + "</div>" +
                                 "<div class=\"app-detail\"><strong>Connections:</strong> " + app.connections + "</div>" +
                                 "<div class=\"app-detail\"><strong>Path:</strong> " + app.path + "</div>" +
-                                "<div class=\"app-detail\"><strong>PID:</strong> " + (app.pid || "N/A") + "</div>" +
-                            "</div>" +
-                            "<button class=\"restart-btn\" onclick=\"restartApp('" + app.name + "')\">Restart Application</button>";
+                                "<div class=\"app-detail\"><strong>PID:</strong> " + (app.pid || "N/A") + "</div>";
+                        
+                        // Add resident status if available
+                        if (app.resident !== undefined) {
+                            appHTML += "<div class=\"app-detail\"><strong>Type:</strong> " + (app.resident ? "Resident" : "On-Demand") + "</div>";
+                        }
+                        
+                        appHTML += "</div>";
+                        
+                        // Only show restart button for apps that are not dormant
+                        // Dormant apps (non-resident, stopped) should start automatically on demand
+                        if (app.status !== "dormant") {
+                            appHTML += "<button class=\"restart-btn\" onclick=\"restartApp('" + app.name + "')\">Restart Application</button>";
+                        } else {
+                            appHTML += "<div class=\"app-info\">This app will start automatically when accessed</div>";
+                        }
+                        
+                        appDiv.innerHTML = appHTML;
                         container.appendChild(appDiv);
                     });
                 })
