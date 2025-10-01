@@ -260,7 +260,15 @@ TemplateManager <- setRefClass("TemplateManager",
 )
 
 # Create template manager factory function
-create_template_manager <- function(template_directory = "templates", base_url = "") {
+create_template_manager <- function(template_directory = NULL, base_url = "") {
+  # If no template_directory specified, use package resources
+  if (is.null(template_directory)) {
+    template_directory <- system.file("templates", package = "tinyshinyserver")
+    if (template_directory == "") {
+      # Fallback for development/testing
+      template_directory <- "templates"
+    }
+  }
   return(TemplateManager$new(template_directory, base_url))
 }
 

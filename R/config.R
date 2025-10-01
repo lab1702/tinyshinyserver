@@ -40,13 +40,16 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       ws_connections <<- list()
       backend_connections <<- list()
       management_server <<- NULL
-
-      # Load configuration
-      load_config()
+      
+      # Initialize empty config (to be loaded via load_config)
+      config <<- list()
     },
     load_config = function(config_file = "config.json") {
       "Load and validate configuration from file"
 
+      # Resolve config file path (normalize for absolute paths)
+      config_file <- normalizePath(config_file, mustWork = TRUE)
+      
       if (!file.exists(config_file)) {
         stop("Configuration file not found: ", config_file)
       }
@@ -362,6 +365,8 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
 
 # Create global configuration instance
 # This will be used by other modules
-create_server_config <- function() {
-  return(ShinyServerConfig$new())
+create_server_config <- function(config_file = "config.json") {
+  config_instance <- ShinyServerConfig$new()
+  config_instance$load_config(config_file)
+  return(config_instance)
 }

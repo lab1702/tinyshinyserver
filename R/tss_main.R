@@ -19,8 +19,8 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
     initialize = function(config_file = "config.json") {
       "Initialize the server with all components"
 
-      # Initialize configuration
-      config <<- create_server_config()
+      # Initialize configuration with the provided config file
+      config <<- create_server_config(config_file)
 
       # Initialize logging
       setup_logging(config$config$log_dir)

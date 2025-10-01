@@ -1,0 +1,436 @@
+/* Main CSS styles for Tiny Shiny Server */
+
+:root {
+  --bg-color: #ffffff;
+  --text-color: #333333;
+  --card-bg: #f8f9fa;
+  --border-color: #dee2e6;
+  --link-color: #007bff;
+  --link-hover: #0056b3;
+  --surface-color: #f5f5f5;
+  --success-bg: #d4edda;
+  --success-text: #155724;
+  --warning-bg: #fff3cd;
+  --warning-text: #856404;
+  --error-bg: #f8d7da;
+  --error-text: #721c24;
+  --muted-text: #6c757d;
+  --table-header-bg: #f8f9fa;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-color: #1a1a1a;
+    --text-color: #e0e0e0;
+    --card-bg: #2d2d2d;
+    --border-color: #404040;
+    --link-color: #4dabf7;
+    --link-hover: #339af0;
+    --surface-color: #121212;
+    --success-bg: #1e3a2e;
+    --success-text: #4ade80;
+    --warning-bg: #3a2e1e;
+    --warning-text: #fbbf24;
+    --error-bg: #3a1e1e;
+    --error-text: #f87171;
+    --muted-text: #9ca3af;
+    --table-header-bg: #374151;
+  }
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  line-height: 1.6;
+  padding: 20px;
+  transition: background-color 0.3s, color 0.3s;
+}
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.header {
+  text-align: center;
+  margin-bottom: 40px;
+}
+
+.header h1 {
+  font-size: 2.5rem;
+  margin-bottom: 10px;
+  background: linear-gradient(135deg, var(--link-color), var(--link-hover));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.header p {
+  font-size: 1.1rem;
+  opacity: 0.8;
+}
+
+.apps-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 20px;
+  margin-bottom: 40px;
+}
+
+.app-card-link {
+  text-decoration: none;
+  color: inherit;
+  display: block;
+}
+
+.app-card {
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 12px 16px;
+  transition: all 0.2s ease;
+  cursor: pointer;
+  position: relative;
+}
+
+.app-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  background: var(--bg-color);
+  border-color: var(--link-color);
+}
+
+.app-card h3 {
+  font-size: 1.4rem;
+  margin-bottom: 16px;
+  color: var(--link-color);
+}
+
+/* Disabled app cards */
+.app-card.app-disabled {
+  opacity: 0.6;
+  background: var(--surface-color);
+  border-color: var(--border-color);
+}
+
+.app-card.app-disabled h3 {
+  color: var(--muted-text);
+}
+
+.app-card.app-disabled:hover {
+  transform: none;
+  box-shadow: none;
+  background: var(--surface-color);
+  border-color: var(--border-color);
+}
+
+.app-card-link[style*="pointer-events: none"] {
+  cursor: not-allowed;
+}
+
+.app-status {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  gap: 10px;
+}
+
+.status-badge {
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+.status-running {
+  background-color: var(--success-bg);
+  color: var(--success-text);
+}
+
+.status-stopped {
+  background-color: var(--error-bg);
+  color: var(--error-text);
+}
+
+.status-crashed {
+  background-color: var(--warning-bg);
+  color: var(--warning-text);
+}
+
+.status-dormant {
+  background-color: #e3f2fd;
+  color: #1565c0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .status-dormant {
+    background-color: #1a2332;
+    color: #64b5f6;
+  }
+}
+
+.connections-count {
+  font-size: 12px;
+  color: var(--muted-text);
+}
+
+.app-links {
+  display: flex;
+  justify-content: center;
+}
+
+.app-links a {
+  padding: 12px 24px;
+  border-radius: 6px;
+  text-decoration: none;
+  font-weight: 500;
+  transition: all 0.2s;
+  text-align: center;
+  min-width: 150px;
+}
+
+.proxy-link {
+  background-color: var(--link-color);
+  color: white;
+}
+
+.proxy-link:hover {
+  background-color: var(--link-hover);
+}
+
+.info {
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 20px;
+  margin-top: 20px;
+}
+
+.info h4 {
+  margin-bottom: 10px;
+  color: var(--link-color);
+}
+
+.info p {
+  margin-bottom: 8px;
+  opacity: 0.9;
+}
+
+.session-info {
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 20px;
+  margin-top: 20px;
+}
+
+.session-info h4 {
+  margin-bottom: 10px;
+  color: var(--link-color);
+}
+
+.session-info pre {
+  background: var(--bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 15px;
+  margin: 0;
+  font-family: "Courier New", "Monaco", "Menlo", monospace;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  color: var(--text-color);
+}
+
+.connection-status {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  padding: 8px 12px;
+  z-index: 1000;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+.status-indicator {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  transition: background-color 0.3s;
+}
+
+.status-indicator.connected {
+  background-color: #28a745;
+  box-shadow: 0 0 8px rgba(40, 167, 69, 0.4);
+}
+
+.status-indicator.disconnected {
+  background-color: #dc3545;
+  box-shadow: 0 0 8px rgba(220, 53, 69, 0.4);
+  animation: pulse 2s infinite;
+}
+
+.status-text {
+  font-weight: 500;
+}
+
+.status-text.connected {
+  color: #28a745;
+}
+
+.status-text.disconnected {
+  color: #dc3545;
+}
+
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.5; }
+  100% { opacity: 1; }
+}
+
+/* Management-specific styles */
+.section {
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  padding: 12px 16px;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  transition: all 0.3s;
+}
+
+.section h2 {
+  margin-bottom: 8px;
+  font-size: 1.3rem;
+}
+
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 15px;
+  margin-bottom: 20px;
+}
+
+.status-card {
+  background: var(--bg-color);
+  border: 1px solid var(--border-color);
+  padding: 15px;
+  border-radius: 8px;
+  border-left: 4px solid var(--link-color);
+  transition: all 0.3s;
+}
+
+.status-card h3 {
+  margin: 0 0 10px 0;
+  font-size: 16px;
+  color: var(--text-color);
+  opacity: 0.8;
+}
+
+.status-card .value {
+  font-size: 24px;
+  font-weight: bold;
+  color: var(--link-color);
+}
+
+.connections-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 15px;
+}
+
+.connections-table th,
+.connections-table td {
+  padding: 6px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 13px;
+}
+
+.connections-table th {
+  background-color: var(--table-header-bg);
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.connections-table td {
+  color: var(--text-color);
+}
+
+.connections-table .user-agent {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "Courier New", monospace;
+  font-size: 12px;
+  cursor: help;
+}
+
+.loading {
+  text-align: center;
+  padding: 20px;
+  color: var(--muted-text);
+}
+
+.auto-refresh {
+  font-size: 12px;
+  color: var(--muted-text);
+  text-align: right;
+  margin-top: 10px;
+}
+
+.restart-btn, .shutdown-btn {
+  border: 1px solid var(--border-color);
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.restart-btn {
+  background-color: var(--warning-bg);
+  color: var(--warning-text);
+}
+
+.restart-btn:hover {
+  background-color: var(--link-color);
+  color: white;
+  transform: translateY(-1px);
+}
+
+.shutdown-btn {
+  background-color: var(--error-bg);
+  color: var(--error-text);
+}
+
+.shutdown-btn:hover {
+  background-color: #dc3545;
+  color: white;
+  transform: translateY(-1px);
+}
+
+.restart-btn:disabled, .shutdown-btn:disabled {
+  background-color: var(--muted-text);
+  color: var(--text-color);
+  cursor: not-allowed;
+  opacity: 0.6;
+  transform: none;
+}
