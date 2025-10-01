@@ -1,0 +1,14 @@
+{
+  "apps": [
+    {
+      "name": "sales",
+      "path": "C:/Users/lab17/AppData/Local/R/win-library/4.5/tinyshinyserver/examples/sales",
+      "resident": false
+    }
+  ],
+  "starting_port": 3001,
+  "proxy_port": 3838,
+  "proxy_host": "127.0.0.1",
+  "management_port": 3839,
+  "log_dir": "./logs"
+}

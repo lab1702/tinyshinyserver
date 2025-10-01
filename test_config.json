@@ -1,0 +1,16 @@
+{
+  "apps": [
+    {
+      "name": "test-app",
+      "path": "./inst/examples/sales",
+      "resident": false
+    }
+  ],
+  "starting_port": 3001,
+  "proxy_port": 3838,
+  "proxy_host": "127.0.0.1",
+  "management_port": 3839,
+  "restart_delay": 5,
+  "health_check_interval": 10,
+  "log_dir": "./logs"
+}

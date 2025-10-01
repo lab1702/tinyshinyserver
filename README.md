@@ -1,6 +1,63 @@
-# Tiny Shiny Server
+# tinyshinyserver
 
 A lightweight, WebSocket-enabled proxy server for hosting multiple Shiny applications with automatic health monitoring, session management, and resource cleanup.
+
+## Installation
+
+### From Source
+
+```r
+# Install devtools if not already installed
+if (!require(devtools)) install.packages("devtools")
+
+# Install from local directory
+devtools::install(".")
+
+# Or install from GitHub (when available)
+# devtools::install_github("your-username/tiny-shiny-server")
+```
+
+### Dependencies
+
+The package automatically installs required dependencies:
+
+- shiny, callr, jsonlite, later, httr, digest, httpuv, websocket
+- future, promises, logger, rmarkdown, quarto, flexdashboard
+- DT, plotly, dplyr
+
+## Quick Start
+
+### 1. Load the Package
+
+```r
+library(tinyshinyserver)
+```
+
+### 2. Copy Example Apps and Configuration
+
+```r
+# Get the path to example apps
+examples_path <- system.file("examples", package = "tinyshinyserver")
+
+# Copy examples to your working directory
+file.copy(examples_path, ".", recursive = TRUE)
+```
+
+### 3. Start the Server
+
+```r
+# Start with default config.json
+start_tss()
+
+# Or specify a custom config file
+start_tss(config = "examples/config.json")
+```
+
+### 4. Access Your Apps
+
+- **Landing page**: http://localhost:3838
+- **Management interface**: http://localhost:3839  
+- **Individual apps**: http://localhost:3838/proxy/{app_name}/
 
 ## Features
 
@@ -20,52 +77,26 @@ A lightweight, WebSocket-enabled proxy server for hosting multiple Shiny applica
 - **Binary Asset Support**: Handles images, fonts, and other binary files correctly
 - **Comprehensive Logging**: Structured logging with per-app log files
 
-## Quick Start
+## Configuration
 
-### Prerequisites
+The server uses a JSON configuration file. Here's a minimal example:
 
-- R (version 4.0 or higher)
-- Required R packages (automatically installed via setup script)
-- **Pandoc**: Required for R Markdown apps to work
-  - Linux: `sudo apt install pandoc` (Ubuntu/Debian) or equivalent for your distribution
-  - Windows: `winget install JohnMacFarlane.Pandoc`
-  - macOS: Available via Homebrew or direct download from pandoc.org
-- **Quarto CLI** (optional): Required for Quarto document apps
-  - Download from https://quarto.org/docs/get-started/
-  - Includes its own Pandoc, so can be used instead of separate Pandoc installation
-  - Windows: `winget install posit.quarto`
-
-### Installation
-
-1. **Clone or download the project:**
-   ```bash
-   git clone <repository-url>
-   cd tiny-shiny-server
-   ```
-
-2. **Install dependencies:**
-   ```bash
-   Rscript install_packages.R
-   ```
-
-3. **Start the server:**
-
-   **Linux/macOS:**
-   ```bash
-   Rscript main.R
-   ```
-
-   **Windows:**
-   ```powershell
-   .\start-server.ps1
-   ```
-   
-   The PowerShell script automatically locates your R installation and starts the server.
-
-4. **Access applications:**
-   - Landing page with live status: http://localhost:3838
-   - Management interface: http://localhost:3839
-   - Individual apps: http://localhost:3838/proxy/{app_name}/
+```json
+{
+  "apps": [
+    {
+      "name": "sales",
+      "path": "./examples/sales",
+      "resident": true
+    }
+  ],
+  "starting_port": 3001,
+  "proxy_port": 3838,
+  "proxy_host": "127.0.0.1",
+  "management_port": 3839,
+  "log_dir": "./logs"
+}
+```
 
 ### Stopping the Server
 

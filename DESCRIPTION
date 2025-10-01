@@ -3,8 +3,8 @@ Type: Package
 Title: Tiny Shiny Server - Lightweight Multi-App Shiny Proxy
 Version: 0.1.0
 Authors@R: c(
-    person(given = "Tiny", family = "Shiny Server", role = c("aut", "cre"), email = "you@example.com")
-)
+    person(given = "Author", family = "Name", role = c("aut", "cre"), email = "author@example.com")
+    )
 Description: A lightweight, WebSocket-enabled proxy server for hosting multiple
     Shiny applications with automatic health monitoring, session management,
     and resource cleanup. Provides a simple entry point 'start_tss()' to run the
