@@ -43,6 +43,10 @@ vignettes/*.pdf
 *.utf8.md
 *.knit.md
 
+# Quarto generated files
+*_files/
+*.html
+
 # R Environment Variables
 .Renviron
 
