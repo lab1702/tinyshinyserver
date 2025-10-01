@@ -38,3 +38,4 @@ Suggests:
 Config/testthat/edition: 3
 URL: https://example.com/tinyshinyserver
 BugReports: https://example.com/tinyshinyserver/issues
+RoxygenNote: 7.3.3

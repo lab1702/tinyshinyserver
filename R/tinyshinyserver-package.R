@@ -1,4 +1,47 @@
-#' @keywords internal
+#' tinyshinyserver: Tiny Shiny Server - Lightweight Multi-App Shiny Proxy
+#'
+#' A lightweight, WebSocket-enabled proxy server for hosting multiple Shiny
+#' applications with automatic health monitoring, session management, and
+#' resource cleanup.
+#'
+#' @section Main functions:
+#' \describe{
+#'   \item{\code{\link{start_tss}}}{Start the Tiny Shiny Server with a configuration file}
+#' }
+#'
+#' @section Key features:
+#' \itemize{
+#'   \item Host multiple Shiny applications behind a single proxy
+#'   \item Resident (always-running) and on-demand application modes
+#'   \item WebSocket support with session affinity
+#'   \item Real-time management interface and monitoring
+#'   \item Automatic health checks and application restart
+#'   \item Cross-platform support (Windows, Linux, macOS)
+#'   \item Support for R Markdown and Quarto dashboards
+#' }
+#'
+#' @section Getting started:
+#' 1. Install the package: \code{devtools::install(".")} or similar
+#' 2. Load the package: \code{library(tinyshinyserver)}
+#' 3. Copy examples: \code{file.copy(system.file("examples", package = "tinyshinyserver"), ".", recursive = TRUE)}
+#' 4. Start server: \code{start_tss(config = "examples/config.json")}
+#' 5. Access via browser: \url{http://localhost:3838}
+#'
+#' @section Package resources:
+#' The package includes:
+#' \itemize{
+#'   \item Example Shiny applications in \code{inst/examples/}
+#'   \item HTML templates and CSS in \code{inst/templates/}
+#'   \item Sample configuration file \code{inst/examples/config.json}
+#' }
+#'
+#' Use \code{system.file("examples", package = "tinyshinyserver")} to locate
+#' the example files after installation.
+#'
+#' @docType package
+#' @name tinyshinyserver-package
+#' @aliases tinyshinyserver
+#' @keywords package
 "_PACKAGE"
 
 ## usethis namespace: start
