@@ -36,6 +36,6 @@ Suggests:
     roxygen2,
     devtools
 Config/testthat/edition: 3
-URL: https://example.com/tinyshinyserver
-BugReports: https://example.com/tinyshinyserver/issues
+URL: https://github.com/lab1702/tiny-shiny-server
+BugReports: https://github.com/lab1702/tiny-shiny-server/issues
 RoxygenNote: 7.3.3

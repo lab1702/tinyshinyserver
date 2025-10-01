@@ -20,17 +20,17 @@ A lightweight, WebSocket-enabled proxy server for hosting multiple Shiny applica
 
 ```r
 # Install from GitHub
-devtools::install_github("your-username/tiny-shiny-server")
+devtools::install_github("lab1702/tiny-shiny-server")
 
 # Or using pak (faster)
-pak::pak("your-username/tiny-shiny-server")
+pak::pak("lab1702/tiny-shiny-server")
 ```
 
 ### From Source
 
 ```r
 # Clone and install locally
-git clone https://github.com/your-username/tiny-shiny-server.git
+git clone https://github.com/lab1702/tiny-shiny-server.git
 cd tiny-shiny-server
 Rscript -e "devtools::install('.')"
 ```
@@ -55,7 +55,7 @@ The package automatically installs required R dependencies:
 
 ```r
 # Install the package
-devtools::install_github("your-username/tiny-shiny-server")
+devtools::install_github("lab1702/tiny-shiny-server")
 
 # Load the package
 library(tinyshinyserver)
@@ -652,7 +652,7 @@ Contributions are welcome! Please see our contribution guidelines:
 
 ```r
 # Clone and setup for development
-git clone https://github.com/your-username/tiny-shiny-server.git
+git clone https://github.com/lab1702/tiny-shiny-server.git
 cd tiny-shiny-server
 
 # Install with dependencies
@@ -670,8 +670,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 🆘 Support
 
 - 📖 **Documentation**: Use `?tinyshinyserver`, `?start_tss`, `?config-format`
-- 🐛 **Bug Reports**: [GitHub Issues](https://github.com/your-username/tiny-shiny-server/issues)
-- 💬 **Questions**: [GitHub Discussions](https://github.com/your-username/tiny-shiny-server/discussions)
+- 🐛 **Bug Reports**: [GitHub Issues](https://github.com/lab1702/tiny-shiny-server/issues)
+- 💬 **Questions**: [GitHub Discussions](https://github.com/lab1702/tiny-shiny-server/discussions)
 - 📧 **Email**: For private inquiries
 
 ---
