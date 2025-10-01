@@ -1,63 +1,99 @@
 # tinyshinyserver
 
+<!-- badges: start -->
+![R Package](https://img.shields.io/badge/R-package-blue.svg)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)
+<!-- badges: end -->
+
 A lightweight, WebSocket-enabled proxy server for hosting multiple Shiny applications with automatic health monitoring, session management, and resource cleanup.
 
+**🎯 Perfect for:**
+- Hosting multiple Shiny apps behind a single server
+- Development environments with multiple projects
+- Small-scale production deployments
+- R Markdown and Quarto dashboard hosting
+
 ## Installation
+
+### From GitHub
+
+```r
+# Install from GitHub
+devtools::install_github("your-username/tiny-shiny-server")
+
+# Or using pak (faster)
+pak::pak("your-username/tiny-shiny-server")
+```
 
 ### From Source
 
 ```r
-# Install devtools if not already installed
-if (!require(devtools)) install.packages("devtools")
-
-# Install from local directory
-devtools::install(".")
-
-# Or install from GitHub (when available)
-# devtools::install_github("your-username/tiny-shiny-server")
+# Clone and install locally
+git clone https://github.com/your-username/tiny-shiny-server.git
+cd tiny-shiny-server
+Rscript -e "devtools::install('.')"
 ```
 
-### Dependencies
+### Prerequisites
 
-The package automatically installs required dependencies:
+- **R** (≥ 4.0)
+- **Pandoc** (for R Markdown apps)
+- **Quarto CLI** (optional, for Quarto dashboards)
 
-- shiny, callr, jsonlite, later, httr, digest, httpuv, websocket
-- future, promises, logger, rmarkdown, quarto, flexdashboard
-- DT, plotly, dplyr
+The package automatically installs required R dependencies:
 
-## Quick Start
+**Core:** shiny, callr, jsonlite, later, httr, digest, httpuv, websocket  
+**Async:** future, promises  
+**Docs:** rmarkdown, quarto, flexdashboard  
+**Viz:** DT, plotly, dplyr  
+**Utils:** logger
 
-### 1. Load the Package
+## 🚀 Quick Start
+
+### 1. Install and Load
 
 ```r
+# Install the package
+devtools::install_github("your-username/tiny-shiny-server")
+
+# Load the package
 library(tinyshinyserver)
 ```
 
-### 2. Copy Example Apps and Configuration
+### 2. Get Example Apps
 
 ```r
-# Get the path to example apps
+# Copy included example apps to your directory
 examples_path <- system.file("examples", package = "tinyshinyserver")
-
-# Copy examples to your working directory
 file.copy(examples_path, ".", recursive = TRUE)
 ```
 
 ### 3. Start the Server
 
 ```r
-# Start with default config.json
-start_tss()
-
-# Or specify a custom config file
+# Start with the example configuration
 start_tss(config = "examples/config.json")
 ```
 
-### 4. Access Your Apps
+### 4. Access Your Server
 
-- **Landing page**: http://localhost:3838
-- **Management interface**: http://localhost:3839  
-- **Individual apps**: http://localhost:3838/proxy/{app_name}/
+🌐 **Main Interface:** http://localhost:3838  
+⚙️ **Management Dashboard:** http://localhost:3839  
+📱 **Individual Apps:** http://localhost:3838/proxy/{app_name}/
+
+### 5. Get Help
+
+```r
+# Package overview and getting started
+?tinyshinyserver
+
+# Main function help
+?start_tss
+
+# Configuration format reference
+?config-format
+```
 
 ## Features
 
@@ -77,7 +113,7 @@ start_tss(config = "examples/config.json")
 - **Binary Asset Support**: Handles images, fonts, and other binary files correctly
 - **Comprehensive Logging**: Structured logging with per-app log files
 
-## Configuration
+## 📋 Configuration
 
 The server uses a JSON configuration file. Here's a minimal example:
 
@@ -98,71 +134,72 @@ The server uses a JSON configuration file. Here's a minimal example:
 }
 ```
 
-### Stopping the Server
+📖 **See `?config-format` for complete configuration reference**
 
-**Recommended**: Use the management interface at http://localhost:3839 and click the "Shutdown Server" button.
+### 🛑 Stopping the Server
+
+**Recommended**: Use the management interface at http://localhost:3839 and click "Shutdown Server".
 
 **Alternative methods:**
-- Press `Ctrl-C` in the terminal where the server is running
+- Press `Ctrl-C` in the R console
 - API call: `curl -X POST http://localhost:3839/api/shutdown`
 
-All methods will gracefully:
-- Close all WebSocket connections
-- Terminate all spawned Shiny app processes
-- Clean up resources and exit
+✅ **Graceful shutdown** closes all connections and cleans up resources.
 
-## Configuration
+## 📦 Included Examples
 
-The server is configured via `config.json`:
+The package includes four example applications:
+
+| App | Type | Description |
+|-----|------|-------------|
+| **sales** | Single-file Shiny | Simple dashboard with sample data |
+| **inventory** | Multi-file Shiny | Interactive tables (ui.R + server.R) |
+| **reports** | R Markdown | Flexdashboard with `runtime: shiny` |
+| **dashboard** | Quarto | Modern dashboard with `server: shiny` |
+
+Example configuration (from `examples/config.json`):
 
 ```json
 {
   "apps": [
     {
       "name": "sales",
-      "path": "./apps/sales",
+      "path": "./examples/sales",
       "resident": true
     },
     {
       "name": "inventory", 
-      "path": "./apps/inventory"
+      "path": "./examples/inventory"
     },
     {
       "name": "reports",
-      "path": "./apps/reports",
+      "path": "./examples/reports",
       "resident": false
     },
     {
       "name": "dashboard",
-      "path": "./apps/dashboard",
+      "path": "./examples/dashboard",
       "resident": true
     }
   ],
   "starting_port": 3001,
   "proxy_port": 3838,
-  "proxy_host": "localhost",
   "management_port": 3839,
-  "restart_delay": 5,
-  "health_check_interval": 10,
   "log_dir": "./logs"
 }
 ```
 
-### Auto Port Assignment
+### ⚡ Auto Port Assignment
 
-The server automatically assigns ports to applications starting from `starting_port`. In the example above:
-- `sales` will be assigned port 3001
-- `inventory` will be assigned port 3002
-- `reports` will be assigned port 3003
-- `dashboard` will be assigned port 3004
+Apps are automatically assigned ports starting from `starting_port`:
+- `sales` → port 3001  
+- `inventory` → port 3002  
+- `reports` → port 3003  
+- `dashboard` → port 3004
 
-The auto-assignment algorithm:
-- Starts at the `starting_port` value
-- Skips any reserved ports (`proxy_port` and `management_port`)
-- Assigns sequential ports to each application
-- Validates that enough ports are available before starting
+The system skips reserved ports (`proxy_port`, `management_port`) automatically.
 
-### Resident vs On-Demand Apps
+### 🔄 Resident vs On-Demand Apps
 
 The server supports two application lifecycle modes controlled by the `resident` configuration option:
 
@@ -473,24 +510,28 @@ The server will automatically assign the next available port to your new applica
 - Apps status: `GET /api/apps` - Returns detailed application status
 - Connections: `GET /api/connections` - Returns active connection details
 
-## Code Organization
+## 📁 Package Structure
 
-The project is organized into several key components:
-
-- `main.R` - Main server entry point
-- `R/` - Core server modules:
-  - `config.R` - Configuration management
-  - `connection_manager.R` - WebSocket connection handling
-  - `handlers.R` - HTTP request routing
-  - `management_api.R` - Management interface API
-  - `process_manager.R` - Application process management
-  - `template_manager.R` - HTML template rendering
-  - `utils.R` - Utility functions
-  - `validation.R` - Input validation
-- `templates/` - HTML templates and CSS styles
-- `apps/` - Shiny applications
-- `logs/` - Server and application logs
-- `config.json` - Server configuration
+```
+tinyshinyserver/
+├── R/                    # R source code
+│   ├── start_tss.R       # Main exported function
+│   ├── config.R          # Configuration management
+│   ├── handlers.R        # HTTP request routing
+│   ├── process_manager.R # Application lifecycle
+│   └── ...              # Other core modules
+├── inst/
+│   ├── examples/         # Example apps & config
+│   │   ├── sales/        # Simple Shiny app
+│   │   ├── inventory/    # Multi-file Shiny app
+│   │   ├── reports/      # R Markdown dashboard
+│   │   ├── dashboard/    # Quarto dashboard
+│   │   └── config.json   # Example configuration
+│   └── templates/        # HTML templates & CSS
+├── man/                  # Documentation (.Rd files)
+├── DESCRIPTION           # Package metadata
+└── NAMESPACE            # Exported functions
+```
 
 ## Architecture
 
@@ -539,100 +580,102 @@ The server uses a multi-process architecture:
 - **Memory Manager**: Cleans up stale connections and resources
 - **Connection Tracker**: Records client information and session details
 
-## Troubleshooting
+## 🔧 Troubleshooting
 
 ### Common Issues
 
-**Apps won't start:**
-- Check that the app directory exists and contains valid Shiny code
-- Verify ports aren't already in use
-- Check app-specific error logs in `logs/{app_name}_error.log`
+<details>
+<summary><strong>Apps won't start</strong></summary>
 
-**WebSocket connection failures:**
+- Check that the app directory exists and contains valid Shiny code
+- Verify ports aren't already in use: `netstat -an | findstr :3838`
+- Check app-specific error logs in `logs/{app_name}_error.log`
+- Use `?start_tss` for configuration help
+</details>
+
+<details>
+<summary><strong>WebSocket connection failures</strong></summary>
+
 - Ensure backend app is running and healthy
 - Check for firewall issues blocking WebSocket connections
 - Verify session affinity is working correctly
+- Monitor logs for WebSocket connection messages
+</details>
 
-**Memory usage growing:**
-- Monitor connection cleanup logs
-- Check for apps with memory leaks
-- Verify cleanup intervals are appropriate for your load
+<details>
+<summary><strong>Management interface not accessible</strong></summary>
 
-**Performance issues:**
-- Monitor health check logs for slow apps
-- Consider adjusting health check intervals
-- Check for resource exhaustion in individual apps
-
-**Management interface not accessible:**
-- Verify server is running and listening on port 3839
-- Check that you're accessing http://localhost:3839 (not external IP)
+- Verify server is running: check R console output
+- Access via http://localhost:3839 (not external IP)
 - Ensure no firewall is blocking localhost connections
 - Check logs for management server startup messages
+</details>
 
-**Connection tracking not showing data:**
-- Verify clients are making WebSocket connections (not just HTTP)
-- Check that apps are properly proxied through the server
-- Monitor logs for WebSocket connection messages
+### 🔍 Debug Mode
 
-### Debug Mode
+```r
+# Check server logs (created after starting)
+list.files("logs", pattern = "\\.(log|txt)$")
 
-For detailed debugging, monitor the logs:
-
-```bash
-# Follow main server logs
-tail -f logs/server.log
-
-# Monitor specific app
-tail -f logs/sales_error.log
+# Monitor main server log
+tail -f logs/server.log  # Linux/macOS
+Get-Content logs/server.log -Wait  # PowerShell
 ```
 
-## Security Considerations
+## 🔒 Security Considerations
 
-⚠️ **Important**: This server is designed for development and internal use. For production deployment, consider:
+⚠️ **Important**: This server is designed for **development and internal use**.
 
-- **Management Interface Security**: Currently restricted to localhost only
-- Adding authentication and authorization for both proxy and management interfaces
-- Implementing rate limiting on management API endpoints
-- Setting up SSL/TLS encryption for all interfaces
-- Configuring proper firewall rules
-- Regular security updates of dependencies
-- Network segmentation if exposing the proxy server externally
+**For production deployment, consider:**
+- Adding authentication (see [Caddy reverse proxy example](https://caddyserver.com/))
+- SSL/TLS encryption for external access
+- Firewall rules and network segmentation
+- Regular security updates
+- Rate limiting on management endpoints
 
-## Contributing
+**Built-in security features:**
+- Management interface restricted to localhost only
+- Input validation for configuration files
+- Process isolation between applications
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
+## 🤝 Contributing
 
-## Dependencies
+Contributions are welcome! Please see our contribution guidelines:
 
-### R Packages
-- `shiny` - Core Shiny framework
-- `httpuv` - HTTP and WebSocket server
-- `websocket` - WebSocket client support
-- `jsonlite` - JSON parsing
-- `callr` - Background process management
-- `later` - Asynchronous scheduling
-- `httr` - HTTP client for proxying
-- `digest` - Session ID generation
-- `future` - Asynchronous operations
-- `promises` - Promise-based async programming
-- `logger` - Structured logging
-- `rmarkdown` - R Markdown support
-- `quarto` - Quarto document support
-- `flexdashboard` - Dashboard layouts
-- `DT` - Interactive data tables
-- `plotly` - Interactive plots
-- `dplyr` - Data manipulation
+1. **Fork** the repository
+2. **Create** a feature branch: `git checkout -b feature/amazing-feature`
+3. **Make** your changes and add tests
+4. **Test** thoroughly: `devtools::check()`
+5. **Submit** a pull request
 
-## License
+### Development Setup
 
-MIT License - see [LICENSE](LICENSE) file for details.
+```r
+# Clone and setup for development
+git clone https://github.com/your-username/tiny-shiny-server.git
+cd tiny-shiny-server
 
-## Support
+# Install with dependencies
+devtools::install_deps()
+devtools::load_all()
 
-For issues and questions:
-- Check the logs for error messages
-- Review this README for common solutions
+# Run checks
+devtools::check()
+```
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🆘 Support
+
+- 📖 **Documentation**: Use `?tinyshinyserver`, `?start_tss`, `?config-format`
+- 🐛 **Bug Reports**: [GitHub Issues](https://github.com/your-username/tiny-shiny-server/issues)
+- 💬 **Questions**: [GitHub Discussions](https://github.com/your-username/tiny-shiny-server/discussions)
+- 📧 **Email**: For private inquiries
+
+---
+
+<p align="center">
+  <strong>Built with ❤️ for the R and Shiny community</strong>
+</p>
