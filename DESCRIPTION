@@ -1,0 +1,40 @@
+Package: tinyshinyserver
+Type: Package
+Title: Tiny Shiny Server - Lightweight Multi-App Shiny Proxy
+Version: 0.1.0
+Authors@R: c(
+    person(given = "Tiny", family = "Shiny Server", role = c("aut", "cre"), email = "you@example.com")
+)
+Description: A lightweight, WebSocket-enabled proxy server for hosting multiple
+    Shiny applications with automatic health monitoring, session management,
+    and resource cleanup. Provides a simple entry point 'start_tss()' to run the
+    server using a JSON configuration file.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Depends: R (>= 4.0)
+Imports:
+    shiny,
+    callr,
+    jsonlite,
+    later,
+    httr,
+    digest,
+    httpuv,
+    websocket,
+    future,
+    promises,
+    logger,
+    rmarkdown,
+    quarto,
+    flexdashboard,
+    DT,
+    plotly,
+    dplyr
+Suggests:
+    testthat (>= 3.0.0),
+    roxygen2,
+    devtools
+Config/testthat/edition: 3
+URL: https://example.com/tinyshinyserver
+BugReports: https://example.com/tinyshinyserver/issues
