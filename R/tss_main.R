@@ -13,7 +13,8 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
     template_manager = "ANY",
     connection_manager = "ANY",
     proxy_server = "ANY",
-    management_server = "ANY"
+    management_server = "ANY",
+    is_shutting_down = "logical"
   ),
   methods = list(
     initialize = function(config_file = "config.json") {
@@ -29,6 +30,7 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       process_manager <<- create_process_manager(config)
       template_manager <<- create_template_manager()
       connection_manager <<- create_connection_manager(config, process_manager)
+      is_shutting_down <<- FALSE
 
       logger::log_info("Tiny Shiny Server initialized")
     },
@@ -79,23 +81,27 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
 
       # Health check scheduler
       schedule_health_check <- function() {
-        process_manager$health_check()
-        later::later(schedule_health_check, config$config$health_check_interval %||% 10)
+        if (!is_shutting_down) {
+          process_manager$health_check()
+          later::later(schedule_health_check, config$config$health_check_interval %||% 10)
+        }
       }
       later::later(schedule_health_check, 5)
 
       # Cleanup scheduler
       schedule_cleanup <- function() {
-        future::future(
-          {
-            list(
-              stale_cleanup = process_manager$cleanup_stale_connections(),
-              process_cleanup = process_manager$cleanup_dead_processes()
-            )
-          },
-          seed = NULL
-        )
-        later::later(schedule_cleanup, config$CLEANUP_INTERVAL_SECONDS)
+        if (!is_shutting_down) {
+          future::future(
+            {
+              list(
+                stale_cleanup = process_manager$cleanup_stale_connections(),
+                process_cleanup = process_manager$cleanup_dead_processes()
+              )
+            },
+            seed = NULL
+          )
+          later::later(schedule_cleanup, config$CLEANUP_INTERVAL_SECONDS)
+        }
       }
       later::later(schedule_cleanup, config$CLEANUP_INTERVAL_SECONDS)
     },
@@ -188,6 +194,9 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
     },
     shutdown = function() {
       "Gracefully shutdown the entire server"
+
+      # Set shutdown flag to prevent monitoring services from restarting apps
+      is_shutting_down <<- TRUE
 
       logger::log_info("Shutting down Tiny Shiny Server...")
 
