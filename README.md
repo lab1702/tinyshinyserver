@@ -48,12 +48,9 @@ The package automatically installs required R dependencies:
 
 ## 🚀 Quick Start
 
-### 1. Install and Load
+### 1. Load
 
 ```r
-# Install the package
-devtools::install_github("lab1702/tinyshinyserver")
-
 # Load the package
 library(tinyshinyserver)
 ```
