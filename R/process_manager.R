@@ -1,10 +1,6 @@
 # Process Management Module
 # Handles Shiny app process lifecycle, health monitoring, and cleanup
 
-library(callr)
-library(later)
-library(logger)
-
 # Process Manager Class
 ProcessManager <- setRefClass("ProcessManager",
   fields = list(
@@ -21,7 +17,7 @@ ProcessManager <- setRefClass("ProcessManager",
       app_port <- app_config$port
       app_path <- normalizePath(app_config$path, mustWork = FALSE)
 
-      log_info("Starting app {app_name} on port {app_port}", app_name = app_name, app_port = app_port)
+      logger::log_info("Starting app {app_name} on port {app_port}", app_name = app_name, app_port = app_port)
 
       # Determine app type - prioritize traditional Shiny apps over Rmd
       has_app_r <- file.exists(file.path(app_path, "app.R"))
@@ -34,11 +30,11 @@ ProcessManager <- setRefClass("ProcessManager",
       is_qmd_app <- !has_traditional_shiny && !is_rmd_app && length(qmd_files) > 0
 
       if (is_qmd_app) {
-        log_info("Detected Quarto document for {app_name}, using quarto::quarto_serve", app_name = app_name)
+        logger::log_info("Detected Quarto document for {app_name}, using quarto::quarto_serve", app_name = app_name)
       } else if (is_rmd_app) {
-        log_info("Detected R Markdown app for {app_name}, using rmarkdown::run", app_name = app_name)
+        logger::log_info("Detected R Markdown app for {app_name}, using rmarkdown::run", app_name = app_name)
       } else if (has_traditional_shiny) {
-        log_info("Detected traditional Shiny app for {app_name}", app_name = app_name)
+        logger::log_info("Detected traditional Shiny app for {app_name}", app_name = app_name)
       }
 
       # Prepare log files
@@ -46,7 +42,7 @@ ProcessManager <- setRefClass("ProcessManager",
       error_log <- file.path(config$config$log_dir, paste0(app_name, "_error.log"))
 
       # Start the app process
-      process <- r_bg(
+      process <- callr::r_bg(
         function(app_path, port, output_log, error_log, is_rmd_app, rmd_files, is_qmd_app, qmd_files) {
           # Redirect output to log files
           output_con <- file(output_log, open = "w", encoding = "UTF-8")
@@ -75,7 +71,7 @@ ProcessManager <- setRefClass("ProcessManager",
             # Load quarto library with error handling
             tryCatch(
               {
-                library(quarto)
+                requireNamespace("quarto", quietly = TRUE)
               },
               error = function(e) {
                 stop("quarto package required. Install with: install.packages('quarto')")
@@ -102,7 +98,7 @@ ProcessManager <- setRefClass("ProcessManager",
             # Load rmarkdown library with error handling
             tryCatch(
               {
-                library(rmarkdown)
+                requireNamespace("rmarkdown", quietly = TRUE)
               },
               error = function(e) {
                 stop("rmarkdown package required. Install with: install.packages('rmarkdown')")
@@ -154,10 +150,10 @@ ProcessManager <- setRefClass("ProcessManager",
       Sys.sleep(3)
 
       if (process$is_alive()) {
-        log_info("Successfully started app {app_name}", app_name = app_name)
+        logger::log_info("Successfully started app {app_name}", app_name = app_name)
         return(TRUE)
       } else {
-        log_error("Failed to start app {app_name}", app_name = app_name)
+        logger::log_error("Failed to start app {app_name}", app_name = app_name)
         config$remove_app_process(app_name)
         return(FALSE)
       }
@@ -167,25 +163,25 @@ ProcessManager <- setRefClass("ProcessManager",
 
       app_config <- config$get_app_config(app_name)
       if (is.null(app_config)) {
-        log_error("Cannot start app on demand: {app_name} not found in configuration", app_name = app_name)
+        logger::log_error("Cannot start app on demand: {app_name} not found in configuration", app_name = app_name)
         return(FALSE)
       }
 
       # Check if app is already running
       process <- config$get_app_process(app_name)
       if (!is.null(process) && is_process_alive(process)) {
-        log_debug("App {app_name} already running on demand", app_name = app_name)
+        logger::log_debug("App {app_name} already running on demand", app_name = app_name)
         return(TRUE)
       }
 
-      log_info("Starting app {app_name} on demand", app_name = app_name)
+      logger::log_info("Starting app {app_name} on demand", app_name = app_name)
 
       # Start the app
       success <- start_app(app_config)
       if (success) {
-        log_info("Successfully started app {app_name} on demand", app_name = app_name)
+        logger::log_info("Successfully started app {app_name} on demand", app_name = app_name)
       } else {
-        log_error("Failed to start app {app_name} on demand", app_name = app_name)
+        logger::log_error("Failed to start app {app_name} on demand", app_name = app_name)
       }
 
       return(success)
@@ -198,7 +194,7 @@ ProcessManager <- setRefClass("ProcessManager",
         return(list(success = FALSE, message = "App not found"))
       }
 
-      log_info("Restarting app: {app_name}", app_name = app_name)
+      logger::log_info("Restarting app: {app_name}", app_name = app_name)
 
       tryCatch(
         {
@@ -221,7 +217,7 @@ ProcessManager <- setRefClass("ProcessManager",
           return(list(success = TRUE, message = paste("App", app_name, "restarted successfully")))
         },
         error = function(e) {
-          log_error("Failed to restart app {app_name}: {error}", app_name = app_name, error = e$message)
+          logger::log_error("Failed to restart app {app_name}: {error}", app_name = app_name, error = e$message)
           return(list(success = FALSE, message = paste("Failed to restart app:", e$message)))
         }
       )
@@ -229,7 +225,7 @@ ProcessManager <- setRefClass("ProcessManager",
     stop_app = function(app_name) {
       "Stop a specific application"
 
-      log_info("Stopping app: {app_name}", app_name = app_name)
+      logger::log_info("Stopping app: {app_name}", app_name = app_name)
 
       process <- config$get_app_process(app_name)
       if (!is.null(process)) {
@@ -237,7 +233,7 @@ ProcessManager <- setRefClass("ProcessManager",
         config$remove_app_process(app_name)
 
         if (success) {
-          log_info("Successfully stopped app {app_name}", app_name = app_name)
+          logger::log_info("Successfully stopped app {app_name}", app_name = app_name)
           return(list(success = TRUE, message = paste("App", app_name, "stopped successfully")))
         } else {
           return(list(success = FALSE, message = paste("Failed to stop app", app_name)))
@@ -251,17 +247,17 @@ ProcessManager <- setRefClass("ProcessManager",
 
       app_config <- config$get_app_config(app_name)
       if (is.null(app_config)) {
-        log_error("Cannot stop unknown app: {app_name}", app_name = app_name)
+        logger::log_error("Cannot stop unknown app: {app_name}", app_name = app_name)
         return(FALSE)
       }
 
       # Only allow immediate stops for non-resident apps
       if (app_config$resident) {
-        log_debug("Not stopping resident app: {app_name}", app_name = app_name)
+        logger::log_debug("Not stopping resident app: {app_name}", app_name = app_name)
         return(FALSE)
       }
 
-      log_info("Immediately stopping non-resident app {app_name} (no active connections)", app_name = app_name)
+      logger::log_info("Immediately stopping non-resident app {app_name} (no active connections)", app_name = app_name)
       result <- stop_app(app_name)
       return(result$success)
     },
@@ -274,7 +270,7 @@ ProcessManager <- setRefClass("ProcessManager",
 
         if (!is.null(process)) {
           if (!is_process_alive(process)) {
-            log_error("App {app_name} died, restarting", app_name = app_name)
+            logger::log_error("App {app_name} died, restarting", app_name = app_name)
 
             # Clean up connections for this app
             cleanup_app_connections(app_name)
@@ -287,16 +283,16 @@ ProcessManager <- setRefClass("ProcessManager",
               Sys.sleep(config$config$restart_delay %||% 5)
               start_app(app_config)
             } else {
-              log_info("Non-resident app {app_name} died, will start on next request", app_name = app_name)
+              logger::log_info("Non-resident app {app_name} died, will start on next request", app_name = app_name)
             }
           }
         } else {
           # App not running - only start if it's resident
           if (app_config$resident) {
-            log_info("Resident app {app_name} not running, starting", app_name = app_name)
+            logger::log_info("Resident app {app_name} not running, starting", app_name = app_name)
             start_app(app_config)
           } else {
-            log_debug("Non-resident app {app_name} is stopped (normal state)", app_name = app_name)
+            logger::log_debug("Non-resident app {app_name} is stopped (normal state)", app_name = app_name)
           }
         }
       }
@@ -365,13 +361,13 @@ ProcessManager <- setRefClass("ProcessManager",
       }
 
       if (connections_cleaned > 0) {
-        log_info("Cleaned up {connections_cleaned} stale connections", connections_cleaned = connections_cleaned)
+        logger::log_info("Cleaned up {connections_cleaned} stale connections", connections_cleaned = connections_cleaned)
       }
 
       # Log current connection counts for monitoring
       backend_count <- length(config$get_all_backend_connections())
       ws_count <- length(config$get_all_ws_connections())
-      log_debug("Active connections - Backend: {backend_count}, WebSocket: {ws_count}",
+      logger::log_debug("Active connections - Backend: {backend_count}, WebSocket: {ws_count}",
         backend_count = backend_count, ws_count = ws_count
       )
 
@@ -388,12 +384,12 @@ ProcessManager <- setRefClass("ProcessManager",
         if (!is.null(process) && !is_process_alive(process)) {
           config$remove_app_process(app_name)
           processes_cleaned <- processes_cleaned + 1
-          log_info("Removed dead process for app {app_name}", app_name = app_name)
+          logger::log_info("Removed dead process for app {app_name}", app_name = app_name)
         }
       }
 
       if (processes_cleaned > 0) {
-        log_info("Cleaned up {processes_cleaned} dead processes", processes_cleaned = processes_cleaned)
+        logger::log_info("Cleaned up {processes_cleaned} dead processes", processes_cleaned = processes_cleaned)
       }
 
       return(processes_cleaned)
@@ -471,7 +467,7 @@ ProcessManager <- setRefClass("ProcessManager",
     stop_all_apps = function() {
       "Stop all running applications"
 
-      log_info("Stopping all applications...")
+      logger::log_info("Stopping all applications...")
 
       for (app_name in names(config$get_all_app_processes())) {
         stop_app(app_name)
@@ -489,7 +485,7 @@ ProcessManager <- setRefClass("ProcessManager",
       config$backend_connections <<- list()
       config$ws_connections <<- list()
 
-      log_info("All applications stopped")
+      logger::log_info("All applications stopped")
     }
   )
 )

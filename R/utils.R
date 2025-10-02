@@ -1,9 +1,6 @@
 # Utility Functions Module
 # Common utility functions used across the application
 
-library(digest)
-library(logger)
-
 # Helper functions for connection tracking
 get_client_ip <- function(req) {
   "Extract client IP address from request headers"
@@ -60,13 +57,13 @@ setup_logging <- function(log_dir, log_level = "INFO") {
   }
 
   # Set log level threshold
-  log_threshold(log_level)
+  logger::log_threshold(log_level)
 
   # Configure file appender with same format as console
   log_file <- file.path(log_dir, "server.log")
 
   # Use a simple custom appender that writes to both console and file
-  log_appender(function(lines) {
+  logger::log_appender(function(lines) {
     # Write to console (stderr by default)
     cat(lines, sep = "\n", file = stderr())
 
@@ -82,7 +79,7 @@ setup_logging <- function(log_dir, log_level = "INFO") {
     )
   })
 
-  log_info("Logging system initialized with file output to {log_file}", log_file = log_file)
+  logger::log_info("Logging system initialized with file output to {log_file}", log_file = log_file)
 }
 
 # Memory and resource management
@@ -203,7 +200,7 @@ kill_process_safely <- function(process, force = FALSE) {
       return(TRUE)
     },
     error = function(e) {
-      log_error("Error terminating process: {error}", error = e$message)
+      logger::log_error("Error terminating process: {error}", error = e$message)
       return(FALSE)
     }
   )

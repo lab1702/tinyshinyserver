@@ -1,9 +1,6 @@
 # HTTP and WebSocket Handlers Module
 # Handles all HTTP requests and WebSocket connections
 
-library(httr)
-library(logger)
-
 # HTTP request handler
 handle_http_request <- function(req, config, template_manager, connection_manager, process_manager = NULL) {
   "Main HTTP request handler with routing"
@@ -23,7 +20,7 @@ handle_http_request <- function(req, config, template_manager, connection_manage
   method <- validation_result$method
   query_string <- validation_result$query_string
 
-  log_debug("HTTP request: {method} {path}", method = method, path = path)
+  logger::log_debug("HTTP request: {method} {path}", method = method, path = path)
 
   # Attach managers to request for routing
   req$process_manager <- process_manager
@@ -79,7 +76,7 @@ handle_landing_page <- function(config, template_manager) {
       return(create_html_response(html))
     },
     error = function(e) {
-      log_error("Error generating landing page: {error}", error = e$message)
+      logger::log_error("Error generating landing page: {error}", error = e$message)
       return(create_error_response("Internal Server Error", 500))
     }
   )
@@ -142,7 +139,7 @@ handle_apps_api <- function(config, process_manager = NULL) {
       return(create_json_response(apps_status))
     },
     error = function(e) {
-      log_error("Error getting app status: {error}", error = e$message)
+      logger::log_error("Error getting app status: {error}", error = e$message)
       return(create_error_response("Internal Server Error", 500))
     }
   )
@@ -184,7 +181,7 @@ handle_proxy_request <- function(path, method, query_string, req, config, proces
   if (!app_config$resident && !is.null(process_manager)) {
     process <- config$get_app_process(app_name)
     if (is.null(process) || !is_process_alive(process)) {
-      log_info("Starting non-resident app {app_name} on demand for HTTP request", app_name = app_name)
+      logger::log_info("Starting non-resident app {app_name} on demand for HTTP request", app_name = app_name)
       success <- process_manager$start_app_on_demand(app_name)
       if (!success) {
         return(create_error_response("Failed to start app on demand", 502))
@@ -215,20 +212,20 @@ forward_request <- function(method, target_url, req, app_name) {
 
   tryCatch(
     {
-      log_debug("Forwarding {method} to {target_url} for app {app_name}",
+      logger::log_debug("Forwarding {method} to {target_url} for app {app_name}",
         method = method, target_url = target_url, app_name = app_name
       )
 
       # Make the request with timeout
       if (method == "GET") {
-        response <- GET(target_url, timeout(30))
+        response <- httr::GET(target_url, httr::timeout(30))
       } else if (method == "POST") {
         # Handle POST data
         body <- req$rook.input$read_lines()
-        response <- POST(target_url, body = body, timeout(30))
+        response <- httr::POST(target_url, body = body, httr::timeout(30))
       } else {
         # Handle other methods
-        response <- VERB(method, target_url, timeout(30))
+        response <- httr::VERB(method, target_url, httr::timeout(30))
       }
 
       # Get response headers safely
@@ -240,7 +237,7 @@ forward_request <- function(method, target_url, req, app_name) {
       }
 
       # Handle binary vs text content
-      raw_content <- content(response, "raw")
+      raw_content <- httr::content(response, "raw")
 
       # Check if content is binary
       is_binary <- grepl("image/|font/|application/octet-stream|application/pdf", content_type, ignore.case = TRUE) ||
@@ -249,20 +246,20 @@ forward_request <- function(method, target_url, req, app_name) {
       # Return response
       if (is_binary) {
         return(list(
-          status = status_code(response),
+          status = httr::status_code(response),
           headers = list("Content-Type" = content_type),
           body = raw_content
         ))
       } else {
         return(list(
-          status = status_code(response),
+          status = httr::status_code(response),
           headers = list("Content-Type" = content_type),
           body = rawToChar(raw_content)
         ))
       }
     },
     error = function(e) {
-      log_error("Proxy error for app {app_name}: {error}",
+      logger::log_error("Proxy error for app {app_name}: {error}",
         app_name = app_name, error = e$message
       )
       return(create_error_response(paste("Bad Gateway:", e$message), 502))
@@ -274,7 +271,7 @@ forward_request <- function(method, target_url, req, app_name) {
 handle_websocket_connection <- function(ws, config, connection_manager, process_manager = NULL) {
   "Handle new WebSocket connections"
 
-  log_info("WebSocket connection opened")
+  logger::log_info("WebSocket connection opened")
 
   # Generate session ID
   session_id <- generate_session_id(ws$request)
@@ -282,7 +279,7 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
   # Determine which app this WebSocket is for
   request_path_validation <- validate_path(ws$request$PATH_INFO)
   if (!request_path_validation$valid) {
-    log_error("Invalid WebSocket path: {error}", error = request_path_validation$error)
+    logger::log_error("Invalid WebSocket path: {error}", error = request_path_validation$error)
     ws$close()
     return()
   }
@@ -291,22 +288,22 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
   app_name <- extract_app_name_from_ws_path(request_path, config)
 
   if (is.null(app_name)) {
-    log_error("Could not determine app for WebSocket connection")
+    logger::log_error("Could not determine app for WebSocket connection")
     ws$close()
     return()
   }
 
-  log_info("WebSocket routed to app: {app_name}", app_name = app_name)
+  logger::log_info("WebSocket routed to app: {app_name}", app_name = app_name)
 
   # Start app on demand if it's non-resident and not running
   app_config <- config$get_app_config(app_name)
   if (!is.null(app_config) && !app_config$resident && !is.null(process_manager)) {
     process <- config$get_app_process(app_name)
     if (is.null(process) || !is_process_alive(process)) {
-      log_info("Starting non-resident app {app_name} on demand for WebSocket connection", app_name = app_name)
+      logger::log_info("Starting non-resident app {app_name} on demand for WebSocket connection", app_name = app_name)
       success <- process_manager$start_app_on_demand(app_name)
       if (!success) {
-        log_error("Failed to start app {app_name} on demand for WebSocket", app_name = app_name)
+        logger::log_error("Failed to start app {app_name} on demand for WebSocket", app_name = app_name)
         ws$close()
         return()
       }

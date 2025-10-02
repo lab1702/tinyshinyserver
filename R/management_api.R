@@ -1,9 +1,6 @@
 # Management API Module
 # Handles management interface requests and API endpoints
 
-library(jsonlite)
-library(logger)
-
 # Management request handler
 handle_management_request <- function(req, config, process_manager, template_manager) {
   "Handle management interface requests"
@@ -22,7 +19,7 @@ handle_management_request <- function(req, config, process_manager, template_man
   path <- validation_result$path
   method <- validation_result$method
 
-  log_debug("Management {method} {path}", method = method, path = path)
+  logger::log_debug("Management {method} {path}", method = method, path = path)
 
   # Route management requests
   return(route_management_request(path, method, req, config, process_manager, template_manager))
@@ -77,7 +74,7 @@ handle_management_dashboard <- function(template_manager) {
       return(create_html_response(html))
     },
     error = function(e) {
-      log_error("Error generating management page: {error}", error = e$message)
+      logger::log_error("Error generating management page: {error}", error = e$message)
       return(create_error_response("Internal Server Error", 500))
     }
   )
@@ -92,7 +89,7 @@ handle_management_apps_api <- function(process_manager) {
       return(create_json_response(apps_status))
     },
     error = function(e) {
-      log_error("Error getting app status for management: {error}", error = e$message)
+      logger::log_error("Error getting app status for management: {error}", error = e$message)
       return(create_error_response("Internal Server Error", 500))
     }
   )
@@ -123,7 +120,7 @@ handle_management_connections_api <- function(config) {
       return(create_json_response(connections))
     },
     error = function(e) {
-      log_error("Error getting connections for management: {error}", error = e$message)
+      logger::log_error("Error getting connections for management: {error}", error = e$message)
       return(create_error_response("Internal Server Error", 500))
     }
   )
@@ -155,7 +152,7 @@ handle_management_status_api <- function(config) {
       return(create_json_response(status))
     },
     error = function(e) {
-      log_error("Error getting system status for management: {error}", error = e$message)
+      logger::log_error("Error getting system status for management: {error}", error = e$message)
       return(create_error_response("Internal Server Error", 500))
     }
   )
@@ -203,7 +200,7 @@ handle_app_restart <- function(path, process_manager) {
       }
     },
     error = function(e) {
-      log_error("Error restarting app {app_name}: {error}", app_name = app_name, error = e$message)
+      logger::log_error("Error restarting app {app_name}: {error}", app_name = app_name, error = e$message)
       return(create_error_response(paste("Failed to restart app:", e$message), 500))
     }
   )
@@ -212,7 +209,7 @@ handle_app_restart <- function(path, process_manager) {
 handle_server_shutdown <- function(config) {
   "Handle server shutdown requests"
 
-  log_info("Shutdown requested via management API")
+  logger::log_info("Shutdown requested via management API")
 
   # Create shutdown flag file
   shutdown_flag_file <- file.path(config$config$log_dir, "shutdown.flag")
@@ -226,7 +223,7 @@ handle_server_shutdown <- function(config) {
       )))
     },
     error = function(e) {
-      log_error("Error creating shutdown flag: {error}", error = e$message)
+      logger::log_error("Error creating shutdown flag: {error}", error = e$message)
       return(create_json_response(list(
         success = FALSE,
         error = e$message

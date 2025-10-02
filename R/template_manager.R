@@ -1,8 +1,6 @@
 # Template Manager Module
 # Handles HTML template loading and rendering
 
-library(jsonlite)
-
 # Template Manager Class
 TemplateManager <- setRefClass("TemplateManager",
   fields = list(

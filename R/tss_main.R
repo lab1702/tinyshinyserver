@@ -30,13 +30,13 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       template_manager <<- create_template_manager()
       connection_manager <<- create_connection_manager(config, process_manager)
 
-      log_info("Tiny Shiny Server initialized")
+      logger::log_info("Tiny Shiny Server initialized")
     },
     start = function() {
       "Start the complete server system"
 
-      log_info("Starting Tiny Shiny Server")
-      log_info("Press Ctrl-C to shutdown gracefully")
+      logger::log_info("Starting Tiny Shiny Server")
+      logger::log_info("Press Ctrl-C to shutdown gracefully")
 
       # Create shutdown flag monitoring
       setup_shutdown_monitoring()
@@ -59,23 +59,23 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
     start_all_apps = function() {
       "Start all configured resident Shiny applications"
 
-      log_info("Starting resident applications...")
+      logger::log_info("Starting resident applications...")
 
       for (app_config in config$config$apps) {
         if (app_config$resident) {
           success <- process_manager$start_app(app_config)
           if (!success) {
-            log_error("Failed to start resident app: {app_name}", app_name = app_config$name)
+            logger::log_error("Failed to start resident app: {app_name}", app_name = app_config$name)
           }
         } else {
-          log_info("Skipping non-resident app: {app_name} (will start on-demand)", app_name = app_config$name)
+          logger::log_info("Skipping non-resident app: {app_name} (will start on-demand)", app_name = app_config$name)
         }
       }
     },
     start_monitoring_services = function() {
       "Start health monitoring and cleanup services"
 
-      log_info("Starting monitoring services")
+      logger::log_info("Starting monitoring services")
 
       # Health check scheduler
       schedule_health_check <- function() {
@@ -106,7 +106,7 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       proxy_host <- config$get_proxy_host()
       proxy_port <- config$config$proxy_port %||% 3838
 
-      log_info("Starting proxy server on http://{proxy_host}:{proxy_port}",
+      logger::log_info("Starting proxy server on http://{proxy_host}:{proxy_port}",
         proxy_host = proxy_host, proxy_port = proxy_port
       )
 
@@ -122,7 +122,7 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       # Start management server
       management_port <- config$config$management_port %||% 3839
 
-      log_info("Starting management server on http://127.0.0.1:{management_port}",
+      logger::log_info("Starting management server on http://127.0.0.1:{management_port}",
         management_port = management_port
       )
 
@@ -166,7 +166,7 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
         while (TRUE) {
           # Check for shutdown flag
           if (file.exists(shutdown_flag_file)) {
-            log_info("Shutdown flag detected, initiating graceful shutdown")
+            logger::log_info("Shutdown flag detected, initiating graceful shutdown")
             break
           }
 
@@ -177,10 +177,10 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
           httpuv::service()
         }
       }, interrupt = function(e) {
-        log_info("Interrupt received, shutting down...")
+        logger::log_info("Interrupt received, shutting down...")
         shutdown()
       }, error = function(e) {
-        log_error("Server error: {error}", error = e$message)
+        logger::log_error("Server error: {error}", error = e$message)
         shutdown()
       }, finally = {
         shutdown()
@@ -189,7 +189,7 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
     shutdown = function() {
       "Gracefully shutdown the entire server"
 
-      log_info("Shutting down Tiny Shiny Server...")
+      logger::log_info("Shutting down Tiny Shiny Server...")
 
       # Stop management server
       if (!is.null(management_server)) {
@@ -197,10 +197,10 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
           {
             httpuv::stopServer(management_server)
             management_server <<- NULL
-            log_info("Management server stopped")
+            logger::log_info("Management server stopped")
           },
           error = function(e) {
-            log_error("Error stopping management server: {error}", error = e$message)
+            logger::log_error("Error stopping management server: {error}", error = e$message)
           }
         )
       }
@@ -211,10 +211,10 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
           {
             httpuv::stopServer(proxy_server)
             proxy_server <<- NULL
-            log_info("Proxy server stopped")
+            logger::log_info("Proxy server stopped")
           },
           error = function(e) {
-            log_error("Error stopping proxy server: {error}", error = e$message)
+            logger::log_error("Error stopping proxy server: {error}", error = e$message)
           }
         )
       }
@@ -224,7 +224,7 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
         process_manager$stop_all_apps()
       }
 
-      log_info("Server shutdown complete")
+      logger::log_info("Server shutdown complete")
       # NOTE: Intentionally not calling quit() here to avoid killing the host R session
     },
     get_server_status = function() {

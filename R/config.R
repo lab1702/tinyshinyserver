@@ -1,8 +1,6 @@
 # Configuration Management Module
 # Centralizes configuration loading, validation, and state management
 
-library(jsonlite)
-
 # Configuration class to encapsulate global state
 ShinyServerConfig <- setRefClass("ShinyServerConfig",
   fields = list(
@@ -56,7 +54,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
 
       # Read with explicit UTF-8 encoding
       config_text <- readLines(config_file, encoding = "UTF-8", warn = FALSE)
-      parsed_config <- fromJSON(paste(config_text, collapse = "\n"), simplifyDataFrame = FALSE)
+      parsed_config <- jsonlite::fromJSON(paste(config_text, collapse = "\n"), simplifyDataFrame = FALSE)
 
       # Validate configuration
       validation_result <- validate_config(parsed_config)
@@ -348,12 +346,12 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       }
 
       # Log port assignments
-      log_info("Port assignments:")
+      logger::log_info("Port assignments:")
       for (app in config$apps) {
-        log_info("  App '{name}' -> port {port}", name = app$name, port = app$port)
+        logger::log_info("  App '{name}' -> port {port}", name = app$name, port = app$port)
       }
-      log_info("  Proxy -> port {port}", port = config$proxy_port)
-      log_info("  Management -> port {port}", port = config$management_port)
+      logger::log_info("  Proxy -> port {port}", port = config$proxy_port)
+      logger::log_info("  Management -> port {port}", port = config$management_port)
     }
   )
 )
