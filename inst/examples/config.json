@@ -2,21 +2,21 @@
   "apps": [
     {
       "name": "sales",
-      "path": "./apps/sales",
+      "path": "./examples/sales",
       "resident": true
     },
     {
       "name": "inventory", 
-      "path": "./apps/inventory"
+      "path": "./examples/inventory"
     },
     {
       "name": "reports",
-      "path": "./apps/reports",
+      "path": "./examples/reports",
       "resident": false
     },
     {
       "name": "dashboard",
-      "path": "./apps/dashboard",
+      "path": "./examples/dashboard",
       "resident": true
     }
   ],
