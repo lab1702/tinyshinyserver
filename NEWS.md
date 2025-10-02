@@ -2,7 +2,7 @@
 
 ## Major Changes
 
-* **Package conversion**: Converted the standalone tiny-shiny-server application into a proper R package.
+* **Package conversion**: Converted the standalone tinyshinyserver application into a proper R package.
 * **New API**: The main entry point is now `start_tss(config = "config.json")` instead of running `main.R` directly.
 * **Package resources**: Templates, CSS files, and example applications are now properly packaged and accessible via `system.file()`.
 * **Example applications**: All example apps (sales, inventory, reports, dashboard) are included in the package under `inst/examples/`.

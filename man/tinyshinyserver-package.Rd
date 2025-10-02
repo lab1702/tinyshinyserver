@@ -55,8 +55,8 @@ the example files after installation.
 \seealso{
 Useful links:
 \itemize{
-  \item \url{https://github.com/lab1702/tiny-shiny-server}
-  \item Report bugs at \url{https://github.com/lab1702/tiny-shiny-server/issues}
+  \item \url{https://github.com/lab1702/tinyshinyserver}
+  \item Report bugs at \url{https://github.com/lab1702/tinyshinyserver/issues}
 }
 
 }
