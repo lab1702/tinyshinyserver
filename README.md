@@ -100,6 +100,7 @@ start_tss(config = "examples/config.json")
 - **Individual App Control**: Restart specific applications without affecting others
 - **Health Monitoring**: Automatic health checks with app restart on failure
 - **Memory Management**: Built-in connection cleanup and resource management
+- **Startup Reliability**: Intelligent port availability checking with retry logic for slow-starting applications
 - **Graceful Shutdown**: Multiple shutdown options including web-based controls
 - **Dark Mode Support**: Automatic theme detection for better user experience
 - **R Markdown Support**: Native support for interactive R Markdown documents with `runtime: shiny`

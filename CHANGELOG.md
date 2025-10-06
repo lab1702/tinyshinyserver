@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed landing page connection status to properly detect server shutdown
 - Corrected app tile clickability when server becomes unreachable
 - Fixed syntax errors in connection manager class definition
+- Improved connection reliability for slow-starting Shiny applications
+- Added port availability checking with retry logic (up to 5 seconds)
+- Better error handling with 503 Service Temporarily Unavailable responses
+- Enhanced debugging information for startup issues
 
 ### Migration Guide
 To maintain existing behavior where all apps start immediately and run continuously, add `"resident": true` to each app in your `config.json`:
