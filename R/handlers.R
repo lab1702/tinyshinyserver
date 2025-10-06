@@ -220,7 +220,7 @@ forward_request <- function(method, target_url, req, app_name) {
       # Configure timeouts: 30s total, 10s connection establishment  
       timeout_config <- httr::timeout(30)
       # Set connection timeout to 10 seconds using curl option
-      connect_config <- httr::config(CURLOPT_CONNECTTIMEOUT = 10L)
+      connect_config <- httr::config(connecttimeout = 10)
       
       if (method == "GET") {
         response <- httr::GET(target_url, timeout_config, connect_config)
