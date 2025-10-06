@@ -216,16 +216,20 @@ forward_request <- function(method, target_url, req, app_name) {
         method = method, target_url = target_url, app_name = app_name
       )
 
-      # Make the request with timeout
+      # Make the request with timeout and connection timeout
+      # Configure timeouts: 30s total, 10s connection establishment
+      timeout_config <- httr::timeout(30)
+      connect_timeout_config <- httr::config(connecttimeout = 10)
+      
       if (method == "GET") {
-        response <- httr::GET(target_url, httr::timeout(30))
+        response <- httr::GET(target_url, timeout_config, connect_timeout_config)
       } else if (method == "POST") {
         # Handle POST data
         body <- req$rook.input$read_lines()
-        response <- httr::POST(target_url, body = body, httr::timeout(30))
+        response <- httr::POST(target_url, body = body, timeout_config, connect_timeout_config)
       } else {
         # Handle other methods
-        response <- httr::VERB(method, target_url, httr::timeout(30))
+        response <- httr::VERB(method, target_url, timeout_config, connect_timeout_config)
       }
 
       # Get response headers safely
