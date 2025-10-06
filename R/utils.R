@@ -270,6 +270,24 @@ is_valid_url <- function(url) {
   return(grepl(url_pattern, url))
 }
 
+# Network utilities
+is_port_available <- function(host, port) {
+  "Check if a port is accepting connections"
+  
+  tryCatch(
+    {
+      # Try to establish a connection to the port
+      conn <- socketConnection(host = host, port = port, timeout = 1, blocking = TRUE)
+      close(conn)
+      return(TRUE)
+    },
+    error = function(e) {
+      # If connection fails, port is not available
+      return(FALSE)
+    }
+  )
+}
+
 # Timing utilities
 with_timeout <- function(expr, timeout_seconds = 30) {
   "Execute expression with timeout"

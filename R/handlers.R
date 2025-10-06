@@ -216,21 +216,46 @@ forward_request <- function(method, target_url, req, app_name) {
         method = method, target_url = target_url, app_name = app_name
       )
 
-      # Make the request with timeout and connection timeout
-      # Configure timeouts: 30s total, 10s connection establishment  
+      # Extract port from target_url for availability check
+      port <- as.numeric(gsub(".*:(\\d+).*", "\\1", target_url))
+      
+      # Wait for port to become available with retries
+      max_retries <- 5
+      retry_delay <- 1 # seconds
+      
+      for (retry in 1:max_retries) {
+        if (is_port_available("127.0.0.1", port)) {
+          logger::log_debug("Port {port} is available for app {app_name} (attempt {retry})",
+            port = port, app_name = app_name, retry = retry
+          )
+          break
+        }
+        
+        if (retry == max_retries) {
+          logger::log_error("Port {port} not available for app {app_name} after {max_retries} attempts",
+            port = port, app_name = app_name, max_retries = max_retries
+          )
+          return(create_error_response("Service temporarily unavailable - app still starting", 503))
+        }
+        
+        logger::log_debug("Waiting for port {port} to become available for app {app_name} (attempt {retry})",
+          port = port, app_name = app_name, retry = retry
+        )
+        Sys.sleep(retry_delay)
+      }
+
+      # Make the request with timeout
       timeout_config <- httr::timeout(30)
-      # Set connection timeout to 10 seconds using curl option
-      connect_config <- httr::config(connecttimeout = 10)
       
       if (method == "GET") {
-        response <- httr::GET(target_url, timeout_config, connect_config)
+        response <- httr::GET(target_url, timeout_config)
       } else if (method == "POST") {
         # Handle POST data
         body <- req$rook.input$read_lines()
-        response <- httr::POST(target_url, body = body, timeout_config, connect_config)
+        response <- httr::POST(target_url, body = body, timeout_config)
       } else {
         # Handle other methods
-        response <- httr::VERB(method, target_url, timeout_config, connect_config)
+        response <- httr::VERB(method, target_url, timeout_config)
       }
 
       # Get response headers safely
