@@ -20,7 +20,7 @@ A lightweight, WebSocket-enabled proxy server for hosting multiple Shiny applica
 
 ```r
 # Install from GitHub
-devtools::install_github("lab1702/tinyshinyserver")
+remotes::install_github("lab1702/tinyshinyserver")
 ```
 
 ### From Source
