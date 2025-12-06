@@ -416,13 +416,8 @@ ProcessManager <- setRefClass("ProcessManager",
         "crashed"
       }
 
-      # Count connections for this app
-      app_connections <- 0
-      for (conn in config$get_all_ws_connections()) {
-        if (!is.null(conn$app_name) && conn$app_name == app_name) {
-          app_connections <- app_connections + 1
-        }
-      }
+      # Get connection count from cache (O(1) instead of O(n))
+      app_connections <- config$get_app_connection_count(app_name)
 
       return(list(
         name = app_name,
@@ -453,16 +448,9 @@ ProcessManager <- setRefClass("ProcessManager",
       return(apps_status)
     },
     get_app_connection_count = function(app_name) {
-      "Get the current connection count for a specific app"
+      "Get the current connection count for a specific app (uses cached count for O(1) performance)"
 
-      app_connections <- 0
-      for (conn in config$get_all_ws_connections()) {
-        if (!is.null(conn$app_name) && conn$app_name == app_name) {
-          app_connections <- app_connections + 1
-        }
-      }
-
-      return(app_connections)
+      return(config$get_app_connection_count(app_name))
     },
     stop_all_apps = function() {
       "Stop all running applications"

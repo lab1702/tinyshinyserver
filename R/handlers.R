@@ -116,13 +116,8 @@ handle_apps_api <- function(config, process_manager = NULL) {
             "crashed"
           }
 
-          # Count connections for this app
-          app_connections <- 0
-          for (conn in config$get_all_ws_connections()) {
-            if (!is.null(conn$app_name) && conn$app_name == app_name) {
-              app_connections <- app_connections + 1
-            }
-          }
+          # Get connection count from cache (O(1) instead of O(n))
+          app_connections <- config$get_app_connection_count(app_name)
 
           apps_status[[app_name]] <- list(
             name = app_name,

@@ -11,6 +11,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     app_processes = "list",
     ws_connections = "list",
     backend_connections = "list",
+    app_connection_counts = "environment",  # Cache for O(1) connection counting
     management_server = "ANY",
 
     # Constants
@@ -37,8 +38,9 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       app_processes <<- list()
       ws_connections <<- list()
       backend_connections <<- list()
+      app_connection_counts <<- new.env(hash = TRUE, parent = emptyenv())
       management_server <<- NULL
-      
+
       # Initialize empty config (to be loaded via load_config)
       config <<- list()
     },
@@ -230,10 +232,33 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     add_ws_connection = function(session_id, connection_info) {
       "Add a WebSocket connection to tracking"
       ws_connections[[session_id]] <<- connection_info
+
+      # Update connection count cache
+      app_name <- connection_info$app_name
+      if (!is.null(app_name)) {
+        current <- if (exists(app_name, envir = app_connection_counts)) {
+          get(app_name, envir = app_connection_counts)
+        } else {
+          0
+        }
+        assign(app_name, current + 1, envir = app_connection_counts)
+      }
     },
     remove_ws_connection = function(session_id) {
       "Remove a WebSocket connection from tracking"
+
+      # Get connection info before removing to update counter
+      conn_info <- ws_connections[[session_id]]
       ws_connections[[session_id]] <<- NULL
+
+      # Update connection count cache
+      if (!is.null(conn_info) && !is.null(conn_info$app_name)) {
+        app_name <- conn_info$app_name
+        if (exists(app_name, envir = app_connection_counts)) {
+          current <- get(app_name, envir = app_connection_counts)
+          assign(app_name, max(0, current - 1), envir = app_connection_counts)
+        }
+      }
     },
     get_ws_connection = function(session_id) {
       "Get WebSocket connection info by session ID"
@@ -262,6 +287,13 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     get_all_app_processes = function() {
       "Get all app processes"
       return(app_processes)
+    },
+    get_app_connection_count = function(app_name) {
+      "Get cached connection count for an app (O(1) lookup)"
+      if (exists(app_name, envir = app_connection_counts)) {
+        return(get(app_name, envir = app_connection_counts))
+      }
+      return(0)
     },
     assign_app_ports = function() {
       "Auto-assign ports to apps starting from starting_port"

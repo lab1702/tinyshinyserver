@@ -195,14 +195,14 @@ ConnectionManager <- setRefClass("ConnectionManager",
       ws_connections <- config$get_all_ws_connections()
       backend_connections <- config$get_all_backend_connections()
 
-      # Count connections by app
+      # Build connections_by_app from cached counts (much faster than iterating)
       app_connections <- list()
-      for (conn in ws_connections) {
-        app_name <- conn$app_name %||% "unknown"
-        if (is.null(app_connections[[app_name]])) {
-          app_connections[[app_name]] <- 0
+      for (app_config in config$config$apps) {
+        app_name <- app_config$name
+        count <- config$get_app_connection_count(app_name)
+        if (count > 0) {
+          app_connections[[app_name]] <- count
         }
-        app_connections[[app_name]] <- app_connections[[app_name]] + 1
       }
 
       return(list(
@@ -236,14 +236,8 @@ ConnectionManager <- setRefClass("ConnectionManager",
     decrement_connection_count = function(app_name) {
       "Check WebSocket connections and stop app immediately if needed"
 
-      # Use actual WebSocket connection count instead of our custom counter
-      # This ensures we only stop when there are no active WebSocket connections
-      ws_count <- 0
-      for (conn in config$get_all_ws_connections()) {
-        if (!is.null(conn$app_name) && conn$app_name == app_name) {
-          ws_count <- ws_count + 1
-        }
-      }
+      # Get connection count from cache (O(1) instead of O(n))
+      ws_count <- config$get_app_connection_count(app_name)
 
       logger::log_debug("WebSocket connections for {app_name}: {count}", app_name = app_name, count = ws_count)
 
