@@ -17,7 +17,7 @@ ConnectionManager <- setRefClass("ConnectionManager",
 
       app_config <- config$get_app_config(app_name)
       if (is.null(app_config)) {
-      logger::log_error("App not found: {app_name}", app_name = app_name)
+        logger::log_error("App not found: {app_name}", app_name = app_name)
         return(NULL)
       }
 

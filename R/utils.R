@@ -273,7 +273,7 @@ is_valid_url <- function(url) {
 # Network utilities
 is_port_available <- function(host, port) {
   "Check if a port is accepting connections"
-  
+
   tryCatch(
     {
       # Try to establish a connection to the port

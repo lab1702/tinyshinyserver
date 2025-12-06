@@ -11,7 +11,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     app_processes = "list",
     ws_connections = "list",
     backend_connections = "list",
-    app_connection_counts = "environment",  # Cache for O(1) connection counting
+    app_connection_counts = "environment", # Cache for O(1) connection counting
     management_server = "ANY",
 
     # Constants
@@ -49,7 +49,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
 
       # Resolve config file path (normalize for absolute paths)
       config_file <- normalizePath(config_file, mustWork = TRUE)
-      
+
       if (!file.exists(config_file)) {
         stop("Configuration file not found: ", config_file)
       }

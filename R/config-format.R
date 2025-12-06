@@ -4,7 +4,7 @@
 #'
 #' @section Configuration Structure:
 #' The configuration file should be a valid JSON file with the following structure:
-#' 
+#'
 #' \preformatted{
 #' {
 #'   "apps": [
@@ -75,7 +75,7 @@
 #'       "resident": true
 #'     },
 #'     {
-#'       "name": "reports", 
+#'       "name": "reports",
 #'       "path": "./apps/reports",
 #'       "resident": false
 #'     }
@@ -85,7 +85,7 @@
 #'   "management_port": 3839,
 #'   "log_dir": "./logs"
 #' }'
-#' 
+#'
 #' # Write to file and use
 #' writeLines(config_content, "my-config.json")
 #' start_tss(config = "my-config.json")
@@ -93,7 +93,7 @@
 #'
 #' @seealso
 #' \code{\link{start_tss}} for starting the server with a configuration file.
-#' 
+#'
 #' Use \code{system.file("examples", "config.json", package = "tinyshinyserver")}
 #' to see a complete example configuration file.
 #'
