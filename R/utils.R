@@ -48,7 +48,7 @@ generate_session_id <- function(req) {
 }
 
 # Logging setup
-setup_logging <- function(log_dir, log_level = "DEBUG") {
+setup_logging <- function(log_dir, log_level = "INFO") {
   "Initialize logging system with file and console output"
 
   # Ensure log directory exists
