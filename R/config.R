@@ -231,20 +231,30 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     },
     add_ws_connection = function(session_id, connection_info) {
       "Add a WebSocket connection to tracking"
+
+      # Check if this is a new connection (not just an update to existing)
+      is_new_connection <- !(session_id %in% names(ws_connections))
+
       ws_connections[[session_id]] <<- connection_info
 
-      # Update connection count cache
-      app_name <- connection_info$app_name
-      if (!is.null(app_name)) {
-        current <- if (exists(app_name, envir = app_connection_counts)) {
-          get(app_name, envir = app_connection_counts)
-        } else {
-          0
+      # Only increment cache for NEW connections, not updates
+      if (is_new_connection) {
+        app_name <- connection_info$app_name
+        if (!is.null(app_name)) {
+          current <- if (exists(app_name, envir = app_connection_counts)) {
+            get(app_name, envir = app_connection_counts)
+          } else {
+            0
+          }
+          new_count <- current + 1
+          assign(app_name, new_count, envir = app_connection_counts)
+          logger::log_debug("Cache: Added NEW connection for {app_name}, session={session_id}, count: {old} -> {new}",
+            app_name = app_name, session_id = session_id, old = current, new = new_count
+          )
         }
-        new_count <- current + 1
-        assign(app_name, new_count, envir = app_connection_counts)
-        logger::log_debug("Cache: Added connection for {app_name}, session={session_id}, count: {old} -> {new}",
-          app_name = app_name, session_id = session_id, old = current, new = new_count
+      } else {
+        logger::log_debug("Cache: Updated existing connection for session={session_id}, not incrementing count",
+          session_id = session_id
         )
       }
     },
