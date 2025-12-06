@@ -473,6 +473,9 @@ ProcessManager <- setRefClass("ProcessManager",
       config$backend_connections <<- list()
       config$ws_connections <<- list()
 
+      # Clear connection count cache
+      rm(list = ls(envir = config$app_connection_counts), envir = config$app_connection_counts)
+
       logger::log_info("All applications stopped")
     }
   )
