@@ -241,7 +241,11 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         } else {
           0
         }
-        assign(app_name, current + 1, envir = app_connection_counts)
+        new_count <- current + 1
+        assign(app_name, new_count, envir = app_connection_counts)
+        logger::log_debug("Cache: Added connection for {app_name}, session={session_id}, count: {old} -> {new}",
+          app_name = app_name, session_id = session_id, old = current, new = new_count
+        )
       }
     },
     remove_ws_connection = function(session_id) {
@@ -256,8 +260,20 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         app_name <- conn_info$app_name
         if (exists(app_name, envir = app_connection_counts)) {
           current <- get(app_name, envir = app_connection_counts)
-          assign(app_name, max(0, current - 1), envir = app_connection_counts)
+          new_count <- max(0, current - 1)
+          assign(app_name, new_count, envir = app_connection_counts)
+          logger::log_debug("Cache: Removed connection for {app_name}, session={session_id}, count: {old} -> {new}",
+            app_name = app_name, session_id = session_id, old = current, new = new_count
+          )
+        } else {
+          logger::log_warn("Cache: Tried to remove connection for {app_name} but not in cache, session={session_id}",
+            app_name = app_name, session_id = session_id
+          )
         }
+      } else {
+        logger::log_warn("Cache: Tried to remove connection session={session_id} but conn_info is NULL or has no app_name",
+          session_id = session_id
+        )
       }
     },
     get_ws_connection = function(session_id) {
