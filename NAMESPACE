@@ -1,1 +1,2 @@
 export(start_tss)
+importFrom(methods,new)

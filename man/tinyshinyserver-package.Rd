@@ -61,7 +61,7 @@ Useful links:
 
 }
 \author{
-\strong{Maintainer}: Author Name \email{author@example.com}
+\strong{Maintainer}: Lars Bernhardsson \email{cran.sherry228@passinbox.com}
 
 }
 \keyword{package}

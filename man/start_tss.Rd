@@ -50,17 +50,17 @@ Access points after starting:
 }
 \examples{
 \dontrun{
-  # Basic usage with default config
-  library(tinyshinyserver)
-  start_tss()
+# Basic usage with default config
+library(tinyshinyserver)
+start_tss()
 
-  # Using a custom configuration file
-  start_tss(config = "my-server-config.json")
+# Using a custom configuration file
+start_tss(config = "my-server-config.json")
 
-  # Copy example apps and configuration
-  examples_path <- system.file("examples", package = "tinyshinyserver")
-  file.copy(examples_path, ".", recursive = TRUE)
-  start_tss(config = "examples/config.json")
+# Copy example apps and configuration
+examples_path <- system.file("examples", package = "tinyshinyserver")
+file.copy(examples_path, ".", recursive = TRUE)
+start_tss(config = "examples/config.json")
 }
 
 }

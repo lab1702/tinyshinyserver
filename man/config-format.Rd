@@ -92,7 +92,7 @@ config_content <- '
       "resident": true
     },
     {
-      "name": "reports", 
+      "name": "reports",
       "path": "./apps/reports",
       "resident": false
     }

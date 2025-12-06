@@ -13,6 +13,7 @@ License: MIT + file LICENSE
 Encoding: UTF-8
 Depends: R (>= 4.0)
 Imports:
+    methods,
     shiny,
     callr,
     jsonlite,
