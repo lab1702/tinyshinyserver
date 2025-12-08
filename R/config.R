@@ -233,58 +233,126 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       "Add a WebSocket connection to tracking"
 
       # Check if this is a new connection (not just an update to existing)
+      # Store the result before any modifications to ensure consistency
       is_new_connection <- !(session_id %in% names(ws_connections))
 
+      # Get the old app_name if this is an update (for validation)
+      old_conn_info <- if (!is_new_connection) ws_connections[[session_id]] else NULL
+      old_app_name <- if (!is.null(old_conn_info)) old_conn_info$app_name else NULL
+      new_app_name <- connection_info$app_name
+
+      # Add/update the connection
       ws_connections[[session_id]] <<- connection_info
 
-      # Only increment cache for NEW connections, not updates
+      # Handle connection count updates
       if (is_new_connection) {
-        app_name <- connection_info$app_name
-        if (!is.null(app_name)) {
-          current <- if (exists(app_name, envir = app_connection_counts)) {
-            get(app_name, envir = app_connection_counts)
+        # New connection: increment count for the app
+        if (!is.null(new_app_name)) {
+          current <- if (exists(new_app_name, envir = app_connection_counts)) {
+            get(new_app_name, envir = app_connection_counts)
           } else {
             0
           }
+          # Defensive: ensure current count is non-negative
+          current <- max(0, current)
           new_count <- current + 1
-          assign(app_name, new_count, envir = app_connection_counts)
+          assign(new_app_name, new_count, envir = app_connection_counts)
           logger::log_debug("Cache: Added NEW connection for {app_name}, session={session_id}, count: {old} -> {new}",
-            app_name = app_name, session_id = session_id, old = current, new = new_count
+            app_name = new_app_name, session_id = session_id, old = current, new = new_count
           )
         }
       } else {
-        logger::log_debug("Cache: Updated existing connection for session={session_id}, not incrementing count",
-          session_id = session_id
-        )
+        # Existing connection being updated: check if app changed
+        if (!is.null(old_app_name) && !is.null(new_app_name) && old_app_name != new_app_name) {
+          # App changed: decrement old app, increment new app
+          logger::log_warn("Cache: Connection {session_id} changed apps from {old} to {new} (unusual)",
+            session_id = session_id, old = old_app_name, new = new_app_name
+          )
+
+          # Decrement old app count
+          if (exists(old_app_name, envir = app_connection_counts)) {
+            old_count <- get(old_app_name, envir = app_connection_counts)
+            new_old_count <- max(0, old_count - 1)
+            assign(old_app_name, new_old_count, envir = app_connection_counts)
+          }
+
+          # Increment new app count
+          new_count <- if (exists(new_app_name, envir = app_connection_counts)) {
+            get(new_app_name, envir = app_connection_counts)
+          } else {
+            0
+          }
+          new_count <- max(0, new_count) + 1
+          assign(new_app_name, new_count, envir = app_connection_counts)
+        } else {
+          logger::log_debug("Cache: Updated existing connection for session={session_id}, not changing count",
+            session_id = session_id
+          )
+        }
       }
     },
     remove_ws_connection = function(session_id) {
-      "Remove a WebSocket connection from tracking"
+      "Remove a WebSocket connection from tracking (idempotent)"
+
+      # IDEMPOTENT: Check if connection actually exists before removing
+      if (!(session_id %in% names(ws_connections))) {
+        logger::log_debug("Cache: Connection {session_id} already removed or never existed, skipping",
+          session_id = session_id
+        )
+        return(FALSE)
+      }
 
       # Get connection info before removing to update counter
       conn_info <- ws_connections[[session_id]]
+
+      # Validate we got the connection info
+      if (is.null(conn_info)) {
+        logger::log_warn("Cache: Connection {session_id} exists in list but info is NULL",
+          session_id = session_id
+        )
+        ws_connections[[session_id]] <<- NULL
+        return(FALSE)
+      }
+
+      # Remove the connection from tracking
       ws_connections[[session_id]] <<- NULL
 
-      # Update connection count cache
-      if (!is.null(conn_info) && !is.null(conn_info$app_name)) {
+      # Update connection count cache (only if we have valid app_name)
+      if (!is.null(conn_info$app_name)) {
         app_name <- conn_info$app_name
+
         if (exists(app_name, envir = app_connection_counts)) {
           current <- get(app_name, envir = app_connection_counts)
+
+          # Defensive: warn if count is already zero
+          if (current <= 0) {
+            logger::log_warn("Cache: Decrementing count for {app_name} but count is already {count}, session={session_id}",
+              app_name = app_name, count = current, session_id = session_id
+            )
+          }
+
+          # Ensure we never go negative
           new_count <- max(0, current - 1)
           assign(app_name, new_count, envir = app_connection_counts)
+
           logger::log_debug("Cache: Removed connection for {app_name}, session={session_id}, count: {old} -> {new}",
             app_name = app_name, session_id = session_id, old = current, new = new_count
           )
         } else {
-          logger::log_warn("Cache: Tried to remove connection for {app_name} but not in cache, session={session_id}",
+          # This shouldn't happen - means cache is inconsistent
+          logger::log_error("Cache: INCONSISTENCY - Connection exists for {app_name} but count not in cache, session={session_id}",
             app_name = app_name, session_id = session_id
           )
+          # Initialize to 0 to fix the inconsistency
+          assign(app_name, 0, envir = app_connection_counts)
         }
       } else {
-        logger::log_warn("Cache: Tried to remove connection session={session_id} but conn_info is NULL or has no app_name",
+        logger::log_warn("Cache: Removed connection session={session_id} but conn_info has no app_name",
           session_id = session_id
         )
       }
+
+      return(TRUE)
     },
     get_ws_connection = function(session_id) {
       "Get WebSocket connection info by session ID"
@@ -320,6 +388,60 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         return(get(app_name, envir = app_connection_counts))
       }
       return(0)
+    },
+    validate_connection_count_consistency = function(fix_errors = TRUE) {
+      "Validate that the connection count cache matches actual connections"
+
+      # Count actual connections per app
+      actual_counts <- list()
+      for (session_id in names(ws_connections)) {
+        conn <- ws_connections[[session_id]]
+        if (!is.null(conn) && !is.null(conn$app_name)) {
+          app_name <- conn$app_name
+          actual_counts[[app_name]] <- (actual_counts[[app_name]] %||% 0) + 1
+        }
+      }
+
+      # Compare with cache
+      inconsistencies <- list()
+      all_app_names <- unique(c(names(actual_counts), ls(envir = app_connection_counts)))
+
+      for (app_name in all_app_names) {
+        actual <- actual_counts[[app_name]] %||% 0
+        cached <- if (exists(app_name, envir = app_connection_counts)) {
+          get(app_name, envir = app_connection_counts)
+        } else {
+          0
+        }
+
+        if (actual != cached) {
+          inconsistencies[[app_name]] <- list(
+            cached = cached,
+            actual = actual,
+            difference = cached - actual
+          )
+
+          logger::log_error("Connection count INCONSISTENCY for {app_name}: cached={cached}, actual={actual}, diff={diff}",
+            app_name = app_name, cached = cached, actual = actual, diff = cached - actual
+          )
+
+          # Fix if requested
+          if (fix_errors) {
+            assign(app_name, actual, envir = app_connection_counts)
+            logger::log_info("Fixed connection count for {app_name}: {cached} -> {actual}",
+              app_name = app_name, cached = cached, actual = actual
+            )
+          }
+        }
+      }
+
+      # Return validation result
+      is_consistent <- length(inconsistencies) == 0
+      return(list(
+        consistent = is_consistent,
+        inconsistencies = inconsistencies,
+        total_apps_checked = length(all_app_names)
+      ))
     },
     assign_app_ports = function() {
       "Auto-assign ports to apps starting from starting_port"

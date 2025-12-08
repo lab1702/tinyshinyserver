@@ -14,7 +14,8 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
     connection_manager = "ANY",
     proxy_server = "ANY",
     management_server = "ANY",
-    is_shutting_down = "logical"
+    is_shutting_down = "logical",
+    cleanup_in_progress = "logical"
   ),
   methods = list(
     initialize = function(config_file = "config.json") {
@@ -31,6 +32,7 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       template_manager <<- create_template_manager()
       connection_manager <<- create_connection_manager(config, process_manager)
       is_shutting_down <<- FALSE
+      cleanup_in_progress <<- FALSE
 
       logger::log_info("Tiny Shiny Server initialized")
     },
@@ -89,17 +91,37 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       later::later(schedule_health_check, 5)
 
       # Cleanup scheduler
+      # NOTE: Running cleanup in main thread instead of future to avoid race conditions
+      # Future-based cleanup runs in a separate process and modifications don't affect main process
       schedule_cleanup <- function() {
         if (!is_shutting_down) {
-          future::future(
-            {
-              list(
-                stale_cleanup = process_manager$cleanup_stale_connections(),
-                process_cleanup = process_manager$cleanup_dead_processes()
+          # Simple lock to prevent concurrent cleanup
+          if (cleanup_in_progress) {
+            logger::log_debug("Cleanup already in progress, skipping this cycle")
+            later::later(schedule_cleanup, config$CLEANUP_INTERVAL_SECONDS)
+            return()
+          }
+
+          cleanup_in_progress <<- TRUE
+
+          tryCatch({
+            # Run cleanup directly in main thread
+            process_manager$cleanup_stale_connections()
+            process_manager$cleanup_dead_processes()
+
+            # Validate connection count consistency and auto-fix errors
+            validation_result <- config$validate_connection_count_consistency(fix_errors = TRUE)
+            if (!validation_result$consistent) {
+              logger::log_warn("Connection count cache had inconsistencies, fixed {count} apps",
+                count = length(validation_result$inconsistencies)
               )
-            },
-            seed = NULL
-          )
+            }
+          }, error = function(e) {
+            logger::log_error("Error during cleanup: {error}", error = e$message)
+          }, finally = {
+            cleanup_in_progress <<- FALSE
+          })
+
           later::later(schedule_cleanup, config$CLEANUP_INTERVAL_SECONDS)
         }
       }
@@ -143,7 +165,10 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
     setup_async_processing = function() {
       "Configure async processing for better performance"
 
-      future::plan(future::multisession, workers = 4)
+      # NOTE: Removed future::multisession to avoid race conditions
+      # The cleanup scheduler now runs in the main thread for safety
+      # If async processing is needed in the future, ensure proper synchronization
+      logger::log_info("Async processing: using sequential mode to avoid race conditions")
     },
     setup_shutdown_monitoring = function() {
       "Set up shutdown flag monitoring"
