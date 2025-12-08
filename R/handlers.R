@@ -199,10 +199,10 @@ handle_proxy_request <- function(path, method, query_string, req, config, proces
   }
 
   # Forward the request
-  return(forward_request(method, target_url, req, app_name))
+  return(forward_request(method, target_url, req, app_name, config))
 }
 
-forward_request <- function(method, target_url, req, app_name) {
+forward_request <- function(method, target_url, req, app_name, config) {
   "Forward HTTP request to backend Shiny app"
 
   tryCatch(
@@ -214,33 +214,41 @@ forward_request <- function(method, target_url, req, app_name) {
       # Extract port from target_url for availability check
       port <- as.numeric(gsub(".*:(\\d+).*", "\\1", target_url))
 
-      # Wait for port to become available with non-blocking retries
-      # Use exponential backoff: 100ms, 200ms, 400ms, 800ms, 1600ms = ~3s total
-      max_retries <- 5
-      retry_delay <- 0.1 # Start with 100ms
+      # Check if app is currently starting up
+      startup_state <- config$get_app_startup_state(app_name)
+      if (!is.null(startup_state)) {
+        if (startup_state$state == "starting") {
+          # App is starting, return 503 with Retry-After header
+          elapsed <- startup_state$elapsed
+          # Suggest retry after a reasonable delay based on elapsed time
+          retry_after <- min(5, max(2, ceiling(3 - elapsed)))
 
-      for (retry in 1:max_retries) {
-        if (is_port_available("127.0.0.1", port)) {
-          logger::log_debug("Port {port} is available for app {app_name} (attempt {retry})",
-            port = port, app_name = app_name, retry = retry
+          logger::log_info("App {app_name} is starting (elapsed: {elapsed}s), returning 503 with Retry-After: {retry}s",
+            app_name = app_name, elapsed = round(elapsed, 1), retry = retry_after
           )
-          break
-        }
 
-        if (retry == max_retries) {
-          logger::log_error("Port {port} not available for app {app_name} after {max_retries} attempts",
-            port = port, app_name = app_name, max_retries = max_retries
-          )
-          return(create_error_response("Service temporarily unavailable - app still starting", 503))
+          return(create_503_response(
+            sprintf("App '%s' is starting up, please retry", app_name),
+            retry_after_seconds = retry_after
+          ))
+        } else if (startup_state$state == "timeout") {
+          # Startup timed out
+          logger::log_error("App {app_name} startup timed out", app_name = app_name)
+          return(create_error_response("App startup timed out", 502))
         }
+      }
 
-        logger::log_debug("Waiting for port {port} to become available for app {app_name} (attempt {retry}/{max})",
-          port = port, app_name = app_name, retry = retry, max = max_retries
+      # Quick single check if port is available (non-blocking)
+      if (!is_port_available("127.0.0.1", port)) {
+        # Port not available but app is not marked as starting
+        # This could mean the app just died or hasn't started yet
+        logger::log_warn("Port {port} not available for app {app_name} but app not in startup state",
+          port = port, app_name = app_name
         )
-
-        # Use exponential backoff to reduce blocking time
-        Sys.sleep(retry_delay)
-        retry_delay <- retry_delay * 2
+        return(create_503_response(
+          sprintf("App '%s' is not ready", app_name),
+          retry_after_seconds = 2
+        ))
       }
 
       # Make the request with timeout
@@ -337,6 +345,18 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
         return()
       }
     }
+  }
+
+  # Check if app is still starting up
+  if (config$is_app_starting(app_name)) {
+    logger::log_info("App {app_name} is starting, closing WebSocket with retry message", app_name = app_name)
+    ws$send(jsonlite::toJSON(list(
+      error = "App is starting",
+      message = "The application is starting up. Please refresh the page in a few seconds.",
+      retry_after_seconds = 3
+    ), auto_unbox = TRUE))
+    ws$close()
+    return()
   }
 
   # Get client connection info

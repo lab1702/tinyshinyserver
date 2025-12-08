@@ -12,6 +12,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     ws_connections = "list",
     backend_connections = "list",
     app_connection_counts = "environment", # Cache for O(1) connection counting
+    app_startup_state = "environment", # Track app startup progress (starting/ready)
     management_server = "ANY",
 
     # Constants
@@ -21,7 +22,8 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     MAX_PATH_LENGTH = "numeric",
     MAX_QUERY_LENGTH = "numeric",
     MAX_MESSAGE_SIZE = "numeric",
-    ALLOWED_HTTP_METHODS = "character"
+    ALLOWED_HTTP_METHODS = "character",
+    APP_STARTUP_TIMEOUT_SECONDS = "numeric"
   ),
   methods = list(
     initialize = function() {
@@ -33,12 +35,14 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       MAX_QUERY_LENGTH <<- 2048
       MAX_MESSAGE_SIZE <<- 1048576
       ALLOWED_HTTP_METHODS <<- c("GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS")
+      APP_STARTUP_TIMEOUT_SECONDS <<- 30
 
       # Initialize runtime state
       app_processes <<- list()
       ws_connections <<- list()
       backend_connections <<- list()
       app_connection_counts <<- new.env(hash = TRUE, parent = emptyenv())
+      app_startup_state <<- new.env(hash = TRUE, parent = emptyenv())
       management_server <<- NULL
 
       # Initialize empty config (to be loaded via load_config)
@@ -504,6 +508,44 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       }
       logger::log_info("  Proxy -> port {port}", port = config$proxy_port)
       logger::log_info("  Management -> port {port}", port = config$management_port)
+    },
+
+    # App startup state tracking methods
+    set_app_starting = function(app_name) {
+      "Mark an app as starting up"
+      assign(app_name, list(
+        state = "starting",
+        started_at = Sys.time()
+      ), envir = app_startup_state)
+    },
+    set_app_ready = function(app_name) {
+      "Mark an app as ready to receive requests"
+      if (exists(app_name, envir = app_startup_state)) {
+        rm(list = app_name, envir = app_startup_state)
+      }
+    },
+    get_app_startup_state = function(app_name) {
+      "Get the startup state of an app (NULL if ready, list if starting)"
+      if (exists(app_name, envir = app_startup_state)) {
+        startup_info <- get(app_name, envir = app_startup_state)
+
+        # Check if startup has timed out
+        elapsed <- as.numeric(difftime(Sys.time(), startup_info$started_at,
+                                       units = "secs"))
+        if (elapsed > APP_STARTUP_TIMEOUT_SECONDS) {
+          # Startup timed out, remove state
+          rm(list = app_name, envir = app_startup_state)
+          return(list(state = "timeout", elapsed = elapsed))
+        }
+
+        return(c(startup_info, list(elapsed = elapsed)))
+      }
+      return(NULL)
+    },
+    is_app_starting = function(app_name) {
+      "Check if an app is currently starting up"
+      startup_state <- get_app_startup_state(app_name)
+      return(!is.null(startup_state) && startup_state$state == "starting")
     }
   )
 )

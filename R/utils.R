@@ -237,6 +237,23 @@ create_error_response <- function(message, status = 500) {
   ))
 }
 
+create_503_response <- function(message, retry_after_seconds = 3) {
+  "Create a 503 Service Unavailable response with Retry-After header"
+
+  return(list(
+    status = 503,
+    headers = list(
+      "Content-Type" = "application/json",
+      "Retry-After" = as.character(retry_after_seconds)
+    ),
+    body = jsonlite::toJSON(list(
+      error = paste("503 -", message),
+      retry_after_seconds = retry_after_seconds,
+      message = "Please retry this request after the specified delay"
+    ), auto_unbox = TRUE)
+  ))
+}
+
 # Configuration helpers
 load_template <- function(template_path, variables = list()) {
   "Load HTML template and replace variables"

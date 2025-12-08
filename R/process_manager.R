@@ -146,17 +146,51 @@ ProcessManager <- setRefClass("ProcessManager",
 
       config$add_app_process(app_name, process)
 
-      # Wait for app to start
-      Sys.sleep(3)
+      # Mark app as starting (for non-blocking startup handling)
+      config$set_app_starting(app_name)
 
-      if (process$is_alive()) {
-        logger::log_info("Successfully started app {app_name}", app_name = app_name)
-        return(TRUE)
-      } else {
-        logger::log_error("Failed to start app {app_name}", app_name = app_name)
+      # Schedule async readiness check instead of blocking
+      later::later(function() {
+        check_app_ready(app_name, app_port, process)
+      }, delay = 0.5)
+
+      # Return immediately - don't block
+      logger::log_info("App {app_name} process started, checking readiness asynchronously", app_name = app_name)
+      return(TRUE)
+    },
+    check_app_ready = function(app_name, app_port, process, attempt = 1, max_attempts = 10) {
+      "Check if app is ready to accept connections (async, non-blocking)"
+
+      # Check if process is still alive
+      if (!is_process_alive(process)) {
+        logger::log_error("App {app_name} process died during startup", app_name = app_name)
+        config$set_app_ready(app_name) # Remove startup state
         config$remove_app_process(app_name)
         return(FALSE)
       }
+
+      # Check if port is available
+      if (is_port_available("127.0.0.1", app_port)) {
+        logger::log_info("App {app_name} is ready on port {port} (attempt {attempt})",
+                         app_name = app_name, port = app_port, attempt = attempt)
+        config$set_app_ready(app_name) # Mark as ready
+        return(TRUE)
+      }
+
+      # If not ready and haven't exceeded max attempts, schedule another check
+      if (attempt < max_attempts) {
+        later::later(function() {
+          check_app_ready(app_name, app_port, process, attempt + 1, max_attempts)
+        }, delay = 0.5)
+        logger::log_debug("App {app_name} not ready yet, will retry (attempt {attempt}/{max})",
+                          app_name = app_name, attempt = attempt, max = max_attempts)
+      } else {
+        logger::log_error("App {app_name} failed to become ready after {max} attempts",
+                          app_name = app_name, max = max_attempts)
+        config$set_app_ready(app_name) # Remove startup state (timed out)
+      }
+
+      return(FALSE)
     },
     start_app_on_demand = function(app_name) {
       "Start a non-resident app on demand if not already running"
@@ -167,19 +201,25 @@ ProcessManager <- setRefClass("ProcessManager",
         return(FALSE)
       }
 
-      # Check if app is already running
+      # Check if app is already running or starting
       process <- config$get_app_process(app_name)
       if (!is.null(process) && is_process_alive(process)) {
         logger::log_debug("App {app_name} already running on demand", app_name = app_name)
         return(TRUE)
       }
 
+      # Check if app is currently starting
+      if (config$is_app_starting(app_name)) {
+        logger::log_debug("App {app_name} is already starting, not starting again", app_name = app_name)
+        return(TRUE)
+      }
+
       logger::log_info("Starting app {app_name} on demand", app_name = app_name)
 
-      # Start the app
+      # Start the app (now non-blocking)
       success <- start_app(app_config)
       if (success) {
-        logger::log_info("Successfully started app {app_name} on demand", app_name = app_name)
+        logger::log_info("Successfully initiated startup for app {app_name} on demand", app_name = app_name)
       } else {
         logger::log_error("Failed to start app {app_name} on demand", app_name = app_name)
       }
