@@ -105,25 +105,31 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
           cleanup_in_progress <<- TRUE
 
           # Ensure flag is always reset, even if interrupted or error occurs
-          on.exit({
-            cleanup_in_progress <<- FALSE
-          }, add = TRUE)
+          on.exit(
+            {
+              cleanup_in_progress <<- FALSE
+            },
+            add = TRUE
+          )
 
-          tryCatch({
-            # Run cleanup directly in main thread
-            process_manager$cleanup_stale_connections()
-            process_manager$cleanup_dead_processes()
+          tryCatch(
+            {
+              # Run cleanup directly in main thread
+              process_manager$cleanup_stale_connections()
+              process_manager$cleanup_dead_processes()
 
-            # Validate connection count consistency and auto-fix errors
-            validation_result <- config$validate_connection_count_consistency(fix_errors = TRUE)
-            if (!validation_result$consistent) {
-              logger::log_warn("Connection count cache had inconsistencies, fixed {count} apps",
-                count = length(validation_result$inconsistencies)
-              )
+              # Validate connection count consistency and auto-fix errors
+              validation_result <- config$validate_connection_count_consistency(fix_errors = TRUE)
+              if (!validation_result$consistent) {
+                logger::log_warn("Connection count cache had inconsistencies, fixed {count} apps",
+                  count = length(validation_result$inconsistencies)
+                )
+              }
+            },
+            error = function(e) {
+              logger::log_error("Error during cleanup: {error}", error = e$message)
             }
-          }, error = function(e) {
-            logger::log_error("Error during cleanup: {error}", error = e$message)
-          })
+          )
 
           later::later(schedule_cleanup, config$CLEANUP_INTERVAL_SECONDS)
         }

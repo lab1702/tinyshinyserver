@@ -292,7 +292,7 @@ forward_request <- function(method, target_url, req, app_name, config) {
       forward_headers <- list()
       for (name in names(req)) {
         if (startsWith(name, "HTTP_")) {
-          header_name <- substring(name, 6)  # Remove "HTTP_" prefix
+          header_name <- substring(name, 6) # Remove "HTTP_" prefix
           if (!header_name %in% skip_headers) {
             # Convert underscores to hyphens for HTTP header format
             header_name_http <- gsub("_", "-", header_name)
@@ -459,16 +459,19 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
 
   # Set up message handler
   ws$onMessage(function(binary, message) {
-    tryCatch({
-      success <- connection_manager$handle_client_message(session_id, message, app_name)
-      if (!success) {
-        tryCatch(ws$send(jsonlite::toJSON(list(error = "Invalid message"), auto_unbox = TRUE)), error = function(e) {})
+    tryCatch(
+      {
+        success <- connection_manager$handle_client_message(session_id, message, app_name)
+        if (!success) {
+          tryCatch(ws$send(jsonlite::toJSON(list(error = "Invalid message"), auto_unbox = TRUE)), error = function(e) {})
+          tryCatch(ws$close(), error = function(e) {})
+        }
+      },
+      error = function(e) {
+        logger::log_error("Error handling WebSocket message: {error}", error = e$message)
         tryCatch(ws$close(), error = function(e) {})
       }
-    }, error = function(e) {
-      logger::log_error("Error handling WebSocket message: {error}", error = e$message)
-      tryCatch(ws$close(), error = function(e) {})
-    })
+    )
   })
 
   # Set up close handler

@@ -277,3 +277,6 @@ cache/
 
 # Claude Code guidance file (session-specific)
 CLAUDE.md
+
+# CRAN specific
+CRAN-SUBMISSION

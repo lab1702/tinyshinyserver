@@ -249,4 +249,3 @@ create_template_manager <- function(template_directory = NULL, base_url = "") {
   }
   return(TemplateManager$new(template_directory, base_url))
 }
-

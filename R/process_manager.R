@@ -172,7 +172,8 @@ ProcessManager <- setRefClass("ProcessManager",
       # Check if port has a process listening (app is ready)
       if (is_port_in_use("127.0.0.1", app_port)) {
         logger::log_info("App {app_name} is ready on port {port} (attempt {attempt})",
-                         app_name = app_name, port = app_port, attempt = attempt)
+          app_name = app_name, port = app_port, attempt = attempt
+        )
         config$set_app_ready(app_name) # Mark as ready
         return(TRUE)
       }
@@ -183,10 +184,12 @@ ProcessManager <- setRefClass("ProcessManager",
           check_app_ready(app_name, app_port, process, attempt + 1, max_attempts)
         }, delay = 0.5)
         logger::log_debug("App {app_name} not ready yet, will retry (attempt {attempt}/{max})",
-                          app_name = app_name, attempt = attempt, max = max_attempts)
+          app_name = app_name, attempt = attempt, max = max_attempts
+        )
       } else {
         logger::log_error("App {app_name} failed to become ready after {max} attempts",
-                          app_name = app_name, max = max_attempts)
+          app_name = app_name, max = max_attempts
+        )
         config$set_app_ready(app_name) # Remove startup state (timed out)
       }
 
@@ -381,65 +384,71 @@ ProcessManager <- setRefClass("ProcessManager",
 
       # Clean up stale backend connections
       for (session_id in backend_session_ids) {
-        tryCatch({
-          conn_info <- config$get_backend_connection(session_id)
+        tryCatch(
+          {
+            conn_info <- config$get_backend_connection(session_id)
 
-          # Defensive: connection might have been removed by another callback
-          if (is.null(conn_info)) {
-            next
-          }
-
-          # Check if connection has timestamp and is stale
-          if (!is.null(conn_info$last_activity) && conn_info$last_activity < timeout_threshold) {
-            logger::log_info("Cleaning stale backend connection: {session_id}, last activity: {time}",
-              session_id = session_id, time = format(conn_info$last_activity)
-            )
-
-            if (!is.null(conn_info$ws)) {
-              tryCatch(conn_info$ws$close(), error = function(e) {
-                logger::log_debug("Error closing backend ws: {error}", error = e$message)
-              })
+            # Defensive: connection might have been removed by another callback
+            if (is.null(conn_info)) {
+              next
             }
 
-            config$remove_backend_connection(session_id)
-            connections_cleaned <- connections_cleaned + 1
+            # Check if connection has timestamp and is stale
+            if (!is.null(conn_info$last_activity) && conn_info$last_activity < timeout_threshold) {
+              logger::log_info("Cleaning stale backend connection: {session_id}, last activity: {time}",
+                session_id = session_id, time = format(conn_info$last_activity)
+              )
+
+              if (!is.null(conn_info$ws)) {
+                tryCatch(conn_info$ws$close(), error = function(e) {
+                  logger::log_debug("Error closing backend ws: {error}", error = e$message)
+                })
+              }
+
+              config$remove_backend_connection(session_id)
+              connections_cleaned <- connections_cleaned + 1
+            }
+          },
+          error = function(e) {
+            logger::log_warn("Error during backend connection cleanup for {session_id}: {error}",
+              session_id = session_id, error = e$message
+            )
           }
-        }, error = function(e) {
-          logger::log_warn("Error during backend connection cleanup for {session_id}: {error}",
-            session_id = session_id, error = e$message
-          )
-        })
+        )
       }
 
       # Clean up stale client connections
       for (session_id in client_session_ids) {
-        tryCatch({
-          conn_info <- config$get_ws_connection(session_id)
+        tryCatch(
+          {
+            conn_info <- config$get_ws_connection(session_id)
 
-          # Defensive: connection might have been removed by another callback
-          if (is.null(conn_info)) {
-            next
-          }
-
-          # Check if connection has timestamp and is stale
-          if (!is.null(conn_info$last_activity) && conn_info$last_activity < timeout_threshold) {
-            logger::log_info("Cleaning stale client connection: {session_id}, app: {app}, last activity: {time}",
-              session_id = session_id,
-              app = conn_info$app_name %||% "unknown",
-              time = format(conn_info$last_activity)
-            )
-
-            # Use idempotent remove (safe if already removed by callback)
-            result <- config$remove_ws_connection(session_id)
-            if (result) {
-              connections_cleaned <- connections_cleaned + 1
+            # Defensive: connection might have been removed by another callback
+            if (is.null(conn_info)) {
+              next
             }
+
+            # Check if connection has timestamp and is stale
+            if (!is.null(conn_info$last_activity) && conn_info$last_activity < timeout_threshold) {
+              logger::log_info("Cleaning stale client connection: {session_id}, app: {app}, last activity: {time}",
+                session_id = session_id,
+                app = conn_info$app_name %||% "unknown",
+                time = format(conn_info$last_activity)
+              )
+
+              # Use idempotent remove (safe if already removed by callback)
+              result <- config$remove_ws_connection(session_id)
+              if (result) {
+                connections_cleaned <- connections_cleaned + 1
+              }
+            }
+          },
+          error = function(e) {
+            logger::log_warn("Error during client connection cleanup for {session_id}: {error}",
+              session_id = session_id, error = e$message
+            )
           }
-        }, error = function(e) {
-          logger::log_warn("Error during client connection cleanup for {session_id}: {error}",
-            session_id = session_id, error = e$message
-          )
-        })
+        )
       }
 
       if (connections_cleaned > 0) {
@@ -463,27 +472,30 @@ ProcessManager <- setRefClass("ProcessManager",
       app_names <- names(config$get_all_app_processes())
 
       for (app_name in app_names) {
-        tryCatch({
-          process <- config$get_app_process(app_name)
+        tryCatch(
+          {
+            process <- config$get_app_process(app_name)
 
-          # Defensive: process might have been removed by health check or manual restart
-          if (is.null(process)) {
-            next
+            # Defensive: process might have been removed by health check or manual restart
+            if (is.null(process)) {
+              next
+            }
+
+            if (!is_process_alive(process)) {
+              logger::log_info("Cleaning dead process for app {app_name}", app_name = app_name)
+              config$remove_app_process(app_name)
+              processes_cleaned <- processes_cleaned + 1
+
+              # Also clean up any orphaned connections for this app
+              cleanup_app_connections(app_name)
+            }
+          },
+          error = function(e) {
+            logger::log_warn("Error during process cleanup for {app_name}: {error}",
+              app_name = app_name, error = e$message
+            )
           }
-
-          if (!is_process_alive(process)) {
-            logger::log_info("Cleaning dead process for app {app_name}", app_name = app_name)
-            config$remove_app_process(app_name)
-            processes_cleaned <- processes_cleaned + 1
-
-            # Also clean up any orphaned connections for this app
-            cleanup_app_connections(app_name)
-          }
-        }, error = function(e) {
-          logger::log_warn("Error during process cleanup for {app_name}: {error}",
-            app_name = app_name, error = e$message
-          )
-        })
+        )
       }
 
       if (processes_cleaned > 0) {

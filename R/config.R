@@ -598,7 +598,8 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
 
         # Check if startup has timed out
         elapsed <- as.numeric(difftime(Sys.time(), startup_info$started_at,
-                                       units = "secs"))
+          units = "secs"
+        ))
         if (elapsed > APP_STARTUP_TIMEOUT_SECONDS) {
           # Startup timed out, remove state
           rm(list = app_name, envir = app_startup_state)
