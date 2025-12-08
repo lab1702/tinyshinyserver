@@ -169,8 +169,8 @@ ProcessManager <- setRefClass("ProcessManager",
         return(FALSE)
       }
 
-      # Check if port is available
-      if (is_port_available("127.0.0.1", app_port)) {
+      # Check if port has a process listening (app is ready)
+      if (is_port_in_use("127.0.0.1", app_port)) {
         logger::log_info("App {app_name} is ready on port {port} (attempt {attempt})",
                          app_name = app_name, port = app_port, attempt = attempt)
         config$set_app_ready(app_name) # Mark as ready
@@ -532,10 +532,7 @@ ProcessManager <- setRefClass("ProcessManager",
 
       apps_status <- list()
 
-      # Sort apps alphabetically by name
-      sorted_apps <- config$config$apps[order(sapply(config$config$apps, function(app) app$name))]
-
-      for (app_config in sorted_apps) {
+      for (app_config in config$get_sorted_apps()) {
         app_name <- app_config$name
         status <- get_app_status(app_name)
         if (!is.null(status)) {

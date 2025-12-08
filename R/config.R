@@ -215,6 +215,11 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       }
       return(NULL)
     },
+    get_sorted_apps = function() {
+      "Get apps sorted alphabetically by name"
+
+      config$apps[order(sapply(config$apps, function(app) app$name))]
+    },
     get_proxy_host = function() {
       "Get proxy host, converting localhost to 127.0.0.1 for httpuv compatibility"
 
@@ -479,10 +484,8 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
           }
 
           # Check if port is actually available (not in use by other processes)
-          # Note: is_port_available returns TRUE if port is in use, FALSE if available
-          # This is backwards from what you'd expect!
-          if (!is_port_available("127.0.0.1", current_port)) {
-            # Port is available (not in use)
+          if (!is_port_in_use("127.0.0.1", current_port)) {
+            # Port is free, we can use it
             port_found <- TRUE
           } else {
             # Port is in use, try next one
@@ -613,11 +616,6 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     }
   )
 )
-
-# Null coalescing operator
-`%||%` <- function(x, y) {
-  if (is.null(x)) y else x
-}
 
 # Create global configuration instance
 # This will be used by other modules

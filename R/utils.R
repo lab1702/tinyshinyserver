@@ -1,6 +1,11 @@
 # Utility Functions Module
 # Common utility functions used across the application
 
+# Null coalescing operator (used across all modules)
+`%||%` <- function(x, y) {
+  if (is.null(x)) y else x
+}
+
 # Helper functions for connection tracking
 get_client_ip <- function(req) {
   "Extract client IP address from request headers"
@@ -288,19 +293,18 @@ is_valid_url <- function(url) {
 }
 
 # Network utilities
-is_port_available <- function(host, port) {
-  "Check if a port is accepting connections"
+is_port_in_use <- function(host, port) {
+  "Check if a port is in use (has a process listening on it)"
 
   tryCatch(
     {
       # Try to establish a connection to the port
       conn <- socketConnection(host = host, port = port, timeout = 1, blocking = TRUE)
       close(conn)
-      return(TRUE)
+      return(TRUE)  # Connection succeeded = port is in use
     },
     error = function(e) {
-      # If connection fails, port is not available
-      return(FALSE)
+      return(FALSE)  # Connection failed = port is free
     }
   )
 }

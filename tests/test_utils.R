@@ -276,23 +276,21 @@ test_that("is_valid_url rejects invalid URLs", {
 })
 
 # ============================================================================
-# is_port_available() tests
+# is_port_in_use() tests
 # ============================================================================
 
-test_that("is_port_available detects used ports", {
-  # Note: This function's name is backwards - it returns TRUE if port is IN USE
-
-  # Try a port that's likely in use (or not)
+test_that("is_port_in_use detects used ports", {
+  # Returns TRUE if port is in use, FALSE if free
   # This test is tricky because it depends on system state
   # We'll just verify it returns a boolean
-  result <- is_port_available("127.0.0.1", 80)
+  result <- is_port_in_use("127.0.0.1", 80)
   expect_true(is.logical(result))
 })
 
-test_that("is_port_available handles invalid inputs gracefully", {
+test_that("is_port_in_use handles invalid inputs gracefully", {
   # Test with invalid port - should handle error
   result <- tryCatch({
-    is_port_available("127.0.0.1", 99999)
+    is_port_in_use("127.0.0.1", 99999)
     TRUE  # If it doesn't error, that's fine too
   }, error = function(e) {
     FALSE

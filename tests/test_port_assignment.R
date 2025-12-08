@@ -82,7 +82,7 @@ test_port_assignment <- function() {
     Sys.sleep(0.5)
 
     # Verify port is in use
-    if (!is_port_available("127.0.0.1", test_port)) {
+    if (!is_port_in_use("127.0.0.1", test_port)) {
       stop("Test server didn't start - port 4000 is not in use")
     }
 

@@ -175,9 +175,9 @@ ConnectionManager <- setRefClass("ConnectionManager",
       # Clean up client connection
       config$remove_ws_connection(session_id)
 
-      # Decrement connection count for this app
+      # Check if we should stop an idle on-demand app
       if (!is.null(app_name)) {
-        decrement_connection_count(app_name)
+        maybe_stop_idle_app(app_name)
       }
 
       # Clean up backend connection
@@ -211,34 +211,12 @@ ConnectionManager <- setRefClass("ConnectionManager",
         connections_by_app = app_connections
       ))
     },
-    get_connections_info = function() {
-      "Get detailed connection information for management interface"
-
-      connections <- list()
-
-      for (session_id in names(config$get_all_ws_connections())) {
-        conn <- config$get_ws_connection(session_id)
-        if (!is.null(conn)) {
-          connections[[session_id]] <- list(
-            session_id = session_id,
-            app_name = conn$app_name %||% "unknown",
-            client_ip = conn$client_ip %||% "unknown",
-            user_agent = conn$user_agent %||% "unknown",
-            connected_at = format(conn$created_at, "%Y-%m-%d %H:%M:%S"),
-            last_activity = format(conn$last_activity, "%Y-%m-%d %H:%M:%S"),
-            duration_seconds = as.numeric(difftime(Sys.time(), conn$created_at, units = "secs"))
-          )
-        }
-      }
-
-      return(connections)
-    },
-    decrement_connection_count = function(app_name) {
-      "Check WebSocket connections and stop app immediately if needed (simplified)"
+    maybe_stop_idle_app = function(app_name) {
+      "Stop on-demand app if it has no active connections"
 
       # Validate input
       if (is.null(app_name) || app_name == "") {
-        logger::log_warn("decrement_connection_count called with invalid app_name")
+        logger::log_warn("maybe_stop_idle_app called with invalid app_name")
         return(FALSE)
       }
 

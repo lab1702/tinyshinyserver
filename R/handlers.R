@@ -101,10 +101,7 @@ handle_apps_api <- function(config, process_manager = NULL) {
         # Fallback to basic status if no process manager available
         apps_status <- list()
 
-        # Sort apps alphabetically by name
-        sorted_apps <- config$config$apps[order(sapply(config$config$apps, function(app) app$name))]
-
-        for (app_config in sorted_apps) {
+        for (app_config in config$get_sorted_apps()) {
           app_name <- app_config$name
           process <- config$get_app_process(app_name)
 
@@ -238,9 +235,9 @@ forward_request <- function(method, target_url, req, app_name, config) {
         }
       }
 
-      # Quick single check if port is available (non-blocking)
-      if (!is_port_available("127.0.0.1", port)) {
-        # Port not available but app is not marked as starting
+      # Quick single check if port has a process listening (non-blocking)
+      if (!is_port_in_use("127.0.0.1", port)) {
+        # Port not in use but app is not marked as starting
         # This could mean the app just died or hasn't started yet
         logger::log_warn("Port {port} not available for app {app_name} but app not in startup state",
           port = port, app_name = app_name

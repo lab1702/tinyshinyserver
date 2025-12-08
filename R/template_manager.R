@@ -222,26 +222,6 @@ TemplateManager <- setRefClass("TemplateManager",
         }
       )
     },
-    validate_template_variables = function(variables) {
-      "Validate template variables for security"
-
-      for (var_name in names(variables)) {
-        var_value <- variables[[var_name]]
-
-        # Check for potentially dangerous content
-        if (is.character(var_value)) {
-          # Basic check for script injection attempts
-          if (grepl("<script", var_value, ignore.case = TRUE) ||
-            grepl("javascript:", var_value, ignore.case = TRUE) ||
-            grepl("on[a-z]+=", var_value, ignore.case = TRUE)) {
-            warning("Potentially dangerous content detected in template variable: ", var_name)
-            variables[[var_name]] <- html_escape(var_value)
-          }
-        }
-      }
-
-      return(variables)
-    },
     get_available_templates = function() {
       "Get list of available templates"
 
