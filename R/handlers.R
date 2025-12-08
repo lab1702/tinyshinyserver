@@ -214,9 +214,10 @@ forward_request <- function(method, target_url, req, app_name) {
       # Extract port from target_url for availability check
       port <- as.numeric(gsub(".*:(\\d+).*", "\\1", target_url))
 
-      # Wait for port to become available with retries
+      # Wait for port to become available with non-blocking retries
+      # Use exponential backoff: 100ms, 200ms, 400ms, 800ms, 1600ms = ~3s total
       max_retries <- 5
-      retry_delay <- 1 # seconds
+      retry_delay <- 0.1 # Start with 100ms
 
       for (retry in 1:max_retries) {
         if (is_port_available("127.0.0.1", port)) {
@@ -233,10 +234,13 @@ forward_request <- function(method, target_url, req, app_name) {
           return(create_error_response("Service temporarily unavailable - app still starting", 503))
         }
 
-        logger::log_debug("Waiting for port {port} to become available for app {app_name} (attempt {retry})",
-          port = port, app_name = app_name, retry = retry
+        logger::log_debug("Waiting for port {port} to become available for app {app_name} (attempt {retry}/{max})",
+          port = port, app_name = app_name, retry = retry, max = max_retries
         )
+
+        # Use exponential backoff to reduce blocking time
         Sys.sleep(retry_delay)
+        retry_delay <- retry_delay * 2
       }
 
       # Make the request with timeout

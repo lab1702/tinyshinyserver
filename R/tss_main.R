@@ -104,6 +104,11 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
 
           cleanup_in_progress <<- TRUE
 
+          # Ensure flag is always reset, even if interrupted or error occurs
+          on.exit({
+            cleanup_in_progress <<- FALSE
+          }, add = TRUE)
+
           tryCatch({
             # Run cleanup directly in main thread
             process_manager$cleanup_stale_connections()
@@ -118,8 +123,6 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
             }
           }, error = function(e) {
             logger::log_error("Error during cleanup: {error}", error = e$message)
-          }, finally = {
-            cleanup_in_progress <<- FALSE
           })
 
           later::later(schedule_cleanup, config$CLEANUP_INTERVAL_SECONDS)

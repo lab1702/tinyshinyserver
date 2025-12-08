@@ -234,7 +234,7 @@ ConnectionManager <- setRefClass("ConnectionManager",
       return(connections)
     },
     decrement_connection_count = function(app_name) {
-      "Check WebSocket connections and stop app immediately if needed"
+      "Check WebSocket connections and stop app immediately if needed (simplified)"
 
       # Validate input
       if (is.null(app_name) || app_name == "") {
@@ -242,31 +242,12 @@ ConnectionManager <- setRefClass("ConnectionManager",
         return(FALSE)
       }
 
-      # Get connection count from cache (O(1) instead of O(n))
+      # Get connection count from cache (O(1) - now reliable after cache simplification)
       ws_count <- config$get_app_connection_count(app_name)
-
-      # Defensive: verify cache consistency by counting actual connections
-      actual_count <- 0
-      for (session_id in names(config$get_all_ws_connections())) {
-        conn <- config$get_ws_connection(session_id)
-        if (!is.null(conn) && !is.null(conn$app_name) && conn$app_name == app_name) {
-          actual_count <- actual_count + 1
-        }
-      }
-
-      # Warn if cache is inconsistent (but use actual count for decision)
-      if (ws_count != actual_count) {
-        logger::log_error("Cache INCONSISTENCY for {app_name}: cached={cached}, actual={actual}. Using actual count.",
-          app_name = app_name, cached = ws_count, actual = actual_count
-        )
-        # Fix the cache
-        config$app_connection_counts[[app_name]] <- actual_count
-        ws_count <- actual_count
-      }
 
       logger::log_debug("WebSocket connections for {app_name}: {count}", app_name = app_name, count = ws_count)
 
-      # If no WebSocket connections remain and we have a process manager reference, immediately stop non-resident apps
+      # If no WebSocket connections remain, immediately stop non-resident apps
       if (ws_count == 0 && !is.null(process_manager)) {
         app_config <- config$get_app_config(app_name)
         if (!is.null(app_config) && !app_config$resident) {
