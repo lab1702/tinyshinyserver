@@ -24,6 +24,7 @@ Imports:
     websocket,
     future,
     logger,
+    openssl,
     rmarkdown,
     quarto
 Suggests:

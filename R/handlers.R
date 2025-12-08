@@ -251,15 +251,80 @@ forward_request <- function(method, target_url, req, app_name, config) {
       # Make the request with timeout
       timeout_config <- httr::timeout(30)
 
-      if (method == "GET") {
-        response <- httr::GET(target_url, timeout_config)
-      } else if (method == "POST") {
-        # Handle POST data
-        body <- req$rook.input$read_lines()
-        response <- httr::POST(target_url, body = body, timeout_config)
+      # Build headers to forward from original request
+      # Skip hop-by-hop headers and headers that httr manages
+      # Use underscore format to match rook/httpuv header names (HTTP_HEADER_NAME)
+      skip_headers <- c(
+        "HOST", "CONNECTION", "KEEP_ALIVE", "TRANSFER_ENCODING",
+        "TE", "TRAILER", "UPGRADE", "PROXY_AUTHORIZATION",
+        "PROXY_AUTHENTICATE", "CONTENT_LENGTH", "CONTENT_TYPE"
+      )
+
+      forward_headers <- list()
+      for (name in names(req)) {
+        if (startsWith(name, "HTTP_")) {
+          header_name <- substring(name, 6)  # Remove "HTTP_" prefix
+          if (!header_name %in% skip_headers) {
+            # Convert underscores to hyphens for HTTP header format
+            header_name_http <- gsub("_", "-", header_name)
+            forward_headers[[header_name_http]] <- req[[name]]
+          }
+        }
+      }
+
+      # Convert to httr's add_headers format
+      headers_config <- if (length(forward_headers) > 0) {
+        do.call(httr::add_headers, forward_headers)
       } else {
-        # Handle other methods
-        response <- httr::VERB(method, target_url, timeout_config)
+        NULL
+      }
+
+      if (method == "GET" || method == "HEAD" || method == "OPTIONS") {
+        if (!is.null(headers_config)) {
+          response <- httr::VERB(method, target_url, headers_config, timeout_config)
+        } else {
+          response <- httr::VERB(method, target_url, timeout_config)
+        }
+      } else {
+        # Methods that may have a body (POST, PUT, PATCH, DELETE)
+        # Read body as raw bytes to handle both text and binary data
+        body <- NULL
+        if (!is.null(req$rook.input)) {
+          body <- req$rook.input$read()
+        }
+
+        # Get Content-Type from original request
+        request_content_type <- req$CONTENT_TYPE %||% req$HTTP_CONTENT_TYPE
+
+        # Build the request with body, content type, and forwarded headers
+        if (!is.null(body) && length(body) > 0) {
+          if (!is.null(request_content_type) && !is.null(headers_config)) {
+            response <- httr::VERB(
+              method, target_url,
+              body = body,
+              httr::content_type(request_content_type),
+              headers_config,
+              timeout_config
+            )
+          } else if (!is.null(request_content_type)) {
+            response <- httr::VERB(
+              method, target_url,
+              body = body,
+              httr::content_type(request_content_type),
+              timeout_config
+            )
+          } else if (!is.null(headers_config)) {
+            response <- httr::VERB(method, target_url, body = body, headers_config, timeout_config)
+          } else {
+            response <- httr::VERB(method, target_url, body = body, timeout_config)
+          }
+        } else {
+          if (!is.null(headers_config)) {
+            response <- httr::VERB(method, target_url, headers_config, timeout_config)
+          } else {
+            response <- httr::VERB(method, target_url, timeout_config)
+          }
+        }
       }
 
       # Get response headers safely
@@ -365,11 +430,16 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
 
   # Set up message handler
   ws$onMessage(function(binary, message) {
-    success <- connection_manager$handle_client_message(session_id, message, app_name)
-    if (!success) {
-      ws$send('{"error": "Invalid message"}')
-      ws$close()
-    }
+    tryCatch({
+      success <- connection_manager$handle_client_message(session_id, message, app_name)
+      if (!success) {
+        tryCatch(ws$send(jsonlite::toJSON(list(error = "Invalid message"), auto_unbox = TRUE)), error = function(e) {})
+        tryCatch(ws$close(), error = function(e) {})
+      }
+    }, error = function(e) {
+      logger::log_error("Error handling WebSocket message: {error}", error = e$message)
+      tryCatch(ws$close(), error = function(e) {})
+    })
   })
 
   # Set up close handler

@@ -42,10 +42,10 @@ generate_session_id <- function(req) {
   remote_addr <- if (is.null(req$REMOTE_ADDR)) "" else req$REMOTE_ADDR
   timestamp <- as.character(Sys.time())
 
-  # Add random entropy for better security
-  random_salt <- paste(sample(c(0:9, letters, LETTERS), 16, replace = TRUE), collapse = "")
+  # Add cryptographically secure random entropy (32 bytes = 256 bits)
+  random_salt <- paste(as.character(openssl::rand_bytes(32)), collapse = "")
 
-  # Create session ID with SHA-256 (more secure than MD5)
+  # Create session ID with SHA-256
   session_data <- paste(user_agent, remote_addr, timestamp, random_salt, sep = "|")
   session_id <- digest::digest(session_data, algo = "sha256")
 
@@ -238,7 +238,7 @@ create_error_response <- function(message, status = 500) {
   return(list(
     status = status,
     headers = list("Content-Type" = "application/json"),
-    body = paste0('{"error": "', status, " - ", message, '"}')
+    body = jsonlite::toJSON(list(error = paste(status, "-", message)), auto_unbox = TRUE)
   ))
 }
 

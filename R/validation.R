@@ -245,7 +245,7 @@ create_validation_error <- function(error_message, status_code = 400) {
     response = list(
       status = status_code,
       headers = list("Content-Type" = "application/json"),
-      body = paste0('{"error": "', status_code, " - ", error_message, '"}')
+      body = jsonlite::toJSON(list(error = paste(status_code, "-", error_message)), auto_unbox = TRUE)
     )
   ))
 }
