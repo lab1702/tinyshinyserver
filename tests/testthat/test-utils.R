@@ -138,7 +138,17 @@ test_that("safe_file_read handles non-existent files", {
 })
 
 test_that("safe_file_write handles invalid paths", {
-  result <- safe_file_write("/root/cant/write/here.txt", "content")
+  skip_on_cran()
+  # Use a device path that cannot be written as a regular file
+  # On Windows, CON, NUL, PRN are reserved device names
+
+  # On Unix, /dev/null cannot have subdirectories
+  if (.Platform$OS.type == "windows") {
+    invalid_path <- "CON/subdir/file.txt"
+  } else {
+    invalid_path <- "/dev/null/subdir/file.txt"
+  }
+  result <- safe_file_write(invalid_path, "content")
 
   expect_false(result$success)
   expect_true("error" %in% names(result))
