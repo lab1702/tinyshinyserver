@@ -197,7 +197,7 @@ The system skips reserved ports (`proxy_port`, `management_port`) automatically.
 
 ### 🔄 Resident vs On-Demand Apps
 
-The server supports two application lifecycle modes controlled by the `resident` configuration option:
+The server supports two application life cycle modes controlled by the `resident` configuration option:
 
 #### **Resident Apps** (`"resident": true`)
 - **Always Running**: Started when the server starts and keep running continuously
