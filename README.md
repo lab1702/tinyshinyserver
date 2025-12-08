@@ -40,11 +40,12 @@ Rscript -e "devtools::install('.')"
 
 The package automatically installs required R dependencies:
 
-**Core:** shiny, callr, jsonlite, later, httr, digest, httpuv, websocket  
-**Async:** future, promises  
-**Docs:** rmarkdown, quarto, flexdashboard  
-**Viz:** DT, plotly, dplyr  
+**Core:** shiny, callr, jsonlite, later, httr, digest, httpuv, websocket, openssl
+**Async:** future
+**Docs:** rmarkdown, quarto
 **Utils:** logger
+
+**Optional (for examples):** DT, plotly, dplyr, flexdashboard
 
 ## 🚀 Quick Start
 
@@ -247,12 +248,12 @@ The server supports two application lifecycle modes controlled by the `resident`
 | `apps[].path` | Relative path to app directory | Required |
 | `apps[].resident` | Keep app running continuously (true) or start on-demand (false) | false |
 | `starting_port` | Starting port for auto-assignment | Required |
+| `log_dir` | Directory for log files | Required |
 | `proxy_port` | Port for the proxy server | 3838 |
 | `proxy_host` | Host interface for proxy server (localhost, 127.0.0.1, 0.0.0.0, ::1, ::) | "127.0.0.1" |
 | `management_port` | Port for the management interface | 3839 |
 | `restart_delay` | Seconds to wait before restarting failed apps | 5 |
 | `health_check_interval` | Seconds between health checks | 10 |
-| `log_dir` | Directory for log files | "./logs" |
 
 ### Network Configuration
 
@@ -425,20 +426,20 @@ apps/myapp/
 
 The project includes four example applications demonstrating different application types:
 
-### 1. Sales Dashboard (`apps/sales/`)
+### 1. Sales Dashboard (`examples/sales/`)
 - Single-file Shiny app demonstrating basic dashboard
 - Simple plot with sample sales data
 
-### 2. Inventory Management (`apps/inventory/`)
+### 2. Inventory Management (`examples/inventory/`)
 - Multi-file Shiny app (ui.R + server.R)
 - Interactive table with dynamic data generation
 
-### 3. Business Reports (`apps/reports/`)
+### 3. Business Reports (`examples/reports/`)
 - R Markdown flexdashboard with `runtime: shiny`
 - Interactive charts, KPIs, and data tables
 - Demonstrates plotly integration and responsive design
 
-### 4. Interactive Dashboard (`apps/dashboard/`)
+### 4. Interactive Dashboard (`examples/dashboard/`)
 - Quarto dashboard with `server: shiny`
 - Professional dashboard layout with sidebar controls
 - Real-time filtering, interactive plots, and data tables
