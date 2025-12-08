@@ -304,20 +304,3 @@ is_port_available <- function(host, port) {
     }
   )
 }
-
-# Timing utilities
-with_timeout <- function(expr, timeout_seconds = 30) {
-  "Execute expression with timeout"
-
-  tryCatch(
-    {
-      # This is a simplified timeout implementation
-      # In production, you might want to use more sophisticated timeout handling
-      result <- eval(expr)
-      return(list(success = TRUE, result = result))
-    },
-    error = function(e) {
-      return(list(success = FALSE, error = e$message))
-    }
-  )
-}

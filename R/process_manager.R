@@ -551,28 +551,31 @@ ProcessManager <- setRefClass("ProcessManager",
       return(config$get_app_connection_count(app_name))
     },
     stop_all_apps = function() {
-      "Stop all running applications"
+      "Stop all running applications and clean up all connections"
 
       logger::log_info("Stopping all applications...")
 
+      # Stop all app processes
       for (app_name in names(config$get_all_app_processes())) {
         stop_app(app_name)
       }
 
-      # Clean up all connections
-      for (session_id in names(config$get_all_backend_connections())) {
+      # Clean up backend connections (close WebSocket handles)
+      backend_session_ids <- names(config$get_all_backend_connections())
+      for (session_id in backend_session_ids) {
         conn_info <- config$get_backend_connection(session_id)
         if (!is.null(conn_info) && !is.null(conn_info$ws)) {
           tryCatch(conn_info$ws$close(), error = function(e) {})
         }
+        config$remove_backend_connection(session_id)
       }
 
-      # Clear all connection tracking
-      config$backend_connections <<- list()
-      config$ws_connections <<- list()
-
-      # Clear connection count cache
-      rm(list = ls(envir = config$app_connection_counts), envir = config$app_connection_counts)
+      # Clean up client WebSocket connections using proper method
+      # This maintains cache consistency by calling remove_ws_connection
+      client_session_ids <- names(config$get_all_ws_connections())
+      for (session_id in client_session_ids) {
+        config$remove_ws_connection(session_id)
+      }
 
       logger::log_info("All applications stopped")
     }

@@ -382,7 +382,11 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
 }
 
 extract_app_name_from_ws_path <- function(request_path, config) {
-  "Extract app name from WebSocket request path"
+  "Extract app name from WebSocket request path
+
+  Returns NULL if app cannot be determined from path.
+  Caller should handle NULL by rejecting the connection with an error.
+  "
 
   app_name <- NULL
 
@@ -398,10 +402,7 @@ extract_app_name_from_ws_path <- function(request_path, config) {
     }
   }
 
-  # Default to first app if no specific routing
-  if (is.null(app_name) && length(config$config$apps) > 0) {
-    app_name <- config$config$apps[[1]]$name
-  }
-
+  # Do NOT default to first app - return NULL if routing failed
+  # This prevents silently routing connections to the wrong app
   return(app_name)
 }
