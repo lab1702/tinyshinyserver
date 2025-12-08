@@ -1,0 +1,10 @@
+{
+  "apps": [
+    {
+      "name": "minimal_app",
+      "path": "/path/to/app"
+    }
+  ],
+  "log_dir": "/var/log/shiny",
+  "starting_port": 5000
+}
