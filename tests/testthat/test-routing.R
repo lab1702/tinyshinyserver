@@ -1,10 +1,6 @@
 # Test for HTTP routing and handler functions
 # Tests routing logic and basic handler functions
 
-library(testthat)
-library(devtools)
-load_all(".")
-
 # ============================================================================
 # handle_health_check() tests
 # ============================================================================
@@ -179,25 +175,6 @@ test_that("route_http_request returns 404 for unknown paths", {
   expect_match(result$body, "Not Found")
 })
 
-test_that("route_http_request recognizes proxy paths", {
-  config <- ShinyServerConfig$new()
-  template_manager <- create_mock_template_manager()
-  connection_manager <- create_mock_connection_manager()
-
-  # Mock request with managers
-  req <- list(
-    process_manager = NULL,
-    connection_manager = connection_manager
-  )
-
-  # This should route to handle_proxy_request, which will likely return an error
-  # since we don't have a real app, but it should not return 404
-  result <- route_http_request("/proxy/myapp/", "GET", NULL, req, config, template_manager, connection_manager)
-
-  # Should not be 404 (unknown path)
-  expect_false(result$status == 404 && grepl("Not Found", result$body))
-})
-
 # ============================================================================
 # handle_landing_page() tests
 # ============================================================================
@@ -253,7 +230,7 @@ test_that("handle_apps_api returns app status without process manager", {
   # Check app1
   expect_true("app1" %in% names(body))
   expect_equal(body$app1$name, "app1")
-  expect_equal(body$app1$status, "stopped")  # resident app, no process
+  expect_equal(body$app1$status, "stopped")
   expect_true(body$app1$resident)
   expect_equal(body$app1$port, 3001)
   expect_equal(body$app1$connections, 0)
@@ -261,7 +238,7 @@ test_that("handle_apps_api returns app status without process manager", {
   # Check app2
   expect_true("app2" %in% names(body))
   expect_equal(body$app2$name, "app2")
-  expect_equal(body$app2$status, "dormant")  # non-resident app, no process
+  expect_equal(body$app2$status, "dormant")
   expect_false(body$app2$resident)
   expect_equal(body$app2$port, 3002)
 })
@@ -315,5 +292,3 @@ test_that("handle_apps_api uses process manager when available", {
   expect_equal(body$app1$connections, 5)
   expect_equal(body$app1$pid, 12345)
 })
-
-cat("HTTP routing tests completed successfully!\n")

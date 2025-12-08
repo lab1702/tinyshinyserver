@@ -36,7 +36,7 @@ resource cleanup.
 2. Load the package: \code{library(tinyshinyserver)}
 3. Copy examples: \code{file.copy(system.file("examples", package = "tinyshinyserver"), ".", recursive = TRUE)}
 4. Start server: \code{start_tss(config = "examples/config.json")}
-5. Access via browser: \url{http://localhost:3838}
+5. Access via browser: \verb{http://localhost:3838}
 }
 
 \section{Package resources}{

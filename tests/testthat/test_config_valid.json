@@ -1,0 +1,19 @@
+{
+  "apps": [
+    {
+      "name": "app1",
+      "path": "/path/to/app1",
+      "resident": true
+    },
+    {
+      "name": "app2",
+      "path": "/path/to/app2",
+      "resident": false
+    }
+  ],
+  "log_dir": "/var/log/shiny",
+  "starting_port": 3001,
+  "proxy_port": 3838,
+  "proxy_host": "127.0.0.1",
+  "management_port": 3839
+}

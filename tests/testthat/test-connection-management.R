@@ -1,10 +1,6 @@
 # Test for connection management functions
 # Tests for WebSocket and backend connection management in ShinyServerConfig
 
-library(testthat)
-library(devtools)
-load_all(".")
-
 # ============================================================================
 # WebSocket Connection Management Tests
 # ============================================================================
@@ -302,4 +298,51 @@ test_that("validate_connection_count_consistency passes for consistent state", {
   expect_equal(length(result$inconsistencies), 0)
 })
 
-cat("Connection management tests completed successfully!\n")
+# ============================================================================
+# App Startup State Tests
+# ============================================================================
+
+test_that("Config tracks app startup state correctly", {
+  config <- ShinyServerConfig$new()
+
+  # Test initial state - app not starting
+  expect_false(config$is_app_starting("test_app"))
+  expect_null(config$get_app_startup_state("test_app"))
+
+  # Mark app as starting
+  config$set_app_starting("test_app")
+
+  # Verify app is marked as starting
+  expect_true(config$is_app_starting("test_app"))
+
+  startup_state <- config$get_app_startup_state("test_app")
+  expect_equal(startup_state$state, "starting")
+  expect_true("started_at" %in% names(startup_state))
+  expect_true("elapsed" %in% names(startup_state))
+
+  # Mark app as ready
+  config$set_app_ready("test_app")
+
+  # Verify app is no longer starting
+  expect_false(config$is_app_starting("test_app"))
+  expect_null(config$get_app_startup_state("test_app"))
+})
+
+test_that("Config handles startup timeout correctly", {
+  config <- ShinyServerConfig$new()
+
+  # Manually create an expired startup state
+  assign("timeout_app", list(
+    state = "starting",
+    started_at = Sys.time() - (config$APP_STARTUP_TIMEOUT_SECONDS + 5)
+  ), envir = config$app_startup_state)
+
+  # Get startup state should detect timeout
+  startup_state <- config$get_app_startup_state("timeout_app")
+
+  expect_equal(startup_state$state, "timeout")
+  expect_true(startup_state$elapsed > config$APP_STARTUP_TIMEOUT_SECONDS)
+
+  # State should be cleared after timeout detection
+  expect_null(config$get_app_startup_state("timeout_app"))
+})

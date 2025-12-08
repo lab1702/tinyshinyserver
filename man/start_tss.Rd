@@ -43,9 +43,9 @@ The configuration file should contain:
 
 Access points after starting:
 \itemize{
-  \item Main landing page: \url{http://localhost:3838}
-  \item Management interface: \url{http://localhost:3839}
-  \item Individual apps: \url{http://localhost:3838/proxy/\{app_name\}/}
+  \item Main landing page: \verb{http://localhost:3838}
+  \item Management interface: \verb{http://localhost:3839}
+  \item Individual apps: \verb{http://localhost:3838/proxy/{app_name}/}
 }
 }
 \examples{

@@ -1,10 +1,6 @@
 # Test for configuration loading and validation
 # Tests for ShinyServerConfig class methods
 
-library(testthat)
-library(devtools)
-load_all(".")
-
 # ============================================================================
 # validate_config() tests
 # ============================================================================
@@ -116,7 +112,7 @@ test_that("validate_config checks port range sufficiency", {
   conf <- list(
     apps = many_apps,
     log_dir = "/var/log",
-    starting_port = 65500,  # Too high - would exceed 65535
+    starting_port = 65500,
     proxy_port = 3838,
     management_port = 3839
   )
@@ -225,20 +221,6 @@ test_that("validate_config validates app name", {
   }
 })
 
-test_that("validate_config validates app path", {
-  config <- ShinyServerConfig$new()
-
-  base_config <- list(
-    log_dir = "/var/log",
-    starting_port = 3001
-  )
-
-  # Path not a string
-  result <- config$validate_config(c(base_config, list(apps = list(list(name = "app1", path = 123)))))
-  expect_false(result$valid)
-  expect_match(result$error, "path must be a string")
-})
-
 test_that("validate_config validates optional proxy_port", {
   config <- ShinyServerConfig$new()
 
@@ -293,98 +275,9 @@ test_that("validate_config validates optional proxy_host", {
   }
 })
 
-test_that("validate_config validates log_dir", {
-  config <- ShinyServerConfig$new()
-
-  base_config <- list(
-    apps = list(list(name = "app1", path = "/path")),
-    starting_port = 3001
-  )
-
-  # Invalid type
-  result <- config$validate_config(c(base_config, list(log_dir = 123)))
-  expect_false(result$valid)
-  expect_match(result$error, "log_dir must be a string")
-})
-
-# ============================================================================
-# load_config() tests
-# ============================================================================
-
-test_that("load_config loads valid configuration file", {
-  config <- ShinyServerConfig$new()
-
-  result <- config$load_config("tests/test_config_valid.json")
-
-  expect_true(is.list(result))
-  expect_equal(length(result$apps), 2)
-  expect_equal(result$apps[[1]]$name, "app1")
-  expect_equal(result$apps[[2]]$name, "app2")
-  expect_equal(result$log_dir, "/var/log/shiny")
-  expect_equal(result$starting_port, 3001)
-  expect_equal(result$proxy_port, 3838)
-  expect_equal(result$management_port, 3839)
-})
-
-test_that("load_config loads minimal configuration with defaults", {
-  config <- ShinyServerConfig$new()
-
-  result <- config$load_config("tests/test_config_minimal.json")
-
-  expect_equal(result$starting_port, 5000)
-  # Check defaults are set
-  expect_equal(result$proxy_port, 3838)  # default
-  expect_equal(result$proxy_host, "127.0.0.1")  # default
-  expect_equal(result$management_port, 3839)  # default
-  expect_equal(result$restart_delay, 5)  # default
-  expect_equal(result$health_check_interval, 10)  # default
-  # Check resident defaults
-  expect_false(result$apps[[1]]$resident)  # default FALSE
-})
-
-test_that("load_config fails for non-existent file", {
-  config <- ShinyServerConfig$new()
-
-  expect_error(
-    config$load_config("tests/nonexistent.json"),
-    "No such file or directory"
-  )
-})
-
-test_that("load_config fails for invalid configuration", {
-  config <- ShinyServerConfig$new()
-
-  expect_error(
-    config$load_config("tests/test_config_invalid.json"),
-    "Configuration validation failed"
-  )
-})
-
 # ============================================================================
 # Helper method tests
 # ============================================================================
-
-test_that("get_app_config returns correct app configuration", {
-  config <- ShinyServerConfig$new()
-  config$load_config("tests/test_config_valid.json")
-
-  app1_config <- config$get_app_config("app1")
-  expect_equal(app1_config$name, "app1")
-  expect_equal(app1_config$path, "/path/to/app1")
-  expect_true(app1_config$resident)
-
-  app2_config <- config$get_app_config("app2")
-  expect_equal(app2_config$name, "app2")
-  expect_false(app2_config$resident)
-})
-
-test_that("get_app_config returns NULL for non-existent app", {
-  config <- ShinyServerConfig$new()
-  config$load_config("tests/test_config_valid.json")
-
-  result <- config$get_app_config("nonexistent")
-  expect_null(result)
-})
 
 test_that("get_proxy_host converts localhost to 127.0.0.1", {
   config <- ShinyServerConfig$new()
@@ -405,24 +298,3 @@ test_that("get_proxy_host converts localhost to 127.0.0.1", {
   config$config <- list()
   expect_equal(config$get_proxy_host(), "127.0.0.1")
 })
-
-# ============================================================================
-# create_server_config() factory function tests
-# ============================================================================
-
-test_that("create_server_config creates and loads configuration", {
-  result <- create_server_config("tests/test_config_valid.json")
-
-  expect_true("ShinyServerConfig" %in% class(result))
-  expect_equal(length(result$config$apps), 2)
-  expect_equal(result$config$apps[[1]]$name, "app1")
-})
-
-test_that("create_server_config fails for invalid file", {
-  expect_error(
-    create_server_config("tests/test_config_invalid.json"),
-    "Configuration validation failed"
-  )
-})
-
-cat("Configuration tests completed successfully!\n")

@@ -667,8 +667,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - 📖 **Documentation**: Use `?tinyshinyserver`, `?start_tss`, `?config-format`
 - 🐛 **Bug Reports**: [GitHub Issues](https://github.com/lab1702/tinyshinyserver/issues)
-- 💬 **Questions**: [GitHub Discussions](https://github.com/lab1702/tinyshinyserver/discussions)
-- 📧 **Email**: For private inquiries
 
 ---
 

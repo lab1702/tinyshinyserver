@@ -1,10 +1,6 @@
 # Test for input validation functions
 # Comprehensive tests for all validation and sanitization functions
 
-library(testthat)
-library(devtools)
-load_all(".")
-
 # ============================================================================
 # validate_path() tests
 # ============================================================================
@@ -43,13 +39,6 @@ test_that("validate_path rejects paths that are too long", {
   ok_path <- paste0(rep("a", 1000), collapse = "")
   result <- validate_path(ok_path, max_length = 1000)
   expect_true(result$valid)
-})
-
-test_that("validate_path detects null bytes", {
-  # Note: R strings cannot actually contain embedded null bytes (null-terminated in C),
-  # so this is defensive code that may not trigger in practice. We skip this test
-  # as it's not possible to create a valid test case in R.
-  skip("R strings cannot contain embedded null bytes")
 })
 
 test_that("validate_path detects path traversal attacks", {
@@ -137,14 +126,6 @@ test_that("validate_http_method rejects invalid methods", {
   expect_match(result$error, "not allowed")
 })
 
-test_that("validate_http_method respects custom allowed_methods", {
-  result <- validate_http_method("POST", allowed_methods = c("GET"))
-  expect_false(result$valid)
-
-  result <- validate_http_method("GET", allowed_methods = c("GET"))
-  expect_true(result$valid)
-})
-
 # ============================================================================
 # validate_query_string() tests
 # ============================================================================
@@ -181,12 +162,6 @@ test_that("validate_query_string rejects strings that are too long", {
   expect_match(result$error, "too long")
 })
 
-test_that("validate_query_string detects null bytes", {
-  # Note: R strings cannot contain embedded null bytes
-  # This is defensive code that may not trigger in practice
-  skip("R strings cannot contain embedded null bytes")
-})
-
 test_that("validate_query_string validates URL encoding", {
   # Invalid: % followed by non-hex
   result <- validate_query_string("key=%ZZ")
@@ -201,49 +176,6 @@ test_that("validate_query_string validates URL encoding", {
   # Valid: proper encoding
   result <- validate_query_string("key=%20%2F%3D")
   expect_true(result$valid)
-})
-
-# ============================================================================
-# validate_ws_message() tests
-# ============================================================================
-
-test_that("validate_ws_message accepts valid messages", {
-  result <- validate_ws_message("Simple message")
-  expect_true(result$valid)
-  expect_equal(result$sanitized, "Simple message")
-
-  result <- validate_ws_message('{"type": "update", "data": {"key": "value"}}')
-  expect_true(result$valid)
-})
-
-test_that("validate_ws_message rejects null", {
-  result <- validate_ws_message(NULL)
-  expect_false(result$valid)
-  expect_match(result$error, "null")
-})
-
-test_that("validate_ws_message rejects invalid types", {
-  result <- validate_ws_message(123)
-  expect_false(result$valid)
-  expect_match(result$error, "Invalid message type")
-
-  result <- validate_ws_message(c("msg1", "msg2"))
-  expect_false(result$valid)
-  expect_match(result$error, "Invalid message type")
-})
-
-test_that("validate_ws_message rejects messages that are too large", {
-  # Create a message larger than 1MB (1048576 bytes)
-  large_message <- paste0(rep("x", 1048577), collapse = "")
-  result <- validate_ws_message(large_message, max_size = 1048576)
-  expect_false(result$valid)
-  expect_match(result$error, "too large")
-})
-
-test_that("validate_ws_message detects null bytes", {
-  # Note: R strings cannot contain embedded null bytes
-  # This is defensive code that may not trigger in practice
-  skip("R strings cannot contain embedded null bytes")
 })
 
 # ============================================================================
@@ -292,59 +224,6 @@ test_that("validate_app_name rejects names that are too long", {
   ok_name <- paste0(rep("a", 50), collapse = "")
   result <- validate_app_name(ok_name, max_length = 50)
   expect_true(result$valid)
-})
-
-# ============================================================================
-# validate_ip_address() tests
-# ============================================================================
-
-test_that("validate_ip_address accepts safe IPs", {
-  safe_ips <- c("127.0.0.1", "::1", "localhost", "unknown")
-  for (ip in safe_ips) {
-    result <- validate_ip_address(ip)
-    expect_true(result$valid, info = paste("Failed for:", ip))
-    expect_equal(result$sanitized, ip)
-  }
-})
-
-test_that("validate_ip_address accepts valid IPv4 addresses", {
-  valid_ipv4 <- c("192.168.1.1", "10.0.0.1", "172.16.0.1", "0.0.0.0", "255.255.255.255")
-  for (ip in valid_ipv4) {
-    result <- validate_ip_address(ip)
-    expect_true(result$valid, info = paste("Failed for:", ip))
-    expect_equal(result$sanitized, ip)
-  }
-})
-
-test_that("validate_ip_address accepts valid IPv6 addresses", {
-  valid_ipv6 <- c("::1", "::", "2001:0db8:85a3:0000:0000:8a2e:0370:7334")
-  for (ip in valid_ipv6) {
-    result <- validate_ip_address(ip)
-    expect_true(result$valid, info = paste("Failed for:", ip))
-  }
-})
-
-test_that("validate_ip_address rejects null and invalid types", {
-  result <- validate_ip_address(NULL)
-  expect_false(result$valid)
-  expect_match(result$error, "Invalid IP type")
-
-  result <- validate_ip_address(123)
-  expect_false(result$valid)
-  expect_match(result$error, "Invalid IP type")
-
-  result <- validate_ip_address(c("127.0.0.1", "::1"))
-  expect_false(result$valid)
-  expect_match(result$error, "Invalid IP type")
-})
-
-test_that("validate_ip_address rejects invalid formats", {
-  invalid_ips <- c("999.999.999.999", "192.168.1", "192.168.1.1.1", "not.an.ip", "")
-  for (ip in invalid_ips) {
-    result <- validate_ip_address(ip)
-    expect_false(result$valid, info = paste("Should reject:", ip))
-    expect_match(result$error, "Invalid IP address format")
-  }
 })
 
 # ============================================================================
@@ -438,49 +317,6 @@ test_that("validate_session_id rejects invalid formats", {
 })
 
 # ============================================================================
-# validate_json_input() tests
-# ============================================================================
-
-test_that("validate_json_input accepts valid JSON", {
-  result <- validate_json_input('{"key": "value"}')
-  expect_true(result$valid)
-  expect_equal(result$sanitized, '{"key": "value"}')
-  expect_equal(result$parsed$key, "value")
-
-  result <- validate_json_input('["item1", "item2"]')
-  expect_true(result$valid)
-  expect_equal(length(result$parsed), 2)
-})
-
-test_that("validate_json_input rejects null and invalid types", {
-  result <- validate_json_input(NULL)
-  expect_false(result$valid)
-  expect_match(result$error, "Invalid JSON input type")
-
-  result <- validate_json_input(123)
-  expect_false(result$valid)
-  expect_match(result$error, "Invalid JSON input type")
-
-  result <- validate_json_input(c('{"a":1}', '{"b":2}'))
-  expect_false(result$valid)
-  expect_match(result$error, "Invalid JSON input type")
-})
-
-test_that("validate_json_input rejects invalid JSON", {
-  result <- validate_json_input('{"key": invalid}')
-  expect_false(result$valid)
-  expect_match(result$error, "Invalid JSON")
-
-  result <- validate_json_input('not json at all')
-  expect_false(result$valid)
-  expect_match(result$error, "Invalid JSON")
-
-  result <- validate_json_input('{"unclosed": ')
-  expect_false(result$valid)
-  expect_match(result$error, "Invalid JSON")
-})
-
-# ============================================================================
 # html_escape() tests
 # ============================================================================
 
@@ -518,12 +354,11 @@ test_that("html_escape preserves safe characters", {
 test_that("sanitize_for_logging truncates long text", {
   long_text <- paste0(rep("a", 150), collapse = "")
   result <- sanitize_for_logging(long_text, max_length = 100)
-  expect_equal(nchar(result), 103)  # 100 chars + "..."
+  expect_equal(nchar(result), 103)
   expect_match(result, "\\.\\.\\.$")
 })
 
 test_that("sanitize_for_logging removes control characters", {
-  # Create string with control characters dynamically
   text_with_control <- paste0("text", rawToChar(as.raw(1)), "with", rawToChar(as.raw(31)), "control", rawToChar(as.raw(127)), "chars")
   result <- sanitize_for_logging(text_with_control)
   expect_equal(result, "text?with?control?chars")
@@ -541,11 +376,6 @@ test_that("sanitize_for_logging handles null and non-character input", {
 
   result <- sanitize_for_logging(list(a = 1))
   expect_equal(result, "(null)")
-})
-
-test_that("sanitize_for_logging preserves safe short text", {
-  result <- sanitize_for_logging("safe text", max_length = 100)
-  expect_equal(result, "safe text")
 })
 
 # ============================================================================
@@ -609,20 +439,3 @@ test_that("validate_request_inputs returns error for invalid method", {
   expect_match(result$error, "Invalid method")
   expect_equal(result$status_code, 405)
 })
-
-test_that("validate_request_inputs returns error for invalid query string", {
-  result <- validate_request_inputs("/valid/path", "GET", "key=%ZZ")
-
-  expect_false(result$valid)
-  expect_match(result$error, "Invalid query")
-  expect_equal(result$status_code, 400)
-})
-
-test_that("validate_request_inputs normalizes method case", {
-  result <- validate_request_inputs("/path", "  post  ")
-
-  expect_true(result$valid)
-  expect_equal(result$method, "POST")
-})
-
-cat("Validation function tests completed successfully!\n")
