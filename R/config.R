@@ -463,11 +463,35 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       }
 
       current_port <- starting_port
+      max_attempts <- 1000 # Prevent infinite loops when many ports are in use
 
       for (i in seq_along(config$apps)) {
-        # Skip reserved ports efficiently
-        while (exists(as.character(current_port), envir = reserved_set)) {
-          current_port <- current_port + 1
+        attempts <- 0
+        port_found <- FALSE
+
+        # Find next available port
+        while (!port_found && attempts < max_attempts) {
+          # Skip reserved ports efficiently
+          if (exists(as.character(current_port), envir = reserved_set)) {
+            current_port <- current_port + 1
+            attempts <- attempts + 1
+            next
+          }
+
+          # Check if port is actually available (not in use by other processes)
+          # Note: is_port_available returns TRUE if port is in use, FALSE if available
+          # This is backwards from what you'd expect!
+          if (!is_port_available("127.0.0.1", current_port)) {
+            # Port is available (not in use)
+            port_found <- TRUE
+          } else {
+            # Port is in use, try next one
+            logger::log_debug("Port {port} is in use by another process, trying next port",
+              port = current_port
+            )
+            current_port <- current_port + 1
+            attempts <- attempts + 1
+          }
 
           # Safety check to prevent infinite loop
           if (current_port > 65535) {
@@ -478,10 +502,20 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
           }
         }
 
+        if (!port_found) {
+          stop(sprintf(
+            "Port assignment failed: could not find available port for app '%s' after %d attempts",
+            config$apps[[i]]$name, max_attempts
+          ))
+        }
+
         # Assign port to app
         config$apps[[i]]$port <<- current_port
+        logger::log_debug("Assigned port {port} to app '{app_name}'",
+          port = current_port, app_name = config$apps[[i]]$name
+        )
 
-        # Move to next port
+        # Move to next port for next app
         current_port <- current_port + 1
       }
 
