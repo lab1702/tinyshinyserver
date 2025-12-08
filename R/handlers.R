@@ -215,19 +215,48 @@ forward_request <- function(method, target_url, req, app_name, config) {
       startup_state <- config$get_app_startup_state(app_name)
       if (!is.null(startup_state)) {
         if (startup_state$state == "starting") {
-          # App is starting, return 503 with Retry-After header
           elapsed <- startup_state$elapsed
-          # Suggest retry after a reasonable delay based on elapsed time
-          retry_after <- min(5, max(2, ceiling(3 - elapsed)))
 
-          logger::log_info("App {app_name} is starting (elapsed: {elapsed}s), returning 503 with Retry-After: {retry}s",
-            app_name = app_name, elapsed = round(elapsed, 1), retry = retry_after
-          )
-
-          return(create_503_response(
-            sprintf("App '%s' is starting up, please retry", app_name),
-            retry_after_seconds = retry_after
-          ))
+          # Allow up to 2 seconds of startup time before returning 503
+          # Poll briefly if within grace period
+          grace_period <- 2
+          if (elapsed < grace_period) {
+            wait_remaining <- grace_period - elapsed
+            start_wait <- Sys.time()
+            while (as.numeric(difftime(Sys.time(), start_wait, units = "secs")) < wait_remaining) {
+              if (is_port_in_use("127.0.0.1", port)) {
+                logger::log_info("App {app_name} became ready during grace period", app_name = app_name)
+                config$set_app_ready(app_name)
+                break
+              }
+              Sys.sleep(0.1)
+            }
+            # Re-check startup state after waiting
+            startup_state <- config$get_app_startup_state(app_name)
+            if (is.null(startup_state) || is_port_in_use("127.0.0.1", port)) {
+              # App is ready, continue to proxy (fall through)
+            } else {
+              # Still not ready after grace period, return 503
+              retry_after <- min(5, max(2, ceiling(3 - grace_period)))
+              logger::log_info("App {app_name} not ready after {grace}s grace period, returning 503",
+                app_name = app_name, grace = grace_period
+              )
+              return(create_503_response(
+                sprintf("App '%s' is starting up, please retry", app_name),
+                retry_after_seconds = retry_after
+              ))
+            }
+          } else {
+            # Past grace period, return 503 immediately
+            retry_after <- min(5, max(2, ceiling(3 - elapsed)))
+            logger::log_info("App {app_name} is starting (elapsed: {elapsed}s), returning 503 with Retry-After: {retry}s",
+              app_name = app_name, elapsed = round(elapsed, 1), retry = retry_after
+            )
+            return(create_503_response(
+              sprintf("App '%s' is starting up, please retry", app_name),
+              retry_after_seconds = retry_after
+            ))
+          }
         } else if (startup_state$state == "timeout") {
           # Startup timed out
           logger::log_error("App {app_name} startup timed out", app_name = app_name)
