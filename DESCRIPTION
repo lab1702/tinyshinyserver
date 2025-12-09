@@ -5,9 +5,9 @@ Version: 0.1.0
 Authors@R: c(
     person(given = "Lars", family = "Bernhardsson", role = c("aut", "cre"), email = "cran.sherry228@passinbox.com")
     )
-Description: A lightweight, WebSocket-enabled proxy server for hosting multiple
+Description: A lightweight, 'WebSocket'-enabled proxy server for hosting multiple
     Shiny applications with automatic health monitoring, session management,
-    and resource cleanup. Provides a simple entry point 'start_tss()' to run the
+    and resource cleanup. Provides a simple entry point start_tss() to run the
     server using a JSON configuration file.
 License: MIT + file LICENSE
 Encoding: UTF-8
