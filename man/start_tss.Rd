@@ -49,13 +49,13 @@ Access points after starting:
 }
 }
 \examples{
-if(interactive()){
-library(tinyshinyserver)
-examples_path <- system.file("examples", package = "tinyshinyserver")
-temp_path <- tempdir()
-file.copy(examples_path, temp_path, recursive = TRUE)
-setwd(temp_path)
-start_tss(config = "examples/config.json")
+if (interactive()) {
+  library(tinyshinyserver)
+  examples_path <- system.file("examples", package = "tinyshinyserver")
+  temp_path <- tempdir()
+  file.copy(examples_path, temp_path, recursive = TRUE)
+  setwd(temp_path)
+  start_tss(config = "examples/config.json")
 }
 
 }
