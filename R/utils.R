@@ -67,23 +67,10 @@ setup_logging <- function(log_dir, log_level = "INFO") {
   # Configure file appender with same format as console
   log_file <- file.path(log_dir, "server.log")
 
-  # Use a simple custom appender that writes to both console and file
-  logger::log_appender(function(lines) {
-    # Write to console (stderr by default)
-    cat(lines, sep = "\n", file = stderr())
+  # Use tee appender to log to both console and file
+  logger::log_appender(logger::appender_tee(log_file))
 
-    # Write to file with same format
-    tryCatch(
-      {
-        cat(lines, sep = "\n", file = log_file, append = TRUE)
-      },
-      error = function(e) {
-        # If file writing fails, continue with console only
-        warning("Could not write to log file: ", e$message)
-      }
-    )
-  })
-
+  # Log initialization message
   logger::log_info("Logging system initialized with file output to {log_file}", log_file = log_file)
 }
 

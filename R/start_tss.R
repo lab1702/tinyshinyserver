@@ -39,23 +39,14 @@
 #' }
 #'
 #' @examples
-#' \dontrun{
-#' # Basic usage with default config
-#' library(tinyshinyserver)
-#' start_tss()
-#'
-#' # Using a custom configuration file
-#' start_tss(config = "my-server-config.json")
-#'
-#' # Copy example apps and configuration
-#' examples_path <- system.file("examples", package = "tinyshinyserver")
-#' file.copy(examples_path, ".", recursive = TRUE)
-#' start_tss(config = "examples/config.json")
+#' if (interactive()) {
+#'   library(tinyshinyserver)
+#'   examples_path <- system.file("examples", package = "tinyshinyserver")
+#'   temp_path <- tempdir()
+#'   file.copy(examples_path, temp_path, recursive = TRUE)
+#'   setwd(temp_path)
+#'   start_tss(config = "examples/config.json")
 #' }
-#'
-#' @seealso
-#' Use \code{system.file("examples", package = "tinyshinyserver")} to find
-#' example applications and configuration files included with the package.
 #'
 #' @export
 start_tss <- function(config = "config.json") {
