@@ -22,3 +22,7 @@ There are currently no downstream dependencies for this package.
 
 * **R/config-format.R and R/example-config.R**: Changed `\dontrun` to `if(interactive())`
   and re-generated documentation.
+
+* **tests/testthat/...**: Many tests added for functions where it was possible.
+  Local test results: 855 pass, 0 fail, 4 warnings (expected - network/file edge cases)
+  Only missing tests that require infrastructure mockup to run.
