@@ -1,12 +1,12 @@
 Package: tinyshinyserver
 Type: Package
-Title: Tiny 'Shiny' Server - Lightweight Multi-App 'Shiny' Proxy
+Title: Tiny 'shiny' Server - Lightweight Multi-App 'shiny' Proxy
 Version: 0.1.0
 Authors@R: c(
     person(given = "Lars", family = "Bernhardsson", role = c("aut", "cre"), email = "cran.sherry228@passinbox.com")
     )
 Description: A lightweight, 'WebSocket'-enabled proxy server for hosting multiple
-    'Shiny' applications with automatic health monitoring, session management,
+    'shiny' applications with automatic health monitoring, session management,
     and resource cleanup. Provides a simple entry point to run the server using
     a JSON configuration file.
 License: MIT + file LICENSE

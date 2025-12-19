@@ -27,18 +27,18 @@ The example configuration includes:
 }
 }
 \examples{
-\dontrun{
-# Get the example configuration file path
-config_file <- system.file("examples", "config.json", package = "tinyshinyserver")
+if (interactive()) {
+  # Get the example configuration file path
+  config_file <- system.file("examples", "config.json", package = "tinyshinyserver")
 
-# View the configuration
-config_content <- readLines(config_file)
-cat(config_content, sep = "\\\\n")
+  # View the configuration
+  config_content <- readLines(config_file)
+  cat(config_content, sep = "\\\\n")
 
-# Copy examples to current directory and start server
-examples_path <- system.file("examples", package = "tinyshinyserver")
-file.copy(examples_path, ".", recursive = TRUE)
-start_tss(config = "examples/config.json")
+  # Copy examples to current directory and start server
+  examples_path <- system.file("examples", package = "tinyshinyserver")
+  file.copy(examples_path, ".", recursive = TRUE)
+  start_tss(config = "examples/config.json")
 }
 
 }

@@ -81,9 +81,9 @@ but will skip 3838 and 3839 if those are the proxy and management ports.
 }
 
 \examples{
-\dontrun{
-# Example configuration file:
-config_content <- '
+if (interactive()) {
+  # Example configuration file:
+  config_content <- '
 {
   "apps": [
     {
@@ -103,9 +103,9 @@ config_content <- '
   "log_dir": "./logs"
 }'
 
-# Write to file and use
-writeLines(config_content, "my-config.json")
-start_tss(config = "my-config.json")
+  # Write to file and use
+  writeLines(config_content, "my-config.json")
+  start_tss(config = "my-config.json")
 }
 
 }
