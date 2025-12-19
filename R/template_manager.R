@@ -176,7 +176,17 @@ TemplateManager <- setRefClass("TemplateManager",
       normalized_path <- normalizePath(file.path(template_dir, file_path), mustWork = FALSE)
       template_base <- normalizePath(template_dir, mustWork = FALSE)
 
-      if (!startsWith(normalized_path, template_base)) {
+      # On Windows, use case-insensitive comparison and normalize slashes
+      # normalizePath with mustWork=FALSE may not normalize slashes for non-existent files
+      if (.Platform$OS.type == "windows") {
+        norm_path <- tolower(gsub("/", "\\\\", normalized_path))
+        norm_base <- tolower(gsub("/", "\\\\", template_base))
+        path_check <- !startsWith(norm_path, norm_base)
+      } else {
+        path_check <- !startsWith(normalized_path, template_base)
+      }
+
+      if (path_check) {
         return(list(
           status = 403,
           headers = list("Content-Type" = "text/plain"),

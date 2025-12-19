@@ -757,7 +757,7 @@ test_that("load_config fails for non-existent file", {
 
   expect_error(
     config$load_config("/nonexistent/path/config.json"),
-    "No such file|cannot open|not found"
+    "No such file|cannot open|not found|cannot find the path"
   )
 })
 
