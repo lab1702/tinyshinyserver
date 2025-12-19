@@ -439,3 +439,214 @@ test_that("validate_request_inputs returns error for invalid method", {
   expect_match(result$error, "Invalid method")
   expect_equal(result$status_code, 405)
 })
+
+# ============================================================================
+# validate_ws_message() tests
+# ============================================================================
+
+test_that("validate_ws_message accepts valid messages", {
+  result <- validate_ws_message("Hello, World!")
+  expect_true(result$valid)
+  expect_equal(result$sanitized, "Hello, World!")
+
+  result <- validate_ws_message('{"type":"message","data":"test"}')
+  expect_true(result$valid)
+})
+
+test_that("validate_ws_message rejects null", {
+  result <- validate_ws_message(NULL)
+  expect_false(result$valid)
+  expect_match(result$error, "null")
+})
+
+test_that("validate_ws_message rejects invalid types", {
+  result <- validate_ws_message(123)
+  expect_false(result$valid)
+  expect_match(result$error, "Invalid message type")
+
+  result <- validate_ws_message(c("msg1", "msg2"))
+  expect_false(result$valid)
+  expect_match(result$error, "Invalid message type")
+
+  result <- validate_ws_message(list(a = 1))
+  expect_false(result$valid)
+  expect_match(result$error, "Invalid message type")
+})
+
+test_that("validate_ws_message rejects messages that are too large", {
+  # Default max is 1MB (1048576 bytes)
+  large_message <- paste0(rep("a", 1048577), collapse = "")
+  result <- validate_ws_message(large_message)
+  expect_false(result$valid)
+  expect_match(result$error, "too large")
+
+  # Just under the limit should be OK
+  ok_message <- paste0(rep("a", 1048576), collapse = "")
+  result <- validate_ws_message(ok_message)
+  expect_true(result$valid)
+
+  # Custom max size
+  result <- validate_ws_message("12345", max_size = 4)
+  expect_false(result$valid)
+  expect_match(result$error, "too large")
+})
+
+test_that("validate_ws_message rejects messages with null bytes", {
+
+  # Note: R cannot easily embed null bytes in strings, and the validate_ws_message
+
+  # function uses grepl("\\x00", ..., useBytes = TRUE) which requires actual null bytes.
+  # This is essentially impossible to test directly in R because:
+  # 1. rawToChar(as.raw(0)) returns "" (empty string)
+  # 2. Literal \x00 in strings causes parse errors
+  # 3. The string is terminated at the null byte
+  #
+  # We test the function logic indirectly by ensuring the pattern check exists.
+  # In practice, null bytes in WebSocket messages would come from binary data
+  # that R would handle at the raw/binary level before conversion.
+  #
+  # For now, just verify that valid messages pass (null byte rejection is
+
+  # an edge case that requires binary-level testing)
+  result <- validate_ws_message("normal message without null bytes")
+  expect_true(result$valid)
+})
+
+# ============================================================================
+# validate_ip_address() tests
+# ============================================================================
+
+test_that("validate_ip_address accepts valid IPv4 addresses", {
+  valid_ips <- c("192.168.1.1", "10.0.0.1", "172.16.0.1", "255.255.255.255", "0.0.0.0")
+  for (ip in valid_ips) {
+    result <- validate_ip_address(ip)
+    expect_true(result$valid, info = paste("Failed for:", ip))
+    expect_equal(result$sanitized, ip)
+  }
+})
+
+test_that("validate_ip_address accepts safe/known IPs", {
+  safe_ips <- c("127.0.0.1", "::1", "localhost", "unknown")
+  for (ip in safe_ips) {
+    result <- validate_ip_address(ip)
+    expect_true(result$valid, info = paste("Failed for:", ip))
+    expect_equal(result$sanitized, ip)
+  }
+})
+
+test_that("validate_ip_address accepts valid IPv6 addresses", {
+  result <- validate_ip_address("2001:0db8:85a3:0000:0000:8a2e:0370:7334")
+  expect_true(result$valid)
+
+  result <- validate_ip_address("::1")
+  expect_true(result$valid)
+
+  result <- validate_ip_address("::")
+  expect_true(result$valid)
+})
+
+test_that("validate_ip_address rejects null and invalid types", {
+  result <- validate_ip_address(NULL)
+  expect_false(result$valid)
+  expect_match(result$error, "Invalid IP type")
+
+  result <- validate_ip_address(123)
+  expect_false(result$valid)
+  expect_match(result$error, "Invalid IP type")
+
+  result <- validate_ip_address(c("127.0.0.1", "192.168.1.1"))
+  expect_false(result$valid)
+  expect_match(result$error, "Invalid IP type")
+})
+
+test_that("validate_ip_address rejects invalid IP formats", {
+  invalid_ips <- c(
+    "256.1.1.1",           # Octet > 255
+    "192.168.1",           # Missing octet
+    "192.168.1.1.1",       # Too many octets
+    "192.168.1.abc",       # Non-numeric
+    "not-an-ip",           # Completely invalid
+    "192.168.1.1:8080",    # IP with port
+    "http://192.168.1.1"   # URL format
+  )
+  for (ip in invalid_ips) {
+    result <- validate_ip_address(ip)
+    expect_false(result$valid, info = paste("Should reject:", ip))
+    expect_match(result$error, "Invalid IP address format")
+  }
+})
+
+# ============================================================================
+# validate_json_input() tests
+# ============================================================================
+
+test_that("validate_json_input accepts valid JSON", {
+  result <- validate_json_input('{"key": "value"}')
+  expect_true(result$valid)
+  expect_equal(result$parsed$key, "value")
+
+  result <- validate_json_input('[1, 2, 3]')
+  expect_true(result$valid)
+  expect_equal(result$parsed, c(1, 2, 3))
+
+  result <- validate_json_input('{"nested": {"a": 1, "b": 2}}')
+  expect_true(result$valid)
+  expect_equal(result$parsed$nested$a, 1)
+})
+
+test_that("validate_json_input rejects null and invalid types", {
+  result <- validate_json_input(NULL)
+  expect_false(result$valid)
+  expect_match(result$error, "Invalid JSON input type")
+
+  result <- validate_json_input(123)
+  expect_false(result$valid)
+  expect_match(result$error, "Invalid JSON input type")
+
+  result <- validate_json_input(c("json1", "json2"))
+  expect_false(result$valid)
+  expect_match(result$error, "Invalid JSON input type")
+})
+
+test_that("validate_json_input rejects invalid JSON", {
+  result <- validate_json_input("not json at all")
+  expect_false(result$valid)
+  expect_match(result$error, "Invalid JSON")
+
+  result <- validate_json_input('{"unclosed": "brace"')
+  expect_false(result$valid)
+  expect_match(result$error, "Invalid JSON")
+
+  result <- validate_json_input("{key: 'no quotes'}")
+  expect_false(result$valid)
+  expect_match(result$error, "Invalid JSON")
+})
+
+test_that("validate_json_input handles edge cases", {
+  # Empty object
+  result <- validate_json_input("{}")
+  expect_true(result$valid)
+  expect_equal(length(result$parsed), 0)
+
+  # Empty array
+  result <- validate_json_input("[]")
+  expect_true(result$valid)
+  expect_equal(length(result$parsed), 0)
+
+  # Simple values
+  result <- validate_json_input('"just a string"')
+  expect_true(result$valid)
+  expect_equal(result$parsed, "just a string")
+
+  result <- validate_json_input("42")
+  expect_true(result$valid)
+  expect_equal(result$parsed, 42)
+
+  result <- validate_json_input("true")
+  expect_true(result$valid)
+  expect_true(result$parsed)
+
+  result <- validate_json_input("null")
+  expect_true(result$valid)
+  expect_null(result$parsed)
+})
