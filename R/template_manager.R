@@ -172,12 +172,28 @@ TemplateManager <- setRefClass("TemplateManager",
         ))
       }
 
-      # Additional security check - verify normalized path stays within template directory
-      normalized_path <- normalizePath(file.path(template_dir, file_path), mustWork = FALSE)
+      # Normalize the template directory first (this exists, so normalizePath works reliably)
       template_base <- normalizePath(template_dir, mustWork = FALSE)
 
+      # Construct full path using the normalized base for consistent path handling
+      full_path <- file.path(template_base, file_path)
+
+      # Check if file exists first - for non-existent files, the ".." check above
+      # is sufficient. normalizePath with mustWork=FALSE behaves inconsistently
+      # on Windows for non-existent files, so we check existence first.
+      if (!file.exists(full_path)) {
+        return(list(
+          status = 404,
+          headers = list("Content-Type" = "text/plain"),
+          body = "File not found"
+        ))
+      }
+
+      # For existing files, normalize and verify the path stays within template directory
+      # Using mustWork=TRUE since we've confirmed the file exists
+      normalized_path <- normalizePath(full_path, mustWork = TRUE)
+
       # On Windows, use case-insensitive comparison and normalize slashes
-      # normalizePath with mustWork=FALSE may not normalize slashes for non-existent files
       if (.Platform$OS.type == "windows") {
         norm_path <- tolower(gsub("/", "\\\\", normalized_path))
         norm_base <- tolower(gsub("/", "\\\\", template_base))
@@ -191,14 +207,6 @@ TemplateManager <- setRefClass("TemplateManager",
           status = 403,
           headers = list("Content-Type" = "text/plain"),
           body = "Access denied"
-        ))
-      }
-
-      if (!file.exists(normalized_path)) {
-        return(list(
-          status = 404,
-          headers = list("Content-Type" = "text/plain"),
-          body = "File not found"
         ))
       }
 
