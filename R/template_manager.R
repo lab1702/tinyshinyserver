@@ -161,7 +161,18 @@ TemplateManager <- setRefClass("TemplateManager",
     serve_static_file = function(file_path) {
       "Serve a static file (CSS, JS, images)"
 
-      # Security check - only allow files within template directory
+      # Security check - explicitly reject directory traversal attempts
+      # Check for ".." as a path component before normalization
+      path_parts <- strsplit(file_path, "[/\\\\]")[[1]]
+      if (".." %in% path_parts) {
+        return(list(
+          status = 403,
+          headers = list("Content-Type" = "text/plain"),
+          body = "Access denied"
+        ))
+      }
+
+      # Additional security check - verify normalized path stays within template directory
       normalized_path <- normalizePath(file.path(template_dir, file_path), mustWork = FALSE)
       template_base <- normalizePath(template_dir, mustWork = FALSE)
 
