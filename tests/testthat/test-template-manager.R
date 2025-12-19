@@ -261,7 +261,8 @@ test_that("generate_landing_page creates HTML with session info", {
   expect_match(result, "<html>")
   expect_match(result, "testapp")
   # Should contain R version info from sessionInfo()
-  expect_match(result, "R version", ignore.case = TRUE)
+  # Matches both "R version X.Y.Z" (stable) and "R Under development" (unstable)
+  expect_match(result, "R (version|Under development)", ignore.case = TRUE)
 })
 
 test_that("generate_landing_page handles empty apps list", {
