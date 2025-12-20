@@ -755,9 +755,10 @@ test_that("load_config sets default resident=FALSE for apps", {
 test_that("load_config fails for non-existent file", {
   config <- ShinyServerConfig$new()
 
+  # Don't check error message - it varies by OS and locale
+
   expect_error(
-    config$load_config("/nonexistent/path/config.json"),
-    "No such file|cannot open|not found|cannot find the path"
+    config$load_config("/nonexistent/path/config.json")
   )
 })
 
