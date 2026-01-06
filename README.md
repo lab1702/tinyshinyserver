@@ -16,6 +16,13 @@ A lightweight, WebSocket-enabled proxy server for hosting multiple Shiny applica
 
 ## Installation
 
+### From CRAN
+
+```r
+# Install from CRAN
+install.packages("tinyshinyserver")
+```
+
 ### From GitHub
 
 ```r
