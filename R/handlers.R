@@ -438,6 +438,11 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
 
   # Start app on demand if it's non-resident and not running
   app_config <- config$get_app_config(app_name)
+  if (is.null(app_config)) {
+    logger::log_warn("Rejecting WebSocket for unknown app: {app_name}", app_name = app_name)
+    ws$close()
+    return()
+  }
   if (!is.null(app_config) && !app_config$resident && !is.null(process_manager)) {
     process <- config$get_app_process(app_name)
     if (is.null(process) || !is_process_alive(process)) {

@@ -19,6 +19,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     app_connection_counts = "environment",
     active_http_requests = "environment",
     deferred_idle_stops = "environment",
+    pending_session_checks = "environment",
     app_startup_state = "environment", # Track app startup progress (starting/ready)
     management_server = "ANY",
 
@@ -30,7 +31,8 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     MAX_QUERY_LENGTH = "numeric",
     MAX_MESSAGE_SIZE = "numeric",
     ALLOWED_HTTP_METHODS = "character",
-    APP_STARTUP_TIMEOUT_SECONDS = "numeric"
+    APP_STARTUP_TIMEOUT_SECONDS = "numeric",
+    HTTP_SESSION_GRACE_SECONDS = "numeric"
   ),
   methods = list(
     initialize = function() {
@@ -43,6 +45,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       MAX_MESSAGE_SIZE <<- 1048576
       ALLOWED_HTTP_METHODS <<- c("GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS")
       APP_STARTUP_TIMEOUT_SECONDS <<- 30
+      HTTP_SESSION_GRACE_SECONDS <<- 30
 
       # Initialize runtime state
       app_processes <<- list()
@@ -51,6 +54,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       app_connection_counts <<- new.env(hash = TRUE, parent = emptyenv())
       active_http_requests <<- new.env(hash = TRUE, parent = emptyenv())
       deferred_idle_stops <<- new.env(hash = TRUE, parent = emptyenv())
+      pending_session_checks <<- new.env(hash = TRUE, parent = emptyenv())
       app_startup_state <<- new.env(hash = TRUE, parent = emptyenv())
       management_server <<- NULL
 

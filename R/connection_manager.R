@@ -170,6 +170,7 @@ ConnectionManager <- setRefClass("ConnectionManager",
     add_client_connection = function(session_id, ws, app_name, client_ip, user_agent) {
       "Add a new client WebSocket connection"
       assign(app_name, NULL, envir = config$deferred_idle_stops)
+      assign(app_name, NULL, envir = config$pending_session_checks)
 
       config$add_ws_connection(session_id, list(
         ws = ws,
@@ -242,6 +243,7 @@ ConnectionManager <- setRefClass("ConnectionManager",
       ))
     },
     begin_http_request = function(app_name) {
+      assign(app_name, NULL, envir = config$pending_session_checks)
       count <- config$active_http_requests[[app_name]] %||% 0L
       assign(app_name, count + 1L, envir = config$active_http_requests)
     },
@@ -255,7 +257,27 @@ ConnectionManager <- setRefClass("ConnectionManager",
         if (identical(config$get_app_process(app_name), pending$process)) {
           maybe_stop_idle_app(app_name)
         }
+      } else if (count == 0L) {
+        schedule_session_check(app_name)
       }
+    },
+    schedule_session_check = function(app_name) {
+      "Reclaim an HTTP-only launch after allowing time for a browser session"
+      app_config <- config$get_app_config(app_name)
+      process <- config$get_app_process(app_name)
+      if (is.null(process_manager) || is.null(app_config) || app_config$resident ||
+          is.null(process) || config$get_app_connection_count(app_name) > 0L) return(FALSE)
+      token <- new.env(parent = emptyenv())
+      assign(app_name, token, envir = config$pending_session_checks)
+      later::later(function() {
+        if (!identical(config$pending_session_checks[[app_name]], token)) return(FALSE)
+        assign(app_name, NULL, envir = config$pending_session_checks)
+        if (!identical(config$get_app_process(app_name), process) ||
+            (config$active_http_requests[[app_name]] %||% 0L) > 0L ||
+            config$get_app_connection_count(app_name) > 0L) return(FALSE)
+        maybe_stop_idle_app(app_name)
+      }, config$HTTP_SESSION_GRACE_SECONDS)
+      TRUE
     },
     maybe_stop_idle_app = function(app_name) {
       "Stop on-demand app if it has no active connections"

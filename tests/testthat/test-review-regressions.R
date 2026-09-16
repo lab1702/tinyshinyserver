@@ -1,3 +1,71 @@
+test_that("unknown WebSocket apps are rejected without retaining state", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = TRUE)))
+  cm <- ConnectionManager$new(config)
+  closed <- 0
+  for (name in paste0("unknown-", 1:10)) {
+    ws <- list(request = list(PATH_INFO = paste0("/proxy/", name, "/websocket/")),
+      close = function() closed <<- closed + 1,
+      onMessage = function(...) stop("Unknown app must not register callbacks"))
+    handle_websocket_connection(ws, config, cm)
+  }
+  expect_equal(closed, 10)
+  expect_length(config$get_all_ws_connections(), 0)
+  expect_length(ls(config$app_connection_counts), 0)
+  expect_length(ls(config$deferred_idle_stops), 0)
+  expect_length(ls(config$pending_session_checks), 0)
+})
+
+test_that("HTTP-only launches stop after a cancellable session grace period", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", port = 3001, resident = FALSE)))
+  process <- list(generation = 1)
+  stops <- 0
+  pm <- list(start_app_on_demand = function(...) {
+    config$add_app_process("app", process)
+    TRUE
+  }, stop_app_immediately = function(...) { stops <<- stops + 1; TRUE })
+  cm <- ConnectionManager$new(config, pm)
+  callbacks <- list()
+  delays <- numeric()
+  local_mocked_bindings(later = function(func, delay, ...) {
+    callbacks[[length(callbacks) + 1L]] <<- func
+    delays <<- c(delays, delay)
+  }, .package = "later")
+  local_mocked_bindings(forward_request = function(...) create_html_response("page"))
+  expect_equal(handle_proxy_request("/proxy/app/", "GET", "", list(), config, pm, cm)$status, 200)
+  expect_equal(stops, 0)
+  expect_equal(delays, 30)
+  callbacks[[1]]()
+  expect_equal(stops, 1)
+
+  cm$begin_http_request("app")
+  cm$end_http_request("app")
+  stale <- tail(callbacks, 1)[[1]]
+  cm$begin_http_request("app")
+  stale()
+  expect_equal(stops, 1)
+  cm$end_http_request("app")
+  stale <- tail(callbacks, 1)[[1]]
+  cm$add_client_connection("s", list(), "app", "127.0.0.1", "test")
+  stale()
+  expect_equal(stops, 1)
+  cm$remove_client_connection("s")
+  expect_equal(stops, 2)
+
+  cm$begin_http_request("app")
+  cm$end_http_request("app")
+  stale <- tail(callbacks, 1)[[1]]
+  config$add_app_process("app", list(generation = 2))
+  stale()
+  expect_equal(stops, 2)
+  config$config$apps[[1]]$resident <- TRUE
+  n <- length(callbacks)
+  cm$begin_http_request("app")
+  cm$end_http_request("app")
+  expect_length(callbacks, n)
+})
+
 test_that("removing a starting process allows the next on-demand launch", {
   for (removal in c("health", "cleanup", "stop")) {
     config <- ShinyServerConfig$new()
