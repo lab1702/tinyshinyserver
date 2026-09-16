@@ -5,7 +5,7 @@ fluidPage(
   sidebarLayout(
     sidebarPanel(
       h3("Inventory Controls"),
-      numericInput("items", "Number of Items:", value = 100)
+      numericInput("items", "Number of Items:", value = 100, min = 0, step = 1)
     ),
     mainPanel(
       tableOutput("inventoryTable")
