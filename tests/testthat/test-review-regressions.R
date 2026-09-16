@@ -1,3 +1,20 @@
+test_that("configuration rejects fractional and non-finite ports before allocation", {
+  config <- ShinyServerConfig$new()
+  base <- list(apps = list(list(name = "app", path = tempdir())), log_dir = tempdir(),
+    starting_port = 3001, proxy_port = 3838, management_port = 3839)
+  for (field in c("starting_port", "proxy_port", "management_port")) {
+    for (value in list(3001.5, NA_real_, NaN, Inf, -Inf, NULL, "3001", c(3001, 3002))) {
+      candidate <- base
+      candidate[field] <- list(value)
+      result <- config$validate_config(candidate)
+      expect_false(result$valid, info = field)
+      expect_match(result$error, paste0("Invalid ", field))
+    }
+  }
+  expect_true(config$validate_config(base)$valid)
+  expect_false(validate_port(3001.5)$valid)
+})
+
 test_that("a new page can connect after the last old session closes during HTTP", {
   for (reconnect in c(FALSE, TRUE)) {
     config <- ShinyServerConfig$new()

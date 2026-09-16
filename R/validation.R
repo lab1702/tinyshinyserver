@@ -167,6 +167,10 @@ validate_port <- function(port) {
     return(list(valid = FALSE, error = "Port must be a number"))
   }
 
+  if (!is.finite(port) || port != floor(port)) {
+    return(list(valid = FALSE, error = "Port must be a finite integer"))
+  }
+
   if (port < 1 || port > 65535) {
     return(list(valid = FALSE, error = "Port must be between 1 and 65535"))
   }

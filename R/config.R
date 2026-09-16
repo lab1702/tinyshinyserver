@@ -119,10 +119,12 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         }
       }
 
-      # Validate starting_port (now required)
-      if (!is.numeric(config$starting_port) || length(config$starting_port) != 1 ||
-        config$starting_port < 1 || config$starting_port > 65535) {
-        return(list(valid = FALSE, error = "Invalid starting_port: must be a number between 1 and 65535"))
+      # Validate all configured ports before using them in allocation arithmetic.
+      for (field in intersect(c("starting_port", "proxy_port", "management_port"), names(config))) {
+        port_validation <- validate_port(config[[field]])
+        if (!port_validation$valid) {
+          return(list(valid = FALSE, error = paste0("Invalid ", field, ": ", port_validation$error)))
+        }
       }
 
       # Check if there's enough port range for all apps
@@ -200,13 +202,6 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       }
 
       # Validate optional fields
-      if ("proxy_port" %in% names(config)) {
-        if (!is.numeric(config$proxy_port) || length(config$proxy_port) != 1 ||
-          config$proxy_port < 1 || config$proxy_port > 65535) {
-          return(list(valid = FALSE, error = "Invalid proxy_port"))
-        }
-      }
-
       if ("proxy_host" %in% names(config)) {
         if (!is.character(config$proxy_host) || length(config$proxy_host) != 1) {
           return(list(valid = FALSE, error = "proxy_host must be a string"))
