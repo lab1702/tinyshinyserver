@@ -1,5 +1,7 @@
 # tinyshinyserver 0.2.0
 
+* Help examples now use temporary directories and restore the working directory on exit. Probing an unused port no longer emits an expected connection warning.
+
 ## Configuration
 
 * Added per-app `appstart_timeout` to set the startup grace period before requests receive HTTP 503 if the app is not ready. The timeout is measured from app startup, defaults to 2 seconds, and supports positive fractional seconds.

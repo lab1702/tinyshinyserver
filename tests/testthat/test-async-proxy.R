@@ -1,12 +1,3 @@
-start_test_http_server <- function(call, on_ws = NULL) {
-  for (port in sample(20000:50000, 3)) {
-    server <- tryCatch(httpuv::startServer("127.0.0.1", port, list(call = call, onWSOpen = on_ws), quiet = TRUE),
-      error = function(e) NULL)
-    if (!is.null(server)) return(list(server = server, port = port, url = paste0("http://127.0.0.1:", port)))
-  }
-  skip("Loopback sockets unavailable")
-}
-
 proxy_test_config <- function(port, timeout = 2) {
   config <- ShinyServerConfig$new()
   config$config <- list(apps = list(list(name = "app", port = port, resident = TRUE, appstart_timeout = timeout)))

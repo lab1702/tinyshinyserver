@@ -342,6 +342,7 @@ test_that("restart_app stops existing process and starts new one", {
   writeLines("# placeholder", file.path(temp_app_dir, "app.R"))
 
   config <- ShinyServerConfig$new()
+  on.exit(stop_test_app_processes(config), add = TRUE)
   config$config <- list(
     apps = list(
       list(name = "app1", path = temp_app_dir, port = 3001, resident = TRUE)
@@ -478,6 +479,7 @@ test_that("start_app_on_demand attempts to start app if not running", {
   writeLines("# placeholder", file.path(temp_app_dir, "app.R"))
 
   config <- ShinyServerConfig$new()
+  on.exit(stop_test_app_processes(config), add = TRUE)
   config$config <- list(
     apps = list(
       list(name = "app1", path = temp_app_dir, port = 3001, resident = FALSE)
@@ -766,6 +768,7 @@ test_that("stop_all_apps closes WebSocket handles", {
 
 test_that("health_check removes dead process and cleans connections for resident app", {
   config <- ShinyServerConfig$new()
+  on.exit(stop_test_app_processes(config), add = TRUE)
 
   # Create temp app dir for valid path
   temp_app_dir <- file.path(tempdir(), "health_check_test1")
@@ -841,6 +844,7 @@ test_that("health_check starts missing resident app", {
   writeLines("# placeholder", file.path(temp_app_dir, "app.R"))
 
   config <- ShinyServerConfig$new()
+  on.exit(stop_test_app_processes(config), add = TRUE)
   config$config <- list(
     apps = list(
       list(name = "app1", path = temp_app_dir, port = 3001, resident = TRUE)

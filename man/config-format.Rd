@@ -91,30 +91,29 @@ but will skip 3838 and 3839 if those are the proxy and management ports.
 
 \examples{
 if (interactive()) {
-  # Example configuration file:
-  config_content <- '
-{
-  "apps": [
-    {
-      "name": "dashboard",
-      "path": "./apps/dashboard",
-      "resident": true
-    },
-    {
-      "name": "reports",
-      "path": "./apps/reports",
-      "resident": false
-    }
-  ],
-  "starting_port": 3001,
-  "proxy_port": 3838,
-  "management_port": 3839,
-  "log_dir": "./logs"
-}'
-
-  # Write to file and use
-  writeLines(config_content, "my-config.json")
-  start_tss(config = "my-config.json")
+  (function() {
+    example_dir <- tempfile("tss-example-")
+    dir.create(example_dir)
+    old_dir <- setwd(example_dir)
+    on.exit({
+      setwd(old_dir)
+      unlink(example_dir, recursive = TRUE)
+    }, add = TRUE)
+    examples_path <- system.file("examples", package = "tinyshinyserver")
+    file.copy(examples_path, ".", recursive = TRUE)
+    config_content <- '{
+      "apps": [
+        {"name": "sales", "path": "./examples/sales", "resident": true},
+        {"name": "inventory", "path": "./examples/inventory", "resident": false}
+      ],
+      "starting_port": 3001,
+      "proxy_port": 3838,
+      "management_port": 3839,
+      "log_dir": "./logs"
+    }'
+    writeLines(config_content, "my-config.json")
+    start_tss(config = "my-config.json")
+  })()
 }
 
 }

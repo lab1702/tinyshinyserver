@@ -58,10 +58,18 @@ test_that("route_management_request routes POST /api/apps/{name}/restart", {
       list(name = "myapp", path = "/path", port = 3001, resident = TRUE)
     )
   )
-  pm <- ProcessManager$new(config)
+  restarted <- NULL
+  pm <- list(
+    get_app_status = function(name) list(status = "running"),
+    restart_app = function(name) {
+      restarted <<- name
+      list(success = TRUE, message = "Restart scheduled")
+    }
+  )
 
   result <- route_management_request("/api/apps/myapp/restart", "POST", list(HTTP_X_TINYSHINYSERVER_REQUEST = "management"), config, pm, list())
 
+  expect_identical(restarted, "myapp")
   expect_equal(result$status, 200)
   expect_match(result$headers[["Content-Type"]], "application/json")
 })
@@ -398,6 +406,7 @@ test_that("handle_app_restart restarts running app", {
   writeLines("# placeholder", file.path(temp_app_dir, "app.R"))
 
   config <- ShinyServerConfig$new()
+  on.exit(stop_test_app_processes(config), add = TRUE)
   config$config <- list(
     apps = list(
       list(name = "app1", path = temp_app_dir, port = 3001, resident = TRUE)

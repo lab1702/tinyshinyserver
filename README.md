@@ -60,9 +60,9 @@ The example configuration includes a Quarto app that starts immediately. Install
 
 With the default ports, open:
 
-- [Landing page](http://localhost:3838): app links and status
-- [Management dashboard](http://localhost:3839): monitoring, restarts, and shutdown
-- [Sales app](http://localhost:3838/proxy/sales/): an individual app
+- Landing page (`http://localhost:3838`): app links and status
+- Management dashboard (`http://localhost:3839`): monitoring, restarts, and shutdown
+- Sales app (`http://localhost:3838/proxy/sales/`): an individual app
 
 `start_tss()` occupies the R console until shutdown. Click **Shutdown Server** in the management dashboard or press **Ctrl-C** in R to close connections and stop the app processes. For scripted shutdown, see [Management API](#management-api).
 

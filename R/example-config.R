@@ -27,17 +27,19 @@
 #'
 #' @examples
 #' if (interactive()) {
-#'   # Get the example configuration file path
-#'   config_file <- system.file("examples", "config.json", package = "tinyshinyserver")
-#'
-#'   # View the configuration
-#'   config_content <- readLines(config_file)
-#'   cat(config_content, sep = "\n")
-#'
-#'   # Copy examples to current directory and start server
-#'   examples_path <- system.file("examples", package = "tinyshinyserver")
-#'   file.copy(examples_path, ".", recursive = TRUE)
-#'   start_tss(config = "examples/config.json")
+#'   (function() {
+#'     example_dir <- tempfile("tss-example-")
+#'     dir.create(example_dir)
+#'     old_dir <- setwd(example_dir)
+#'     on.exit({
+#'       setwd(old_dir)
+#'       unlink(example_dir, recursive = TRUE)
+#'     }, add = TRUE)
+#'     examples_path <- system.file("examples", package = "tinyshinyserver")
+#'     file.copy(examples_path, ".", recursive = TRUE)
+#'     cat(readLines("examples/config.json"), sep = "\n")
+#'     start_tss(config = "examples/config.json")
+#'   })()
 #' }
 #'
 #' @seealso

@@ -280,7 +280,9 @@ is_port_in_use <- function(host, port) {
   tryCatch(
     {
       # Try to establish a connection to the port
-      conn <- socketConnection(host = host, port = port, timeout = 1, blocking = TRUE)
+      conn <- suppressWarnings(
+        socketConnection(host = host, port = port, timeout = 1, blocking = TRUE)
+      )
       close(conn)
       return(TRUE) # Connection succeeded = port is in use
     },

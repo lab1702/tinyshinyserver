@@ -257,9 +257,12 @@ test_that("is_valid_url rejects invalid URLs", {
 # is_port_in_use() tests
 # ============================================================================
 
-test_that("is_port_in_use returns boolean", {
-  result <- is_port_in_use("127.0.0.1", 80)
-  expect_true(is.logical(result))
+test_that("is_port_in_use detects open and closed ports without warnings", {
+  backend <- start_test_http_server(function(req) create_html_response("OK"))
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  expect_no_warning(expect_true(is_port_in_use("127.0.0.1", backend$port)))
+  httpuv::stopServer(backend$server)
+  expect_no_warning(expect_false(is_port_in_use("127.0.0.1", backend$port)))
 })
 
 # ============================================================================

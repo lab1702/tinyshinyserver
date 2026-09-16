@@ -35,12 +35,18 @@ Access points with the default ports:
 }
 \examples{
 if (interactive()) {
-  library(tinyshinyserver)
-  examples_path <- system.file("examples", package = "tinyshinyserver")
-  temp_path <- tempdir()
-  file.copy(examples_path, temp_path, recursive = TRUE)
-  setwd(temp_path)
-  start_tss(config = "examples/config.json")
+  (function() {
+    example_dir <- tempfile("tss-example-")
+    dir.create(example_dir)
+    old_dir <- setwd(example_dir)
+    on.exit({
+      setwd(old_dir)
+      unlink(example_dir, recursive = TRUE)
+    }, add = TRUE)
+    examples_path <- system.file("examples", package = "tinyshinyserver")
+    file.copy(examples_path, ".", recursive = TRUE)
+    start_tss(config = "examples/config.json")
+  })()
 }
 
 }
