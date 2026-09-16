@@ -7,14 +7,17 @@ Update from CRAN version 0.1.0 to 0.2.0.
 * Local: Ubuntu 26.04.1 LTS, x86_64-pc-linux-gnu, R 4.6.1 (2026-06-24).
 * Checked with `R CMD check --as-cran` on the source tarball.
 * BLAS/OpenMP thread limits were set to one for the check.
-* Fresh Windows, macOS, and R-devel checks have not yet been run for this
-  revision. The results below are from the local release-R check only.
+* R-hub Linux and Windows passed on the preceding revision, as reported by
+  the maintainer. macOS-arm64 reported a process-termination timing failure;
+  this revision adds a bounded wait for process exit.
+* Fresh R-hub and R-devel checks are pending for this revision. The results
+  below are from the local release-R check only.
 
 ## R CMD check results
 
 0 errors | 0 warnings | 0 notes
 
-Test results: 1375 passes, 0 failures, 0 warnings, 1 intentional skip on CRAN
+Test results: 1380 passes, 0 failures, 0 warnings, 1 intentional skip on CRAN
 (the invalid-device-path write test).
 
 ## Downstream dependencies

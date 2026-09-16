@@ -340,10 +340,31 @@ test_that("failed termination retains the process and prevents replacement", {
 
 test_that("termination reports a process that survives kill attempts", {
   kills <- 0
+  waits <- numeric()
   process <- list(is_alive = function() TRUE,
-    kill = function() { kills <<- kills + 1 }, kill_tree = function() { kills <<- kills + 1 })
+    kill = function() { kills <<- kills + 1 }, kill_tree = function() { kills <<- kills + 1 },
+    wait = function(timeout) { waits <<- c(waits, timeout) })
   expect_false(kill_process_safely(process))
   expect_equal(kills, 2)
+  expect_equal(waits, 1000)
+})
+
+test_that("termination waits for exit after kill signals are delivered", {
+  alive <- TRUE
+  events <- character()
+  process <- list(
+    is_alive = function() alive,
+    kill_tree = function() { events <<- c(events, "tree") },
+    kill = function() { events <<- c(events, "kill") },
+    wait = function(timeout) {
+      expect_equal(timeout, 1000)
+      events <<- c(events, "wait")
+      alive <<- FALSE
+    }
+  )
+  expect_true(kill_process_safely(process))
+  expect_false(alive)
+  expect_identical(events, c("tree", "kill", "wait"))
 })
 
 test_that("restart delays yield and are cancelled by stop and shutdown", {

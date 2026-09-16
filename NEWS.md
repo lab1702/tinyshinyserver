@@ -1,5 +1,7 @@
 # tinyshinyserver 0.2.0
 
+* Process shutdown now waits briefly for exit after sending termination signals, avoiding premature failure reports on macOS.
+
 * Help examples now use temporary directories and restore the working directory on exit. Probing an unused port no longer emits an expected connection warning.
 
 ## Configuration
