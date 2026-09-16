@@ -48,7 +48,7 @@ ConnectionManager <- setRefClass("ConnectionManager",
       # Handle messages from backend to client
       backend_ws$onMessage(function(event) {
         logger::log_debug("Backend->Client message for {app_name}: {data}",
-          app_name = app_name, data = substring(event$data, 1, 100)
+          app_name = app_name, data = if (is.raw(event$data)) paste(length(event$data), "binary bytes") else substring(event$data, 1, 100)
         )
         conn <- config$get_backend_connection(session_id)
         if (is.null(conn) || !identical(conn$ws, backend_ws)) return()
@@ -116,7 +116,8 @@ ConnectionManager <- setRefClass("ConnectionManager",
       }
       validated_message <- message_validation$sanitized
 
-      logger::log_debug("Client message: {message}", message = substring(validated_message, 1, 100))
+      logger::log_debug("Client message: {message}",
+        message = if (is.raw(validated_message)) paste(length(validated_message), "binary bytes") else substring(validated_message, 1, 100))
 
       # Update last activity timestamp
       conn_info <- config$get_ws_connection(session_id)
@@ -150,7 +151,7 @@ ConnectionManager <- setRefClass("ConnectionManager",
                   current_pending <- tail(current_pending, config$MAX_PENDING_MESSAGES - 1)
                   logger::log_warn("Pending queue full, dropped oldest messages for app {app_name}", app_name = app_name)
                 }
-                backend_conn$pending_messages <- append(current_pending, validated_message)
+                backend_conn$pending_messages <- append(current_pending, list(validated_message))
                 config$add_backend_connection(session_id, backend_conn)
                 logger::log_debug("Queued message for pending connection ({count}/{max}) for app {app_name}",
                   count = length(current_pending) + 1, max = config$MAX_PENDING_MESSAGES, app_name = app_name

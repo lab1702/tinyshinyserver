@@ -13,6 +13,39 @@ proxy_test_config <- function(port, timeout = 2) {
   config
 }
 
+test_that("proxy preserves binary WebSocket frames before and after backend readiness", {
+  observed <- list()
+  backend <- start_test_http_server(function(req) handle_health_check(), on_ws = function(ws) {
+    ws$onMessage(function(binary, message) {
+      observed[[length(observed) + 1L]] <<- list(binary = binary, message = message)
+      ws$send(message)
+    })
+  })
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  config <- proxy_test_config(backend$port)
+  cm <- ConnectionManager$new(config)
+  proxy <- start_test_http_server(function(req) handle_health_check(),
+    on_ws = function(ws) handle_websocket_connection(ws, config, cm))
+  on.exit(httpuv::stopServer(proxy$server), add = TRUE)
+  client <- websocket::WebSocket$new(paste0(sub("^http", "ws", proxy$url), "/proxy/app/websocket/"))
+  on.exit(client$close(), add = TRUE)
+  payloads <- list(as.raw(c(0, 1, 127, 128, 255)), raw(), "text after binary")
+  received <- list()
+  result <- promises::promise(function(resolve, reject) {
+    client$onOpen(function(event) client$send(payloads[[1]]))
+    client$onMessage(function(event) {
+      received[[length(received) + 1L]] <<- event$data
+      if (length(received) == length(payloads)) resolve(received)
+      else client$send(payloads[[length(received) + 1L]])
+    })
+    client$onClose(function(event) reject(simpleError("Proxy closed before all frames arrived")))
+    client$onError(function(event) reject(simpleError(event$message)))
+  })
+  expect_identical(await_response(result), payloads)
+  expect_identical(lapply(observed, `[[`, "message"), payloads)
+  expect_identical(vapply(observed, `[[`, logical(1), "binary"), c(TRUE, TRUE, FALSE))
+})
+
 test_that("proxy cookies belong only to the current browser request", {
   backend <- start_test_http_server(function(req) {
     headers <- list("Content-Type" = "text/plain")

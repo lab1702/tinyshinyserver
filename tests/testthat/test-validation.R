@@ -453,6 +453,14 @@ test_that("validate_ws_message accepts valid messages", {
   expect_true(result$valid)
 })
 
+test_that("validate_ws_message bounds binary messages by byte length", {
+  payload <- as.raw(c(0, 1, 128, 255))
+  expect_identical(validate_ws_message(payload, 4)$sanitized, payload)
+  expect_true(validate_ws_message(raw(), 0)$valid)
+  expect_false(validate_ws_message(payload, 3)$valid)
+  expect_equal(validate_ws_message(payload, 3)$error, "Message too large")
+})
+
 test_that("validate_ws_message rejects null", {
   result <- validate_ws_message(NULL)
   expect_false(result$valid)
