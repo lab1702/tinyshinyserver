@@ -127,11 +127,10 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
 
       # Check if there's enough port range for all apps
       num_apps <- length(config$apps)
-      reserved_ports <- c()
-      if ("proxy_port" %in% names(config)) reserved_ports <- c(reserved_ports, config$proxy_port)
-      if ("management_port" %in% names(config)) reserved_ports <- c(reserved_ports, config$management_port)
+      reserved_ports <- unique(c(config$proxy_port %||% 3838, config$management_port %||% 3839))
+      reserved_ports <- reserved_ports[reserved_ports >= config$starting_port & reserved_ports <= 65535]
 
-      # Calculate maximum port that might be needed
+      # Only reserved ports in the remaining allocation range consume capacity.
       max_possible_port <- config$starting_port + num_apps - 1 + length(reserved_ports)
       if (max_possible_port > 65535) {
         return(list(valid = FALSE, error = sprintf(

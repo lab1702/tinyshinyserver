@@ -149,6 +149,10 @@ handle_static_file <- function(path, template_manager) {
 handle_proxy_request <- function(path, method, query_string, req, config, process_manager = NULL, connection_manager = NULL) {
   "Handle proxy requests to Shiny apps"
 
+  if (!startsWith(path, "/proxy/") || startsWith(path, "/proxy//")) {
+    return(create_error_response("Invalid proxy path", 400))
+  }
+
   path_parts <- strsplit(path, "/")[[1]]
   path_parts <- path_parts[path_parts != ""] # Remove empty parts
 

@@ -1,3 +1,29 @@
+test_that("malformed proxy prefixes never start apps or form backend URLs", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = FALSE)))
+  pm <- list(start_app_on_demand = function(...) stop("must not start"))
+  local_mocked_bindings(forward_request = function(...) stop("must not forward"))
+  for (path in c("/proxy//app/path", "/proxy///app/path", "//proxy/app/path")) {
+    expect_equal(handle_proxy_request(path, "GET", "", list(), config, pm)$status, 400)
+  }
+})
+
+test_that("port-range capacity excludes only reserved ports in that range", {
+  config <- ShinyServerConfig$new()
+  conf <- list(apps = list(list(name = "app", path = tempdir())), log_dir = tempdir(),
+    starting_port = 65535, proxy_port = 3838, management_port = 3839)
+  expect_true(config$validate_config(conf)$valid)
+  config$config <- conf
+  local_mocked_bindings(is_port_in_use = function(...) FALSE)
+  config$assign_app_ports()
+  expect_equal(config$config$apps[[1]]$port, 65535)
+  conf$management_port <- 65535
+  expect_false(config$validate_config(conf)$valid)
+  conf$starting_port <- 65534
+  conf$proxy_port <- 65535
+  expect_true(config$validate_config(conf)$valid)
+})
+
 test_that("WebSocket-only startup is reclaimed if the client never retries", {
   config <- ShinyServerConfig$new()
   config$config <- list(apps = list(list(name = "app", resident = FALSE,
