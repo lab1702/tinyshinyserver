@@ -574,7 +574,7 @@ test_that("route_http_request routes proxy requests correctly", {
     )
   )
   template_manager <- create_mock_template_manager()
-  connection_manager <- create_mock_connection_manager()
+  connection_manager <- ConnectionManager$new(config)
 
   req <- list(process_manager = NULL, connection_manager = connection_manager)
 

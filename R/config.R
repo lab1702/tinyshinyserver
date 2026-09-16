@@ -17,6 +17,8 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     # Validation: validate_connection_count_consistency() detects/fixes corruption
     # Benchmark: tests/benchmark_connection_count.R shows performance gains
     app_connection_counts = "environment",
+    active_http_requests = "environment",
+    deferred_idle_stops = "environment",
     app_startup_state = "environment", # Track app startup progress (starting/ready)
     management_server = "ANY",
 
@@ -47,6 +49,8 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       ws_connections <<- list()
       backend_connections <<- list()
       app_connection_counts <<- new.env(hash = TRUE, parent = emptyenv())
+      active_http_requests <<- new.env(hash = TRUE, parent = emptyenv())
+      deferred_idle_stops <<- new.env(hash = TRUE, parent = emptyenv())
       app_startup_state <<- new.env(hash = TRUE, parent = emptyenv())
       management_server <<- NULL
 

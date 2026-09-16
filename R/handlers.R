@@ -169,6 +169,13 @@ handle_proxy_request <- function(path, method, query_string, req, config, proces
     return(create_error_response("App not found", 404))
   }
 
+  # Canonicalize the mount URL before starting an app or forwarding a body.
+  if (identical(path, paste0("/proxy/", app_name))) {
+    query <- query_string %||% ""
+    if (query != "" && !startsWith(query, "?")) query <- paste0("?", query)
+    return(list(status = 308L, headers = list(Location = paste0(path, "/", query)), body = ""))
+  }
+
   # Start app on demand if it's non-resident and not running
   if (!app_config$resident && !is.null(process_manager)) {
     process <- config$get_app_process(app_name)
@@ -191,8 +198,25 @@ handle_proxy_request <- function(path, method, query_string, req, config, proces
     target_url <- paste0(target_url, if (startsWith(query_string, "?")) "" else "?", query_string)
   }
 
-  # Forward the request
-  return(forward_request(method, target_url, req, app_name, config))
+  # Keep the backend alive until this request finishes, including failures.
+  manager <- connection_manager %||% create_connection_manager(config, process_manager)
+  manager$begin_http_request(app_name)
+  released <- FALSE
+  release <- function() {
+    if (!released) {
+      released <<- TRUE
+      manager$end_http_request(app_name)
+    }
+  }
+  tryCatch({
+    response <- forward_request(method, target_url, req, app_name, config)
+    if (promises::is.promise(response)) return(promises::finally(response, release))
+    release()
+    response
+  }, error = function(e) {
+    release()
+    stop(e)
+  })
 }
 
 forward_request <- function(method, target_url, req, app_name, config) {

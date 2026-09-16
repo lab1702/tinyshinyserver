@@ -339,3 +339,64 @@ test_that("a refused backend WebSocket disconnects the browser and clears tracki
   expect_length(config$get_all_backend_connections(), 0)
   expect_equal(config$get_app_connection_count("app"), 0)
 })
+
+test_that("bare app URLs redirect with query and method preserved", {
+  methods <- character()
+  backend <- start_test_http_server(function(req) {
+    methods <<- c(methods, req$REQUEST_METHOD)
+    list(status = 200L, headers = list("Content-Type" = "text/plain"),
+      body = paste(req$PATH_INFO, req$QUERY_STRING, rawToChar(req$rook.input$read())))
+  })
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  config <- proxy_test_config(backend$port)
+  proxy <- start_test_http_server(function(req) handle_http_request(req, config, NULL, NULL))
+  on.exit(httpuv::stopServer(proxy$server), add = TRUE)
+  url <- paste0(proxy$url, "/proxy/app?x=a%2Fb&y=2")
+  response <- await_response(fetch_backend_async(url, curl::new_handle(followlocation = FALSE)))
+  expect_equal(response$status_code, 308)
+  expect_equal(curl::parse_headers_list(response$headers)$location, "/proxy/app/?x=a%2Fb&y=2")
+  expect_length(methods, 0)
+  response <- await_response(fetch_backend_async(url, curl::new_handle(followlocation = TRUE, postfields = "payload")))
+  expect_equal(response$status_code, 200)
+  expect_equal(methods, "POST")
+  expect_equal(rawToChar(response$content), "/ ?x=a%2Fb&y=2 payload")
+})
+
+test_that("idle shutdown waits for every concurrent HTTP response", {
+  completions <- list()
+  backend <- start_test_http_server(function(req) promises::promise(function(resolve, reject) {
+    completions[[req$PATH_INFO]] <<- resolve
+  }))
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  config <- proxy_test_config(backend$port)
+  config$config$apps[[1]]$resident <- FALSE
+  alive <- TRUE
+  kills <- 0
+  config$add_app_process("app", list(is_alive = function() alive, kill_tree = function() {
+    kills <<- kills + 1
+    alive <<- FALSE
+    httpuv::stopServer(backend$server)
+  }))
+  pm <- ProcessManager$new(config)
+  cm <- ConnectionManager$new(config, pm)
+  proxy <- start_test_http_server(function(req) handle_http_request(req, config, NULL, cm, pm))
+  on.exit(httpuv::stopServer(proxy$server), add = TRUE)
+  cm$add_client_connection("s", list(close = function() NULL), "app", "127.0.0.1", "test")
+  first <- fetch_backend_async(paste0(proxy$url, "/proxy/app/first"), curl::new_handle())
+  second <- fetch_backend_async(paste0(proxy$url, "/proxy/app/second"), curl::new_handle())
+  deadline <- Sys.time() + 5
+  while (length(completions) < 2 && Sys.time() < deadline) later::run_now(.01)
+  expect_length(completions, 2)
+  cm$remove_client_connection("s")
+  expect_equal(kills, 0)
+  completions[["/second"]](create_html_response("second"))
+  expect_equal(await_response(second)$status_code, 200)
+  expect_equal(kills, 0)
+  expect_equal(config$active_http_requests$app, 1)
+  completions[["/first"]](create_html_response("first"))
+  response <- await_response(first)
+  expect_equal(response$status_code, 200)
+  expect_match(rawToChar(response$content), "first")
+  expect_equal(kills, 1)
+  expect_equal(config$active_http_requests$app, 0)
+})

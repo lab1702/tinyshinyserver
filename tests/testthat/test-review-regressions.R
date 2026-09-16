@@ -206,3 +206,49 @@ test_that("backend-local redirects preserve paths queries and fragments", {
   }
   expect_equal(rewrite("/next?foo=1#section"), "/proxy/app/next?foo=1#section")
 })
+
+test_that("HTTP accounting releases rejected and synchronous responses", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", port = 3001, resident = TRUE)))
+  cm <- ConnectionManager$new(config)
+  failure <- FALSE
+  local_mocked_bindings(forward_request = function(...) {
+    if (failure) return(promises::promise(function(resolve, reject) reject(simpleError("failure"))))
+    create_503_response("starting")
+  })
+  expect_equal(handle_proxy_request("/proxy/app/", "GET", "", list(), config, connection_manager = cm)$status, 503)
+  expect_equal(config$active_http_requests$app, 0)
+  failure <- TRUE
+  expect_error(await_response(handle_proxy_request("/proxy/app/", "GET", "", list(), config, connection_manager = cm)), "failure")
+  expect_equal(config$active_http_requests$app, 0)
+})
+
+test_that("deferred shutdown cannot stop reconnected or replacement apps", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = FALSE)))
+  old <- list(generation = 1)
+  replacement <- list(generation = 2)
+  config$add_app_process("app", old)
+  stops <- 0
+  cm <- ConnectionManager$new(config, list(stop_app_immediately = function(app_name) stops <<- stops + 1))
+  cm$begin_http_request("app")
+  cm$maybe_stop_idle_app("app")
+  cm$add_client_connection("s", list(), "app", "127.0.0.1", "test")
+  cm$end_http_request("app")
+  expect_equal(stops, 0)
+  cm$begin_http_request("app")
+  cm$remove_client_connection("s")
+  config$add_app_process("app", replacement)
+  cm$end_http_request("app")
+  expect_equal(stops, 0)
+  expect_null(config$deferred_idle_stops$app)
+})
+
+test_that("root redirect does not launch a dormant app", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = FALSE)))
+  manager <- list(start_app_on_demand = function(...) stop("must not start"))
+  response <- handle_proxy_request("/proxy/app", "GET", "x=1", list(), config, manager)
+  expect_equal(response$status, 308)
+  expect_equal(response$headers$Location, "/proxy/app/?x=1")
+})

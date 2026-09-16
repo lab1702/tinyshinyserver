@@ -1,5 +1,7 @@
 # tinyshinyserver 0.2.0
 
+* Preserved in-flight HTTP requests during on-demand shutdown and redirected bare app URLs to their trailing-slash form.
+
 * Fixed child-process cleanup, failed WebSocket connection cleanup, health-check failure isolation, and additional backend-local redirect forms.
 
 * Preserved proxy query strings and directory paths, forwarded WebSocket authentication headers, kept streaming sessions active, retained processes after failed termination, and made restart delays asynchronous.

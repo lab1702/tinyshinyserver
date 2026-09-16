@@ -214,7 +214,7 @@ The server supports two application life cycle modes controlled by the `resident
 
 #### **On-Demand Apps** (`"resident": false`, default)
 - **Start on Access**: Only started when a user first accesses the app (HTTP request or WebSocket connection)
-- **Immediate Shutdown**: Stopped immediately when the last connection closes
+- **Immediate Shutdown**: Stopped when the last WebSocket connection closes, after any in-flight HTTP requests finish
 - **Resource Efficient**: Only consumes resources when actively being used
 - **Startup Delay**: Users may experience a brief delay on first access while the app starts
 - **Best For**: Infrequently used apps, development/testing environments, resource-constrained servers

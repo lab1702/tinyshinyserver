@@ -168,6 +168,7 @@ ConnectionManager <- setRefClass("ConnectionManager",
     },
     add_client_connection = function(session_id, ws, app_name, client_ip, user_agent) {
       "Add a new client WebSocket connection"
+      assign(app_name, NULL, envir = config$deferred_idle_stops)
 
       config$add_ws_connection(session_id, list(
         ws = ws,
@@ -239,6 +240,22 @@ ConnectionManager <- setRefClass("ConnectionManager",
         connections_by_app = app_connections
       ))
     },
+    begin_http_request = function(app_name) {
+      count <- config$active_http_requests[[app_name]] %||% 0L
+      assign(app_name, count + 1L, envir = config$active_http_requests)
+    },
+    end_http_request = function(app_name) {
+      count <- max(0L, (config$active_http_requests[[app_name]] %||% 0L) - 1L)
+      assign(app_name, count, envir = config$active_http_requests)
+      pending <- config$deferred_idle_stops[[app_name]]
+      if (count == 0L && !is.null(pending)) {
+        assign(app_name, NULL, envir = config$deferred_idle_stops)
+        # Completion of an old request must never stop a replacement process.
+        if (identical(config$get_app_process(app_name), pending$process)) {
+          maybe_stop_idle_app(app_name)
+        }
+      }
+    },
     maybe_stop_idle_app = function(app_name) {
       "Stop on-demand app if it has no active connections"
 
@@ -257,6 +274,11 @@ ConnectionManager <- setRefClass("ConnectionManager",
       if (ws_count == 0 && !is.null(process_manager)) {
         app_config <- config$get_app_config(app_name)
         if (!is.null(app_config) && !app_config$resident) {
+          if ((config$active_http_requests[[app_name]] %||% 0L) > 0L) {
+            assign(app_name, list(process = config$get_app_process(app_name)), envir = config$deferred_idle_stops)
+            return(TRUE)
+          }
+          assign(app_name, NULL, envir = config$deferred_idle_stops)
           logger::log_info("No WebSocket connections remain for non-resident app {app_name}, stopping immediately", app_name = app_name)
           process_manager$stop_app_immediately(app_name)
         }
