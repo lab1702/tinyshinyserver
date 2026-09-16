@@ -1,6 +1,9 @@
-# tinyshinyserver 0.1.0
+# tinyshinyserver 0.2.0
 
 * Added per-app `appstart_timeout` to configure the startup grace period (default: 2 seconds).
+
+# tinyshinyserver 0.1.0
+
 * Initial CRAN submission
 * Core features:
   - Multi-application Shiny proxy server
