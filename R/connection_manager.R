@@ -27,7 +27,12 @@ ConnectionManager <- setRefClass("ConnectionManager",
       )
 
       # Create WebSocket connection to backend
-      backend_ws <- websocket::WebSocket$new(backend_url)
+      headers <- list()
+      for (name in c("Cookie", "Authorization")) {
+        value <- client_ws$request[[paste0("HTTP_", toupper(name))]]
+        if (!is.null(value)) headers[[name]] <- value
+      }
+      backend_ws <- websocket::WebSocket$new(backend_url, headers = headers)
 
       # Store connection info with ready state and timestamp
       config$add_backend_connection(session_id, list(
@@ -45,6 +50,14 @@ ConnectionManager <- setRefClass("ConnectionManager",
         logger::log_debug("Backend->Client message for {app_name}: {data}",
           app_name = app_name, data = substring(event$data, 1, 100)
         )
+        conn <- config$get_backend_connection(session_id)
+        if (is.null(conn) || !identical(conn$ws, backend_ws)) return()
+        conn$last_activity <- Sys.time()
+        config$add_backend_connection(session_id, conn)
+        client <- config$get_ws_connection(session_id)
+        if (is.null(client)) return()
+        client$last_activity <- conn$last_activity
+        config$add_ws_connection(session_id, client)
         client_ws$send(event$data)
       })
 

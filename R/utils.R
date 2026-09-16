@@ -184,12 +184,11 @@ kill_process_safely <- function(process, force = FALSE) {
         process$kill_tree()
       } else {
         process$kill()
-        Sys.sleep(1)
         if (is_process_alive(process)) {
           process$kill_tree()
         }
       }
-      return(TRUE)
+      return(!is_process_alive(process))
     },
     error = function(e) {
       logger::log_error("Error terminating process: {error}", error = e$message)

@@ -295,7 +295,7 @@
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    alert("App " + appName + " restarted successfully");
+                    alert(data.message || "Restart scheduled for app " + appName);
                 } else {
                     alert("Failed to restart " + appName + ": " + data.message);
                 }

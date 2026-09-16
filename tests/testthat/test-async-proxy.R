@@ -268,3 +268,53 @@ test_that("a real backend WebSocket close reaches the browser", {
   expect_length(config$get_all_ws_connections(), 0)
   expect_length(config$get_all_backend_connections(), 0)
 })
+
+test_that("HTTP routing preserves query delimiters and directory paths", {
+  backend <- start_test_http_server(function(req) {
+    if (req$PATH_INFO == "/dir") {
+      return(list(status = 301L, headers = list(Location = "/dir/"), body = "redirect"))
+    }
+    list(status = 200L, headers = list("Content-Type" = "application/json"),
+      body = jsonlite::toJSON(list(path = req$PATH_INFO, query = req$QUERY_STRING), auto_unbox = TRUE))
+  })
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  config <- proxy_test_config(backend$port)
+  proxy <- start_test_http_server(function(req) handle_http_request(req, config, NULL, NULL))
+  on.exit(httpuv::stopServer(proxy$server), add = TRUE)
+  for (path in c("/?foo=bar&encoded=a%3Fb", "/dir/", "/dir//file?x=1")) {
+    response <- await_response(fetch_backend_async(paste0(proxy$url, "/proxy/app", path),
+      curl::new_handle(followlocation = FALSE)))
+    expect_equal(response$status_code, 200)
+    body <- jsonlite::fromJSON(rawToChar(response$content))
+    expect_equal(paste0(body$path, body$query), path)
+  }
+})
+
+test_that("WebSocket proxy forwards each browser's own authentication headers", {
+  backend <- start_test_http_server(function(req) create_html_response("ok"), on_ws = function(ws) {
+    ws$onMessage(function(binary, message) {
+      ws$send(jsonlite::toJSON(list(cookie = ws$request$HTTP_COOKIE %||% "NONE",
+        auth = ws$request$HTTP_AUTHORIZATION %||% "NONE"), auto_unbox = TRUE))
+    })
+  })
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  config <- proxy_test_config(backend$port)
+  cm <- ConnectionManager$new(config)
+  proxy <- start_test_http_server(function(req) create_html_response("ok"),
+    on_ws = function(ws) handle_websocket_connection(ws, config, cm))
+  on.exit(httpuv::stopServer(proxy$server), add = TRUE)
+  for (user in c("alice", "bob", "NONE")) {
+    headers <- if (user == "NONE") list() else list(Cookie = paste0("session=", user), Authorization = paste("Bearer", user))
+    ws <- websocket::WebSocket$new(paste0(sub("http:", "ws:", proxy$url), "/proxy/app/websocket/"), headers = headers)
+    on.exit(ws$close(), add = TRUE)
+    response <- promises::promise(function(resolve, reject) {
+      ws$onOpen(function(event) ws$send("init"))
+      ws$onMessage(function(event) resolve(jsonlite::fromJSON(event$data)))
+      ws$onError(function(event) reject(simpleError(event$message)))
+    })
+    actual <- await_response(response)
+    expect_equal(actual$cookie, headers$Cookie %||% "NONE")
+    expect_equal(actual$auth, headers$Authorization %||% "NONE")
+    ws$close()
+  }
+})

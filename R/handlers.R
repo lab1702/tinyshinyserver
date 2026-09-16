@@ -181,18 +181,14 @@ handle_proxy_request <- function(path, method, query_string, req, config, proces
     }
   }
 
-  # Build target URL
-  if (length(path_parts) > 2) {
-    target_path <- paste0("/", paste(path_parts[3:length(path_parts)], collapse = "/"))
-  } else {
-    target_path <- "/"
-  }
-
+  # Remove only the routing prefix, preserving the backend path verbatim.
+  target_path <- substring(path, nchar(paste0("/proxy/", app_name)) + 1L)
+  if (target_path == "") target_path <- "/"
   target_url <- paste0("http://127.0.0.1:", app_config$port, target_path)
 
-  # Add query string if present
+  # httpuv includes the leading question mark in QUERY_STRING.
   if (!is.null(query_string) && query_string != "") {
-    target_url <- paste0(target_url, "?", query_string)
+    target_url <- paste0(target_url, if (startsWith(query_string, "?")) "" else "?", query_string)
   }
 
   # Forward the request

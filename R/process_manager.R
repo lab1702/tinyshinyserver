@@ -4,16 +4,19 @@
 # Process Manager Class
 ProcessManager <- setRefClass("ProcessManager",
   fields = list(
-    config = "ANY"
+    config = "ANY",
+    pending_restarts = "environment"
   ),
   methods = list(
     initialize = function(server_config) {
       config <<- server_config
+      pending_restarts <<- new.env(parent = emptyenv())
     },
     start_app = function(app_config) {
       "Start a Shiny application process"
 
       app_name <- app_config$name
+      assign(app_name, NULL, envir = pending_restarts)
       app_port <- app_config$port
       app_path <- normalizePath(app_config$path, mustWork = FALSE)
 
@@ -247,6 +250,29 @@ ProcessManager <- setRefClass("ProcessManager",
 
       return(success)
     },
+    schedule_restart = function(app_config) {
+      "Schedule a replacement without blocking other applications"
+      app_name <- app_config$name
+      token <- new.env(parent = emptyenv())
+      assign(app_name, token, envir = pending_restarts)
+      restart <- function() {
+        if (!identical(pending_restarts[[app_name]], token)) return(FALSE)
+        assign(app_name, NULL, envir = pending_restarts)
+        process <- config$get_app_process(app_name)
+        if (!is.null(process) && is_process_alive(process)) return(FALSE)
+        tryCatch(start_app(app_config), error = function(e) {
+          logger::log_error("Failed to restart app {app_name}: {error}", app_name = app_name, error = e$message)
+          FALSE
+        })
+      }
+      delay <- config$config$restart_delay %||% 5
+      if (delay <= 0) {
+        success <- isTRUE(restart())
+        return(list(success = success, message = if (success) paste("App", app_name, "restarted successfully") else paste("Failed to restart app", app_name)))
+      }
+      later::later(restart, delay)
+      list(success = TRUE, message = paste("Restart scheduled for app", app_name))
+    },
     restart_app = function(app_name) {
       "Restart a specific application"
 
@@ -265,17 +291,12 @@ ProcessManager <- setRefClass("ProcessManager",
           # Stop existing process
           process <- config$get_app_process(app_name)
           if (!is.null(process) && is_process_alive(process)) {
-            kill_process_safely(process)
+            if (!kill_process_safely(process)) {
+              return(list(success = FALSE, message = paste("Failed to stop app", app_name)))
+            }
           }
           config$remove_app_process(app_name)
-
-          # Wait a moment before restarting
-          Sys.sleep(config$config$restart_delay %||% 5)
-
-          # Start new process
-          start_app(app_config)
-
-          return(list(success = TRUE, message = paste("App", app_name, "restarted successfully")))
+          return(schedule_restart(app_config))
         },
         error = function(e) {
           logger::log_error("Failed to restart app {app_name}: {error}", app_name = app_name, error = e$message)
@@ -287,13 +308,13 @@ ProcessManager <- setRefClass("ProcessManager",
       "Stop a specific application"
 
       logger::log_info("Stopping app: {app_name}", app_name = app_name)
+      assign(app_name, NULL, envir = pending_restarts)
 
       process <- config$get_app_process(app_name)
       if (!is.null(process)) {
         success <- kill_process_safely(process)
-        config$remove_app_process(app_name)
-
         if (success) {
+          config$remove_app_process(app_name)
           logger::log_info("Successfully stopped app {app_name}", app_name = app_name)
           return(list(success = TRUE, message = paste("App", app_name, "stopped successfully")))
         } else {
@@ -327,6 +348,7 @@ ProcessManager <- setRefClass("ProcessManager",
 
       for (app_config in config$config$apps) {
         app_name <- app_config$name
+        if (!is.null(pending_restarts[[app_name]])) next
         process <- config$get_app_process(app_name)
 
         if (!is.null(process)) {
@@ -341,8 +363,7 @@ ProcessManager <- setRefClass("ProcessManager",
 
             # Only restart if it's a resident app
             if (app_config$resident) {
-              Sys.sleep(config$config$restart_delay %||% 5)
-              start_app(app_config)
+              schedule_restart(app_config)
             } else {
               logger::log_info("Non-resident app {app_name} died, will start on next request", app_name = app_name)
             }
@@ -580,6 +601,7 @@ ProcessManager <- setRefClass("ProcessManager",
     },
     stop_all_apps = function() {
       "Stop all running applications and clean up all connections"
+      pending_restarts <<- new.env(parent = emptyenv())
 
       logger::log_info("Stopping all applications...")
 
