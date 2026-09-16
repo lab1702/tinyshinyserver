@@ -1,3 +1,33 @@
+test_that("restarted on-demand apps get an idle grace that reconnects cancel", {
+  for (reconnect in c(FALSE, TRUE)) {
+    config <- ShinyServerConfig$new()
+    config$config <- list(apps = list(list(name = "app", resident = FALSE,
+      appstart_timeout = 60)), restart_delay = 0)
+    pm <- ProcessManager$new(config)
+    alive <- TRUE
+    process <- list(is_alive = function() alive, kill_tree = function() alive <<- FALSE)
+    assign("start_app", function(app_config) {
+      config$add_app_process("app", process)
+      TRUE
+    }, envir = pm)
+    callback <- NULL
+    delay <- NULL
+    local_mocked_bindings(later = function(func, delay, ...) {
+      callback <<- func
+      # Store outside the formal argument's scope.
+      delays <<- c(delays, delay)
+    }, .package = "later")
+    delays <- numeric()
+    expect_true(pm$restart_app("app")$success)
+    expect_equal(delays, 90)
+    expect_true(alive)
+    if (reconnect) ConnectionManager$new(config, pm)$add_client_connection(
+      "s", list(), "app", "127.0.0.1", "test")
+    callback()
+    expect_identical(alive, reconnect)
+  }
+})
+
 test_that("unknown WebSocket apps are rejected without retaining state", {
   config <- ShinyServerConfig$new()
   config$config <- list(apps = list(list(name = "app", resident = TRUE)))

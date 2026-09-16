@@ -261,7 +261,7 @@ ConnectionManager <- setRefClass("ConnectionManager",
         schedule_session_check(app_name)
       }
     },
-    schedule_session_check = function(app_name) {
+    schedule_session_check = function(app_name, grace_seconds = config$HTTP_SESSION_GRACE_SECONDS) {
       "Reclaim an HTTP-only launch after allowing time for a browser session"
       app_config <- config$get_app_config(app_name)
       process <- config$get_app_process(app_name)
@@ -276,7 +276,7 @@ ConnectionManager <- setRefClass("ConnectionManager",
             (config$active_http_requests[[app_name]] %||% 0L) > 0L ||
             config$get_app_connection_count(app_name) > 0L) return(FALSE)
         maybe_stop_idle_app(app_name)
-      }, config$HTTP_SESSION_GRACE_SECONDS)
+      }, grace_seconds)
       TRUE
     },
     maybe_stop_idle_app = function(app_name) {

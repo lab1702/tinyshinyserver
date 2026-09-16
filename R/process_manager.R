@@ -260,7 +260,16 @@ ProcessManager <- setRefClass("ProcessManager",
         assign(app_name, NULL, envir = pending_restarts)
         process <- config$get_app_process(app_name)
         if (!is.null(process) && is_process_alive(process)) return(FALSE)
-        tryCatch(start_app(app_config), error = function(e) {
+        tryCatch({
+          success <- start_app(app_config)
+          if (isTRUE(success) && !app_config$resident) {
+            # A restart disconnects users; reclaim the replacement if none return.
+            # Allow startup time as well as the normal browser-session grace.
+            create_connection_manager(config, .self)$schedule_session_check(app_name,
+              (app_config$appstart_timeout %||% 2) + config$HTTP_SESSION_GRACE_SECONDS)
+          }
+          success
+        }, error = function(e) {
           logger::log_error("Failed to restart app {app_name}: {error}", app_name = app_name, error = e$message)
           FALSE
         })
