@@ -1,3 +1,36 @@
+test_that("WebSocket-only startup is reclaimed if the client never retries", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = FALSE,
+    appstart_timeout = 60)))
+  alive <- TRUE
+  process <- list(is_alive = function() alive, kill_tree = function() alive <<- FALSE)
+  pm <- ProcessManager$new(config)
+  assign("start_app", function(app_config) {
+    config$add_app_process("app", process)
+    config$set_app_starting("app")
+    TRUE
+  }, envir = pm)
+  cm <- ConnectionManager$new(config, pm)
+  callback <- NULL
+  delays <- numeric()
+  local_mocked_bindings(later = function(func, delay, ...) {
+    callback <<- func
+    delays <<- c(delays, delay)
+  }, .package = "later")
+  closed <- FALSE
+  ws <- list(request = list(PATH_INFO = "/proxy/app/websocket/"),
+    send = function(...) NULL, close = function() closed <<- TRUE)
+  handle_websocket_connection(ws, config, cm, pm)
+  expect_true(closed)
+  expect_true(alive)
+  expect_equal(delays, 90)
+  expect_equal(config$get_app_connection_count("app"), 0)
+  config$set_app_ready("app")
+  callback()
+  expect_false(alive)
+  expect_null(config$get_app_process("app"))
+})
+
 test_that("restarted on-demand apps get an idle grace that reconnects cancel", {
   for (reconnect in c(FALSE, TRUE)) {
     config <- ShinyServerConfig$new()

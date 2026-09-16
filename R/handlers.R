@@ -459,6 +459,8 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
   # Check if app is still starting up
   if (config$is_app_starting(app_name)) {
     logger::log_info("App {app_name} is starting, closing WebSocket with retry message", app_name = app_name)
+    connection_manager$schedule_session_check(app_name,
+      (app_config$appstart_timeout %||% 2) + config$HTTP_SESSION_GRACE_SECONDS)
     ws$send(jsonlite::toJSON(list(
       error = "App is starting",
       message = "The application is starting up. Please refresh the page in a few seconds.",
