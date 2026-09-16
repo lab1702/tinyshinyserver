@@ -140,8 +140,8 @@ On-demand apps stop when their last WebSocket connection closes, provided no HTT
 | `proxy_port` | Port for the proxy server | 3838 |
 | `proxy_host` | Host interface for proxy server (localhost, 127.0.0.1, 0.0.0.0, ::1, ::) | "127.0.0.1" |
 | `management_port` | Port for the management interface | 3839 |
-| `restart_delay` | Seconds to wait before restarting failed apps | 5 |
-| `health_check_interval` | Seconds between health checks | 10 |
+| `restart_delay` | Non-negative finite seconds to wait before restarting failed apps | 5 |
+| `health_check_interval` | Positive finite seconds between health checks | 10 |
 
 ## Network access and authentication
 

@@ -233,6 +233,13 @@ ProcessManager <- setRefClass("ProcessManager",
         return(TRUE)
       }
 
+      # Retain ownership of a crashed process until its workers are terminated.
+      if (!is.null(process)) {
+        if (!kill_process_safely(process)) return(FALSE)
+        cleanup_app_connections(app_name)
+        config$remove_app_process(app_name)
+      }
+
       # Check if app is currently starting
       if (config$is_app_starting(app_name)) {
         logger::log_debug("App {app_name} is already starting, not starting again", app_name = app_name)

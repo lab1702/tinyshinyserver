@@ -51,8 +51,8 @@ not allow comments.
   \item{\code{proxy_port}}{Port for the main proxy server (default: 3838).}
   \item{\code{proxy_host}}{Host interface to bind to (default: "127.0.0.1").}
   \item{\code{management_port}}{Port for the management interface (default: 3839).}
-  \item{\code{restart_delay}}{Seconds to wait before restarting failed apps (default: 5).}
-  \item{\code{health_check_interval}}{Seconds between health checks (default: 10).}
+  \item{\code{restart_delay}}{Non-negative finite seconds to wait before restarting failed apps (default: 5).}
+  \item{\code{health_check_interval}}{Positive finite seconds between health checks (default: 10).}
 }
 }
 

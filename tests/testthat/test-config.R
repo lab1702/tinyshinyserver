@@ -967,6 +967,30 @@ test_that("validate_port_assignments detects conflict with management port", {
   )
 })
 
+test_that("scheduler settings reject invalid delays before startup", {
+  config <- ShinyServerConfig$new()
+  base <- list(apps = list(list(name = "app", path = "/tmp/app")),
+    log_dir = "/tmp/logs", starting_port = 5001)
+  for (field in c("restart_delay", "health_check_interval")) {
+    for (value in list(-1, Inf, -Inf, NA_real_, NaN, "10", TRUE, NULL, numeric(), c(1, 2))) {
+      candidate <- base
+      candidate[field] <- list(value)
+      result <- config$validate_config(candidate)
+      expect_false(result$valid, info = field)
+      expect_match(result$error, field)
+    }
+    for (value in c(0.25, 5, 10)) {
+      candidate <- base
+      candidate[[field]] <- value
+      expect_true(config$validate_config(candidate)$valid, info = field)
+    }
+  }
+  base$restart_delay <- 0
+  expect_true(config$validate_config(base)$valid)
+  base$health_check_interval <- 0
+  expect_false(config$validate_config(base)$valid)
+})
+
 test_that("appstart_timeout validates positive finite seconds", {
   config <- ShinyServerConfig$new()
   data <- list(

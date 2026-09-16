@@ -31,14 +31,14 @@ test_that("crash cleanup terminates workers after their parent has exited", {
     assign("start_app", function(...) TRUE, envir = pm)
     switch(action, health = pm$health_check(), cleanup = pm$cleanup_dead_processes(),
       readiness = pm$check_app_ready("app", 3001, parent), restart = pm$restart_app("app"),
-      shutdown = pm$stop_all_apps())
+      shutdown = pm$stop_all_apps(), on_demand = pm$start_app_on_demand("app"))
     expect_null(config$get_app_process("app"), info = action)
     Sys.sleep(.1)
     size <- file.info(marker)$size
     Sys.sleep(.15)
     expect_equal(file.info(marker)$size, size, info = action)
   }
-  for (action in c("health", "cleanup", "readiness", "restart", "shutdown")) check_cleanup(action)
+  for (action in c("health", "cleanup", "readiness", "restart", "shutdown", "on_demand")) check_cleanup(action)
 })
 
 test_that("crash cleanup retains ownership if descendant cleanup fails", {
@@ -54,6 +54,9 @@ test_that("crash cleanup retains ownership if descendant cleanup fails", {
   expect_false(pm$check_app_ready("app", 3001, process))
   expect_identical(config$get_app_process("app"), process)
   expect_false(pm$restart_app("app")$success)
+  expect_identical(config$get_app_process("app"), process)
+  assign("start_app", function(...) stop("must retain failed process"), envir = pm)
+  expect_false(pm$start_app_on_demand("app"))
   expect_identical(config$get_app_process("app"), process)
 })
 

@@ -127,6 +127,17 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         }
       }
 
+      # Validate timer values before they reach the event-loop scheduler.
+      for (field in intersect(c("restart_delay", "health_check_interval"), names(config))) {
+        value <- config[[field]]
+        positive <- field == "health_check_interval"
+        if (!is.numeric(value) || length(value) != 1 || !is.finite(value) ||
+          value < 0 || (positive && value == 0)) {
+          bound <- if (positive) "positive" else "non-negative"
+          return(list(valid = FALSE, error = paste(field, "must be a single", bound, "finite number of seconds")))
+        }
+      }
+
       # Check if there's enough port range for all apps
       num_apps <- length(config$apps)
       reserved_ports <- unique(c(config$proxy_port %||% 3838, config$management_port %||% 3839))
