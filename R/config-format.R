@@ -11,7 +11,8 @@
 #'     {
 #'       "name": "app-name",
 #'       "path": "./path/to/app",
-#'       "resident": true|false
+#'       "resident": true|false,
+#'       "appstart_timeout": 2
 #'     }
 #'   ],
 #'   "starting_port": 3001,
@@ -46,6 +47,7 @@
 #'   \item{\code{name}}{Unique identifier used in URLs and logs. Required.}
 #'   \item{\code{path}}{File system path to the app directory. Required.}
 #'   \item{\code{resident}}{Boolean. If \code{true}, app runs continuously. If \code{false} (default), app starts on-demand.}
+#'   \item{\code{appstart_timeout}}{Positive, finite number of seconds from app startup to wait for readiness before returning HTTP 503 (default: 2). Fractional seconds are supported.}
 #' }
 #'
 #' @section Host Configuration:

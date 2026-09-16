@@ -217,9 +217,10 @@ forward_request <- function(method, target_url, req, app_name, config) {
         if (startup_state$state == "starting") {
           elapsed <- startup_state$elapsed
 
-          # Allow up to 2 seconds of startup time before returning 503
+          # Allow the configured startup grace period before returning 503
           # Poll briefly if within grace period
-          grace_period <- 2
+          app_config <- config$get_app_config(app_name)
+          grace_period <- app_config$appstart_timeout %||% 2
           if (elapsed < grace_period) {
             wait_remaining <- grace_period - elapsed
             start_wait <- Sys.time()

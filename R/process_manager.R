@@ -158,8 +158,13 @@ ProcessManager <- setRefClass("ProcessManager",
       logger::log_info("App {app_name} process started, checking readiness asynchronously", app_name = app_name)
       return(TRUE)
     },
-    check_app_ready = function(app_name, app_port, process, attempt = 1, max_attempts = 10) {
+    check_app_ready = function(app_name, app_port, process, attempt = 1, max_attempts = NULL) {
       "Check if app is ready to accept connections (async, non-blocking)"
+
+      if (is.null(max_attempts)) {
+        app_config <- config$get_app_config(app_name)
+        max_attempts <- max(10, ceiling((app_config$appstart_timeout %||% 2) / 0.5))
+      }
 
       # Check if process is still alive
       if (!is_process_alive(process)) {

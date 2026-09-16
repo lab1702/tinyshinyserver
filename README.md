@@ -254,6 +254,7 @@ The server supports two application life cycle modes controlled by the `resident
 | `apps[].name` | Application identifier for URLs | Required |
 | `apps[].path` | Relative path to app directory | Required |
 | `apps[].resident` | Keep app running continuously (true) or start on-demand (false) | false |
+| `apps[].appstart_timeout` | Seconds from app startup to wait for readiness before returning HTTP 503; positive, finite number (fractional seconds supported) | 2 |
 | `starting_port` | Starting port for auto-assignment | Required |
 | `log_dir` | Directory for log files | Required |
 | `proxy_port` | Port for the proxy server | 3838 |

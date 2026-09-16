@@ -12,7 +12,8 @@
     {
       "name": "reports",
       "path": "./examples/reports",
-      "resident": false
+      "resident": false,
+      "appstart_timeout": 2
     },
     {
       "name": "dashboard",

@@ -85,6 +85,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
 
       # Set default values for optional app fields
       for (i in seq_along(config$apps)) {
+        config$apps[[i]]$appstart_timeout <<- config$apps[[i]]$appstart_timeout %||% 2
         if (!"resident" %in% names(config$apps[[i]])) {
           config$apps[[i]]$resident <<- FALSE
         }
@@ -149,6 +150,13 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         for (field in app_required) {
           if (!field %in% names(app)) {
             return(list(valid = FALSE, error = paste("App", i, "missing field:", field)))
+          }
+        }
+
+        if ("appstart_timeout" %in% names(app)) {
+          if (!is.numeric(app$appstart_timeout) || length(app$appstart_timeout) != 1 ||
+            !is.finite(app$appstart_timeout) || app$appstart_timeout <= 0) {
+            return(list(valid = FALSE, error = paste("App", i, "appstart_timeout must be a single positive finite number of seconds")))
           }
         }
 
@@ -600,7 +608,9 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         elapsed <- as.numeric(difftime(Sys.time(), startup_info$started_at,
           units = "secs"
         ))
-        if (elapsed > APP_STARTUP_TIMEOUT_SECONDS) {
+        app_config <- get_app_config(app_name)
+        startup_timeout <- max(APP_STARTUP_TIMEOUT_SECONDS, app_config$appstart_timeout %||% 0)
+        if (elapsed > startup_timeout) {
           # Startup timed out, remove state
           rm(list = app_name, envir = app_startup_state)
           return(list(state = "timeout", elapsed = elapsed))

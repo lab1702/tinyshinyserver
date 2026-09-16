@@ -988,3 +988,27 @@ test_that("check_app_ready returns FALSE when max attempts exceeded", {
   # Startup state should be cleared (timed out)
   expect_false(config$is_app_starting("app1"))
 })
+
+test_that("readiness checks continue for apps with a longer appstart_timeout", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app1", appstart_timeout = 10)))
+  config$set_app_starting("app1")
+  pm <- ProcessManager$new(config)
+  scheduled <- 0
+  local_mocked_bindings(
+    is_process_alive = function(process) TRUE,
+    is_port_in_use = function(host, port) FALSE
+  )
+  local_mocked_bindings(
+    later = function(func, delay, ...) { scheduled <<- scheduled + 1 },
+    .package = "later"
+  )
+
+  expect_false(pm$check_app_ready("app1", 3001, list(), attempt = 10))
+  expect_true(config$is_app_starting("app1"))
+  expect_equal(scheduled, 1)
+
+  expect_false(pm$check_app_ready("app1", 3001, list(), attempt = 20))
+  expect_false(config$is_app_starting("app1"))
+  expect_equal(scheduled, 1)
+})
