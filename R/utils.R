@@ -174,14 +174,14 @@ is_process_alive <- function(process) {
 kill_process_safely <- function(process, force = FALSE) {
   "Safely terminate a process"
 
-  if (is.null(process) || !is_process_alive(process)) {
+  if (is.null(process)) {
     return(TRUE)
   }
 
   tryCatch(
     {
-      # Discover and terminate descendants while their parent still exists.
-      process$kill_tree()
+      # processx tracks descendants by inherited markers, even after parent exit.
+      if (is.function(process$kill_tree)) process$kill_tree()
       if (!force && is_process_alive(process)) process$kill()
       return(!is_process_alive(process))
     },

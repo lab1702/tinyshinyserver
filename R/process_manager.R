@@ -175,6 +175,7 @@ ProcessManager <- setRefClass("ProcessManager",
       # Check if process is still alive
       if (!is_process_alive(process)) {
         logger::log_error("App {app_name} process died during startup", app_name = app_name)
+        if (!kill_process_safely(process)) return(FALSE)
         config$set_app_ready(app_name) # Remove startup state
         config$remove_app_process(app_name)
         return(FALSE)
@@ -299,7 +300,7 @@ ProcessManager <- setRefClass("ProcessManager",
 
           # Stop existing process
           process <- config$get_app_process(app_name)
-          if (!is.null(process) && is_process_alive(process)) {
+          if (!is.null(process)) {
             if (!kill_process_safely(process)) {
               return(list(success = FALSE, message = paste("Failed to stop app", app_name)))
             }
@@ -364,6 +365,7 @@ ProcessManager <- setRefClass("ProcessManager",
           if (!is.null(process)) {
             if (!is_process_alive(process)) {
               logger::log_error("App {app_name} died, restarting", app_name = app_name)
+              if (!kill_process_safely(process)) next
 
               # Clean up connections for this app
               cleanup_app_connections(app_name)
@@ -537,6 +539,7 @@ ProcessManager <- setRefClass("ProcessManager",
 
             if (!is_process_alive(process)) {
               logger::log_info("Cleaning dead process for app {app_name}", app_name = app_name)
+              if (!kill_process_safely(process)) next
               config$remove_app_process(app_name)
               processes_cleaned <- processes_cleaned + 1
 

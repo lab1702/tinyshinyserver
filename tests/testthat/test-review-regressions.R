@@ -1,3 +1,62 @@
+test_that("crash cleanup terminates workers after their parent has exited", {
+  check_cleanup <- function(action) {
+    marker <- tempfile()
+    pid_file <- tempfile()
+    parent <- callr::r_bg(function(marker, pid_file) {
+      child <- callr::r_bg(function(marker) {
+        repeat {
+          cat("tick\n", file = marker, append = TRUE)
+          Sys.sleep(.02)
+        }
+      }, args = list(marker = marker), supervise = FALSE)
+      writeLines(as.character(child$get_pid()), pid_file)
+      Sys.sleep(30)
+    }, args = list(marker = marker, pid_file = pid_file))
+    on.exit({
+      parent$kill_tree()
+      if (file.exists(pid_file)) try(tools::pskill(as.integer(readLines(pid_file))), silent = TRUE)
+      unlink(c(marker, pid_file))
+    }, add = TRUE)
+    deadline <- Sys.time() + 5
+    while ((!file.exists(marker) || !file.exists(pid_file)) && Sys.time() < deadline) Sys.sleep(.02)
+    expect_true(file.exists(marker), info = action)
+    parent$kill()
+    parent$wait()
+    expect_false(parent$is_alive())
+    config <- ShinyServerConfig$new()
+    config$config <- list(apps = list(list(name = "app", resident = FALSE)), restart_delay = 0)
+    config$add_app_process("app", parent)
+    config$set_app_starting("app")
+    pm <- ProcessManager$new(config)
+    assign("start_app", function(...) TRUE, envir = pm)
+    switch(action, health = pm$health_check(), cleanup = pm$cleanup_dead_processes(),
+      readiness = pm$check_app_ready("app", 3001, parent), restart = pm$restart_app("app"),
+      shutdown = pm$stop_all_apps())
+    expect_null(config$get_app_process("app"), info = action)
+    Sys.sleep(.1)
+    size <- file.info(marker)$size
+    Sys.sleep(.15)
+    expect_equal(file.info(marker)$size, size, info = action)
+  }
+  for (action in c("health", "cleanup", "readiness", "restart", "shutdown")) check_cleanup(action)
+})
+
+test_that("crash cleanup retains ownership if descendant cleanup fails", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = FALSE)))
+  process <- list(is_alive = function() FALSE, kill_tree = function() stop("cleanup failed"))
+  config$add_app_process("app", process)
+  pm <- ProcessManager$new(config)
+  pm$health_check()
+  expect_identical(config$get_app_process("app"), process)
+  expect_equal(pm$cleanup_dead_processes(), 0)
+  expect_identical(config$get_app_process("app"), process)
+  expect_false(pm$check_app_ready("app", 3001, process))
+  expect_identical(config$get_app_process("app"), process)
+  expect_false(pm$restart_app("app")$success)
+  expect_identical(config$get_app_process("app"), process)
+})
+
 test_that("configuration rejects fractional and non-finite ports before allocation", {
   config <- ShinyServerConfig$new()
   base <- list(apps = list(list(name = "app", path = tempdir())), log_dir = tempdir(),
