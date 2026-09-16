@@ -32,11 +32,9 @@ resource cleanup.
 
 \section{Getting started}{
 
-1. Install the package: \code{devtools::install(".")} or similar
-2. Load the package: \code{library(tinyshinyserver)}
-3. Copy examples: \code{file.copy(system.file("examples", package = "tinyshinyserver"), ".", recursive = TRUE)}
-4. Start server: \code{start_tss(config = "examples/config.json")}
-5. Access via browser: \verb{http://localhost:3838}
+See \code{\link{example-config}} for copying and running the included apps
+and their prerequisites. Use \code{\link{start_tss}} to launch the server and
+\code{\link{config-format}} to configure your own apps.
 }
 
 \section{Package resources}{

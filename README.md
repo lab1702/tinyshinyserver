@@ -8,11 +8,7 @@
 
 A lightweight, WebSocket-enabled proxy server for hosting multiple Shiny applications with automatic health monitoring, session management, and resource cleanup.
 
-**🎯 Perfect for:**
-- Hosting multiple Shiny apps behind a single server
-- Development environments with multiple projects
-- Small-scale production deployments
-- R Markdown and Quarto dashboard hosting
+Use it to host Shiny apps, interactive R Markdown documents, and Quarto dashboards behind one proxy. Apps can stay running or start on demand. For deployments beyond localhost, see [Network access and authentication](#network-access-and-authentication).
 
 ## Installation
 
@@ -30,9 +26,9 @@ install.packages("tinyshinyserver")
 remotes::install_github("lab1702/tinyshinyserver")
 ```
 
-### From Source
+### From source
 
-```r
+```bash
 # Clone and install locally
 git clone https://github.com/lab1702/tinyshinyserver.git
 cd tinyshinyserver
@@ -45,80 +41,43 @@ Rscript -e "devtools::install('.')"
 - **Pandoc** (for R Markdown apps)
 - **Quarto CLI** (optional, for Quarto dashboards)
 
-The package automatically installs required R dependencies:
+Required R dependencies are installed with the package. The bundled reports and Quarto dashboard also need the example packages installed below; Pandoc and the Quarto CLI must be available separately.
 
-**Core:** shiny, callr, jsonlite, later, curl, promises, digest, httpuv, websocket, openssl
-**Async:** future
-**Docs:** rmarkdown, quarto
-**Utils:** logger
+## Quick start
 
-**Optional (for examples):** DT, plotly, dplyr, flexdashboard
-
-## 🚀 Quick Start
-
-### 1. Load
+Run these commands in R from the directory where you want to keep the examples:
 
 ```r
-# Load the package
+install.packages(c("DT", "plotly", "dplyr", "flexdashboard"))
 library(tinyshinyserver)
-```
 
-### 2. Get Example Apps
-
-```r
-# Copy included example apps to your directory
 examples_path <- system.file("examples", package = "tinyshinyserver")
 file.copy(examples_path, ".", recursive = TRUE)
-```
-
-### 3. Start the Server
-
-```r
-# Start with the example configuration
 start_tss(config = "examples/config.json")
 ```
 
-### 4. Access Your Server
+The example configuration includes a Quarto app that starts immediately. Install the Quarto CLI before using the full configuration, or use the sales-only configuration below to try a standard Shiny app.
 
-🌐 **Main Interface:** http://localhost:3838  
-⚙️ **Management Dashboard:** http://localhost:3839  
-📱 **Individual Apps:** http://localhost:3838/proxy/{app_name}/
+With the default ports, open:
 
-### 5. Get Help
+- [Landing page](http://localhost:3838): app links and status
+- [Management dashboard](http://localhost:3839): monitoring, restarts, and shutdown
+- [Sales app](http://localhost:3838/proxy/sales/): an individual app
 
-```r
-# Package overview and getting started
-?tinyshinyserver
-
-# Main function help
-?start_tss
-
-# Configuration format reference
-?config-format
-```
+`start_tss()` occupies the R console until shutdown. Click **Shutdown Server** in the management dashboard or press **Ctrl-C** in R to close connections and stop the app processes. For scripted shutdown, see [Management API](#management-api).
 
 ## Features
 
-- **Multi-App Hosting**: Host multiple Shiny applications on different ports behind a single proxy
-- **Resident & On-Demand Apps**: Choose between always-running apps for immediate access or on-demand apps that start when accessed and stop immediately when unused
-- **WebSocket Support**: Full WebSocket proxy with session affinity for real-time Shiny apps
-- **Real-time Status Updates**: Landing page shows live app status and connection counts with auto-refresh
-- **Management Interface**: Professional web-based dashboard for monitoring and controlling all applications
-- **Real-time Monitoring**: Live connection tracking with IP addresses and user agents
-- **Individual App Control**: Restart specific applications without affecting others
-- **Health Monitoring**: Automatic health checks with app restart on failure
-- **Memory Management**: Built-in connection cleanup and resource management
-- **Startup Reliability**: Intelligent port availability checking with retry logic for slow-starting applications
-- **Graceful Shutdown**: Multiple shutdown options including web-based controls
-- **Dark Mode Support**: Automatic theme detection for better user experience
-- **R Markdown Support**: Native support for interactive R Markdown documents with `runtime: shiny`
-- **Quarto Support**: Full support for interactive Quarto dashboards with `server: shiny`
-- **Binary Asset Support**: Handles images, fonts, and other binary files correctly
-- **Comprehensive Logging**: Structured logging with per-app log files
+- Host multiple apps behind one HTTP and WebSocket proxy, with a separate R process for each app.
+- Choose resident or on-demand apps to balance startup delay and resource use.
+- Monitor app status and WebSocket connections, restart individual apps, and shut down from a web dashboard.
+- Automatically restart failed resident processes and clean up stale connections.
+- Serve standard Shiny apps, interactive R Markdown documents, and Quarto dashboards.
+- Capture server logs and each app's output and errors.
 
-## 📋 Configuration
+## Configuration
 
-The server uses a JSON configuration file. Here's a minimal example:
+The server reads a JSON configuration file. After copying the examples, save this sales-only configuration as `config.json` in your working directory and run `start_tss()`:
 
 ```json
 {
@@ -137,19 +96,11 @@ The server uses a JSON configuration file. Here's a minimal example:
 }
 ```
 
-📖 **See `?config-format` for complete configuration reference**
+`apps`, `starting_port`, and `log_dir` are required. Other server settings have defaults. Relative app paths and `log_dir` are resolved from the R working directory (`getwd()`), **not from the configuration file's directory**. Absolute paths are also supported.
 
-### 🛑 Stopping the Server
+JSON does not allow comments. See `help("config-format")` for the complete reference.
 
-**Recommended**: Use the management interface at http://localhost:3839 and click "Shutdown Server".
-
-**Alternative methods:**
-- Press `Ctrl-C` in the R console
-- API call: `curl -X POST -H "X-TinyShinyServer-Request: management" http://localhost:3839/api/shutdown`
-
-✅ **Graceful shutdown** closes all connections and cleans up resources.
-
-## 📦 Included Examples
+### Included examples
 
 The package includes four example applications:
 
@@ -160,100 +111,28 @@ The package includes four example applications:
 | **reports** | R Markdown | Flexdashboard with `runtime: shiny` |
 | **dashboard** | Quarto | Modern dashboard with `server: shiny` |
 
-Example configuration (from `examples/config.json`):
+The bundled [example configuration](inst/examples/config.json) keeps `sales` and `dashboard` resident; `inventory` and `reports` start on demand. In the source repository, the apps are under `inst/examples/`; the quick start copies them to `examples/`.
 
-```json
-{
-  "apps": [
-    {
-      "name": "sales",
-      "path": "./examples/sales",
-      "resident": true
-    },
-    {
-      "name": "inventory", 
-      "path": "./examples/inventory"
-    },
-    {
-      "name": "reports",
-      "path": "./examples/reports",
-      "resident": false
-    },
-    {
-      "name": "dashboard",
-      "path": "./examples/dashboard",
-      "resident": true
-    }
-  ],
-  "starting_port": 3001,
-  "proxy_port": 3838,
-  "management_port": 3839,
-  "log_dir": "./logs"
-}
-```
+### App ports and lifecycle
 
-### ⚡ Auto Port Assignment
+Apps receive ports in configuration order, starting from `starting_port`. Allocation skips the proxy port, management port, and ports already in use. With the example settings and no conflicts, the four apps receive ports 3001–3004. Users access apps through `/proxy/{app_name}/` on the proxy port.
 
-Apps are automatically assigned ports starting from `starting_port`:
-- `sales` → port 3001  
-- `inventory` → port 3002  
-- `reports` → port 3003  
-- `dashboard` → port 3004
+| Mode | Starts | Stops | Use when |
+|------|--------|-------|----------|
+| Resident (`"resident": true`) | At server startup; restarted after a process failure | At server shutdown or restart | Immediate access matters |
+| On-demand (`"resident": false`, default) | On the first HTTP request or WebSocket connection | When unused, as described below | Saving resources matters more than startup delay |
 
-The system skips reserved ports (`proxy_port`, `management_port`) automatically.
+On-demand apps stop when their last WebSocket connection closes, provided no HTTP requests remain. If requests are in flight, shutdown waits for them to finish and allows 30 seconds for a new page to establish its WebSocket session. Visits that never open a WebSocket session allow 30 seconds without HTTP activity before shutdown. Failed on-demand apps start again on the next request.
 
-### 🔄 Resident vs On-Demand Apps
+`appstart_timeout` controls how long a request waits for startup readiness (default: 2 seconds, measured from app startup). If the app is still starting, the proxy returns HTTP 503. Increase this value for slow-starting apps; fractional seconds are supported.
 
-The server supports two application life cycle modes controlled by the `resident` configuration option:
-
-#### **Resident Apps** (`"resident": true`)
-- **Always Running**: Started when the server starts and keep running continuously
-- **Immediate Response**: No startup delay when users access the app
-- **Higher Resource Usage**: Consumes memory and CPU even when unused
-- **Best For**: Frequently accessed apps, apps with long startup times, production apps requiring immediate availability
-
-#### **On-Demand Apps** (`"resident": false`, default)
-- **Start on Access**: Only started when a user first accesses the app (HTTP request or WebSocket connection)
-- **Immediate Shutdown**: Stopped when the last WebSocket connection closes if no HTTP requests remain. If requests are in flight, shutdown waits for them to finish and allows 30 seconds for a new page to establish its WebSocket session
-- **HTTP-Only Visits**: If no WebSocket session opens, stopped after 30 seconds without HTTP activity, allowing the browser time to establish a session
-- **Resource Efficient**: Only consumes resources when actively being used
-- **Startup Delay**: Users may experience a brief delay on first access while the app starts
-- **Best For**: Infrequently used apps, development/testing environments, resource-constrained servers
-
-#### **Status Indicators**
-- **Resident apps**: Show as "running" (green) or "stopped" (red) in the management interface
-- **On-demand apps**: Show as "dormant" (blue) when stopped normally, "running" (green) when active
-
-**Example Configuration:**
-```json
-{
-  "apps": [
-    {
-      "name": "critical-dashboard",
-      "path": "./apps/dashboard",
-      "resident": true  // Always running for immediate access
-    },
-    {
-      "name": "occasional-report",
-      "path": "./apps/reports",
-      "resident": false  // Starts only when needed
-    },
-    {
-      "name": "dev-prototype",
-      "path": "./apps/prototype"
-      // "resident" defaults to false
-    }
-  ]
-}
-```
-
-### Configuration Options
+### Configuration options
 
 | Option | Description | Default |
 |--------|-------------|---------|
 | `apps` | Array of Shiny applications to host | Required |
-| `apps[].name` | Application identifier for URLs | Required |
-| `apps[].path` | Relative path to app directory | Required |
+| `apps[].name` | Unique URL identifier: 1–50 ASCII letters, digits, underscores, or hyphens | Required |
+| `apps[].path` | App directory; relative to the R working directory, or absolute | Required |
 | `apps[].resident` | Keep app running continuously (true) or start on-demand (false) | false |
 | `apps[].appstart_timeout` | Seconds from app startup to wait for readiness before returning HTTP 503; positive, finite number (fractional seconds supported) | 2 |
 | `starting_port` | Starting port for auto-assignment | Required |
@@ -264,114 +143,66 @@ The server supports two application life cycle modes controlled by the `resident
 | `restart_delay` | Seconds to wait before restarting failed apps | 5 |
 | `health_check_interval` | Seconds between health checks | 10 |
 
-### Network Configuration
+## Network access and authentication
 
-The `proxy_host` option controls which network interface the proxy server binds to:
+`proxy_host` controls the proxy's listening interface. The management server and backend apps always bind to `127.0.0.1`.
 
-- `"localhost"` or `"127.0.0.1"` - Binds to localhost only (default, most secure)
-- `"0.0.0.0"` - Binds to all network interfaces (allows external access)
-- `"::1"` - IPv6 localhost
-- `"::"` - All IPv6 interfaces
+| `proxy_host` | Access |
+|--------------|--------|
+| `"127.0.0.1"` (default) or `"localhost"` | Local machine |
+| `"0.0.0.0"` | All IPv4 interfaces |
+| `"::1"` | IPv6 localhost |
+| `"::"` | All IPv6 interfaces |
 
-⚠️ **Security Note**: Using `"0.0.0.0"` makes the server accessible from external networks. Only use this if you understand the security implications and have proper firewall rules in place.
+The server is intended for development and internal use. It does not provide built-in authentication or TLS. For external access, put an authenticated HTTPS reverse proxy in front of it and restrict direct access with firewall rules.
 
-### SSL and Authentication with Caddy
+### Caddy example
 
-For production deployments requiring SSL/TLS and authentication, [Caddy Server](https://caddyserver.com/) provides a simple solution:
+Keep `proxy_host` set to `"127.0.0.1"` when running Caddy on the same machine. Replace the domains, usernames, and hash placeholders below. Generate each password hash with `caddy hash-password`; Caddy's [`basic_auth` directive](https://caddyserver.com/docs/caddyfile/directives/basic_auth) requires hashed passwords.
 
 ```caddyfile
-# Caddyfile
 myapp.example.com {
-    reverse_proxy localhost:3838
-    basicauth {
-        username password_hash
+    reverse_proxy 127.0.0.1:3838
+    basic_auth {
+        username REPLACE_WITH_PASSWORD_HASH
     }
 }
 
 manage.myapp.example.com {
-    reverse_proxy localhost:3839
-    basicauth {
-        admin admin_password_hash
+    reverse_proxy 127.0.0.1:3839
+    basic_auth {
+        admin REPLACE_WITH_ADMIN_PASSWORD_HASH
     }
 }
 ```
 
-This configuration automatically handles SSL certificates via Let's Encrypt and adds HTTP basic authentication.
+Include the management site only if remote administration is needed. Keep cross-origin CORS access disabled on its reverse proxy; see [Management API](#management-api) for the required request header.
 
-**Important**: When using Caddy, keep `proxy_host` set to `"localhost"` or `"127.0.0.1"` in your `config.json` to ensure the server only accepts connections from Caddy, not directly from external clients.
+## Monitoring and management
 
-## Landing Page
+Both web pages refresh status every 5 seconds and follow your system's light or dark theme.
 
-The landing page at **http://localhost:3838** provides an overview of all hosted applications with real-time status information.
+| Page | Default URL | Capabilities |
+|------|-------------|--------------|
+| Landing page | http://localhost:3838 | App links, status, connection counts, and R environment details |
+| Management dashboard | http://localhost:3839 | App modes, process IDs, ports, paths, connection details, restarts, and server shutdown |
 
-### Features
+App status is **running**, **dormant** (an unused on-demand app), **stopped**, or **crashed**. Running and dormant apps can be opened from the landing page; opening a dormant app starts it. Stopped or crashed tiles are disabled, and all tiles are disabled when the server is unreachable.
 
-#### **Real-time Status Display**
-- **Live Status Badges**: Visual indicators showing if each app is running, dormant, stopped, or crashed
-- **Connection Counts**: Real-time display of active connections per application
-- **Auto-refresh**: Status updates automatically every 5 seconds
-- **Color-coded Indicators**: Green for running, blue for dormant, red for stopped, yellow for crashed apps
-- **Connection Status**: Shows server connectivity with automatic timeout detection
+The management dashboard shows active WebSocket connections, including client IP addresses, user agents, connection times, and last activity. Restart controls are available for running, stopped, and crashed apps. Dormant apps start on access. Restarting an app disconnects its users.
 
-#### **Application Access**
-- **Smart Clickable Tiles**: App accessibility based on status
-  - **Running apps**: Immediately clickable ("Click to open [app name]")
-  - **Dormant apps**: Clickable for on-demand starting ("Click to start and open [app name]")
-  - **Stopped/Crashed apps**: Disabled with helpful tooltips explaining next steps
-  - **Server down**: All tiles disabled when server is unreachable
-- **Visual Feedback**: Disabled apps are dimmed with "not-allowed" cursor
-- **Clean Interface**: Modern, responsive design that works on all devices
-- **Dark Mode Support**: Automatically adapts to your system's theme preference
+### Proxy endpoints
 
-#### **Server Information**
-- **System Details**: Display of R version, platform, and server configuration
-- **Session Info**: Technical details about the running R environment
+These read-only endpoints are served on the proxy port:
 
-The landing page uses the same status API as the management interface, ensuring consistency between all monitoring views.
-
-## Management Interface
-
-The management interface provides a professional web-based dashboard for monitoring and controlling your Shiny server.
-
-### Accessing the Management Interface
-
-Visit **http://localhost:3839** to access the management dashboard.
-
-🔒 **Security**: The management interface is restricted to localhost only for security.
-
-### Features
-
-#### **System Overview**
-- Total applications count
-- Running applications count  
-- Active connections count
-- Real-time auto-refresh (every 5 seconds)
-
-#### **Application Management**
-- **Enhanced Status Monitoring**: See if each app is running, dormant, stopped, or crashed
-- **App Type Display**: Shows whether apps are "Resident" (always-on) or "On-Demand"
-- **Connection Counts**: View active connections per application
-- **Process Information**: See process IDs and ports for each app
-- **Smart Restart Controls**: 
-  - **Running/Stopped/Crashed apps**: Show restart button
-  - **Dormant apps**: No restart button (start automatically on access)
-  - **Helpful messages**: "This app will start automatically when accessed"
-- **Resource Details**: Monitor app paths and configuration
-
-#### **Connection Tracking**
-- **Real-time Connections**: See all active WebSocket connections
-- **Client Information**: IP addresses and user agents
-- **Session Details**: Connection timestamps, duration, and last activity
-- **Browser Detection**: Identify client browsers and operating systems
-
-#### **Server Controls**
-- **Graceful Shutdown**: Shutdown the entire server with confirmation dialog
-- **Safety Features**: Multiple confirmation prompts prevent accidental shutdowns
-- **Clean Termination**: Properly closes all connections and terminates all processes
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Returns `{"status": "healthy"}` while the proxy is responding; does not check each app |
+| `/api/apps` | GET | Application status used by the landing page |
 
 ### Management API
 
-The management interface exposes a REST API for programmatic access. POST requests require the `X-TinyShinyServer-Request: management` header to prevent cross-origin browser requests. The dashboard sends this header automatically. Cross-origin CORS access must remain disabled on any reverse proxy:
+These endpoints are served on the management port (default: 3839). POST requests require the `X-TinyShinyServer-Request: management` header to prevent cross-origin browser requests. The dashboard sends this header automatically. Cross-origin CORS access must remain disabled on any reverse proxy:
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -393,68 +224,34 @@ curl -X POST -H "X-TinyShinyServer-Request: management" http://localhost:3839/ap
 curl -X POST -H "X-TinyShinyServer-Request: management" http://localhost:3839/api/shutdown
 ```
 
-### Dark Mode Support
+## Application structure
 
-The management interface automatically adapts to your system's theme preference:
-- **Light Mode**: Clean, professional appearance for daytime use
-- **Dark Mode**: Comfortable viewing for low-light environments
-- **Automatic Detection**: Uses CSS `prefers-color-scheme` media query
+Point each app's `path` at a directory containing one of these entry points:
 
-## Application Structure
+| App type | Files | Requirement |
+|----------|-------|-------------|
+| Single-file Shiny | `app.R` | Standard Shiny app |
+| Multi-file Shiny | `ui.R` and `server.R` | Both files present |
+| R Markdown | A `.Rmd` document | `runtime: shiny` and Pandoc |
+| Quarto | A `.qmd` document | `server: shiny` and the Quarto CLI |
 
-### Standard Shiny App
-```
-apps/myapp/
-├── app.R          # Single-file Shiny app
-└── [other files]
-```
+Detection prefers standard Shiny files, then R Markdown, then Quarto. For document apps, the first matching file returned by `list.files()` is used; keep one entry document per directory to make the choice explicit.
 
-### Multi-file Shiny App
-```
-apps/myapp/
-├── ui.R           # UI definition
-├── server.R       # Server logic
-└── [other files]
-```
+To add an app, create its directory, add an entry with `name` and `path` to the configuration, and restart the server.
 
-### R Markdown App
-```
-apps/myapp/
-├── report.Rmd     # R Markdown with runtime: shiny
-└── [other files]
+For local development, run a copied example directly from R:
+
+```r
+shiny::runApp("examples/sales", port = 3001)
+rmarkdown::run("examples/reports/report.Rmd",
+               shiny_args = list(port = 3003, host = "127.0.0.1"))
+quarto::quarto_serve("examples/dashboard/dashboard.qmd",
+                     port = 3004, host = "127.0.0.1")
 ```
 
-### Quarto App
-```
-apps/myapp/
-├── dashboard.qmd  # Quarto document with server: shiny
-└── [other files]
-```
+Run one command at a time, with tinyshinyserver stopped or a different port selected.
 
-## Example Applications
-
-The project includes four example applications demonstrating different application types:
-
-### 1. Sales Dashboard (`examples/sales/`)
-- Single-file Shiny app demonstrating basic dashboard
-- Simple plot with sample sales data
-
-### 2. Inventory Management (`examples/inventory/`)
-- Multi-file Shiny app (ui.R + server.R)
-- Interactive table with dynamic data generation
-
-### 3. Business Reports (`examples/reports/`)
-- R Markdown flexdashboard with `runtime: shiny`
-- Interactive charts, KPIs, and data tables
-- Demonstrates plotly integration and responsive design
-
-### 4. Interactive Dashboard (`examples/dashboard/`)
-- Quarto dashboard with `server: shiny`
-- Professional dashboard layout with sidebar controls
-- Real-time filtering, interactive plots, and data tables
-- Demonstrates modern dashboard design with `format: dashboard`
-
-## Memory Management
+## Memory management
 
 The server includes automatic memory management features:
 
@@ -467,133 +264,37 @@ Cleanup runs automatically every 5 minutes and logs activity for monitoring.
 
 ## Logging
 
-### Log Files
+### Log files
+
+With `"log_dir": "./logs"`, the server writes:
 
 - `logs/server.log` - Main server logs
 - `logs/{app_name}_output.log` - Per-app stdout logs
 - `logs/{app_name}_error.log` - Per-app stderr logs
 
-### Log Levels
+### Log levels
 
 - `INFO` - Normal operations
 - `WARN` - Warning conditions (e.g., queue limits reached)
 - `ERROR` - Error conditions requiring attention
 
-## Development
-
-### Running Individual Apps
-
-For development, you can run apps directly:
-
-```bash
-# Standard Shiny app
-R -e "shiny::runApp('apps/sales', port = 3001)"
-
-# R Markdown app
-R -e "rmarkdown::run('apps/reports/report.Rmd', shiny_args = list(port = 3003, host = '127.0.0.1'))"
-
-# Quarto app
-R -e "quarto::quarto_serve('apps/dashboard/dashboard.qmd', port = 3004, host = '127.0.0.1')"
-```
-
-### Adding New Applications
-
-1. Create your app in `apps/{app_name}/`
-2. Add configuration entry to `config.json` (only name and path required)
-3. Restart the server
-
-The server will automatically assign the next available port to your new application.
-
-### Health Endpoints
-
-**Proxy Server:**
-- Health check: `GET /health` - Returns `{"status": "healthy"}`
-- Apps status: `GET /api/apps` - Returns detailed application status (used by landing page)
-
-**Management Interface:**
-- System status: `GET /api/status` - Returns overall system health
-- Apps status: `GET /api/apps` - Returns detailed application status
-- Connections: `GET /api/connections` - Returns active connection details
-
-## 📁 Package Structure
-
-```
-tinyshinyserver/
-├── R/                    # R source code
-│   ├── start_tss.R       # Main exported function
-│   ├── config.R          # Configuration management
-│   ├── handlers.R        # HTTP request routing
-│   ├── process_manager.R # Application lifecycle
-│   └── ...              # Other core modules
-├── inst/
-│   ├── examples/         # Example apps & config
-│   │   ├── sales/        # Simple Shiny app
-│   │   ├── inventory/    # Multi-file Shiny app
-│   │   ├── reports/      # R Markdown dashboard
-│   │   ├── dashboard/    # Quarto dashboard
-│   │   └── config.json   # Example configuration
-│   └── templates/        # HTML templates & CSS
-├── man/                  # Documentation (.Rd files)
-├── DESCRIPTION           # Package metadata
-└── NAMESPACE            # Exported functions
-```
-
 ## Architecture
 
-The server uses a multi-process architecture:
+The R process running `start_tss()` serves the proxy and management interfaces. Each active app runs in a separate background R process on its assigned localhost port. The proxy forwards HTTP requests and WebSocket messages to that app.
 
-```
-                    ┌─────────────────────┐
-                    │  Management Server  │
-                    │    (Port 3839)      │
-                    │                     │
-                    │  • System Status    │
-                    │  • App Control      │
-                    │  • Connection Info  │
-                    │  • Graceful Shutdown│
-                    └─────────────────────┘
-                    
-┌─────────────────────┐
-│   Proxy Server      │
-│   (Port 3838)       │
-│                     │
-│  ┌─WebSocket────────┤
-│  │  Handler         │
-│  │                  │
-│  │  ┌─HTTP──────────┤
-│  │  │  Handler      │
-└──┼──┼───────────────┘
-   │  │
-   │  └── HTTP Requests ──┐
-   │                      │
-   └── WebSocket ─────────┼───┐
-       Messages           │   │
-                          ▼   ▼
-              ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐
-              │ Sales    │ │Inventory │ │ Reports  │ │Dashboard │
-              │(Port     │ │(Port     │ │(Port     │ │(Port     │
-              │ 3001)    │ │ 3002)    │ │ 3003)    │ │ 3004)    │
-              └──────────┘ └──────────┘ └──────────┘ └──────────┘
-```
+Periodic checks detect exited app processes and restart resident apps. These checks do not assess whether a running app is responsive or producing correct results.
 
-### Key Components
+Source code lives in `R/`, generated help pages in `man/`, example apps in `inst/examples/`, and shared styles in `inst/templates/`.
 
-- **Management Server**: Web-based monitoring and control interface
-- **HTTP Handler**: Routes requests to appropriate backend apps
-- **WebSocket Handler**: Manages real-time connections with session affinity
-- **Process Manager**: Monitors and restarts failed applications
-- **Memory Manager**: Cleans up stale connections and resources
-- **Connection Tracker**: Records client information and session details
+## Troubleshooting
 
-## 🔧 Troubleshooting
-
-### Common Issues
+### Common issues
 
 <details>
 <summary><strong>Apps won't start</strong></summary>
 
 - Check that the app directory exists and contains valid Shiny code
-- Verify ports aren't already in use: `netstat -an | findstr :3838`
+- Check the startup logs for port conflicts and assigned app ports
 - Check app-specific error logs in `logs/{app_name}_error.log`
 - Use `?start_tss` for configuration help
 </details>
@@ -603,7 +304,7 @@ The server uses a multi-process architecture:
 
 - Ensure backend app is running and healthy
 - Check for firewall issues blocking WebSocket connections
-- Verify session affinity is working correctly
+- If using a reverse proxy, confirm it forwards WebSocket upgrades
 - Monitor logs for WebSocket connection messages
 </details>
 
@@ -616,36 +317,29 @@ The server uses a multi-process architecture:
 - Check logs for management server startup messages
 </details>
 
-### 🔍 Debug Mode
+### Inspecting logs
+
+In R, list the logs under your configured `log_dir`:
 
 ```r
-# Check server logs (created after starting)
-list.files("logs", pattern = "\\.(log|txt)$")
-
-# Monitor main server log
-tail -f logs/server.log  # Linux/macOS
-Get-Content logs/server.log -Wait  # PowerShell
+list.files("logs", pattern = "\\.log$")
 ```
 
-## 🔒 Security Considerations
+To follow the main log from a terminal:
 
-⚠️ **Important**: This server is designed for **development and internal use**.
+```bash
+# Linux/macOS
+tail -f logs/server.log
+```
 
-**For production deployment, consider:**
-- Adding authentication (see [Caddy reverse proxy example](https://caddyserver.com/))
-- SSL/TLS encryption for external access
-- Firewall rules and network segmentation
-- Regular security updates
-- Rate limiting on management endpoints
+```powershell
+# PowerShell
+Get-Content logs/server.log -Wait
+```
 
-**Built-in security features:**
-- Management interface restricted to localhost only
-- Input validation for configuration files
-- Process isolation between applications
+## Contributing
 
-## 🤝 Contributing
-
-Contributions are welcome! Please see our contribution guidelines:
+To contribute:
 
 1. **Fork** the repository
 2. **Create** a feature branch: `git checkout -b feature/amazing-feature`
@@ -653,32 +347,30 @@ Contributions are welcome! Please see our contribution guidelines:
 4. **Test** thoroughly: `devtools::check()`
 5. **Submit** a pull request
 
-### Development Setup
+### Development setup
 
-```r
-# Clone and setup for development
+Clone the repository in a terminal:
+
+```bash
 git clone https://github.com/lab1702/tinyshinyserver.git
 cd tinyshinyserver
+```
 
-# Install with dependencies
-devtools::install_deps()
+Then run in R from the repository root:
+
+```r
+devtools::install_deps(dependencies = TRUE)
 devtools::load_all()
-
-# Run checks
 devtools::check()
 ```
 
-## 📄 License
+Edit help-page documentation in the roxygen comments in `R/`, then regenerate `man/` with `devtools::document()`.
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+## License
 
-## 🆘 Support
+This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details.
 
-- 📖 **Documentation**: Use `?tinyshinyserver`, `?start_tss`, `?config-format`
-- 🐛 **Bug Reports**: [GitHub Issues](https://github.com/lab1702/tinyshinyserver/issues)
+## Help and support
 
----
-
-<p align="center">
-  <strong>Built with ❤️ for the R and Shiny community</strong>
-</p>
+- **R help**: `?tinyshinyserver`, `?start_tss`, `help("config-format")`, `help("example-config")`
+- **Bug reports**: [GitHub Issues](https://github.com/lab1702/tinyshinyserver/issues)

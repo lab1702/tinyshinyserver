@@ -11,7 +11,7 @@
 #'     {
 #'       "name": "app-name",
 #'       "path": "./path/to/app",
-#'       "resident": true|false,
+#'       "resident": true,
 #'       "appstart_timeout": 2
 #'     }
 #'   ],
@@ -24,6 +24,10 @@
 #'   "log_dir": "./logs"
 #' }
 #' }
+#'
+#' Relative application paths and \code{log_dir} are resolved from the R working
+#' directory (\code{getwd()}), not the configuration file's directory. JSON does
+#' not allow comments.
 #'
 #' @section Required Fields:
 #' \describe{
@@ -44,14 +48,16 @@
 #' @section Application Configuration:
 #' Each application in the \code{apps} array can have:
 #' \describe{
-#'   \item{\code{name}}{Unique identifier used in URLs and logs. Required.}
-#'   \item{\code{path}}{File system path to the app directory. Required.}
+#'   \item{\code{name}}{Unique identifier used in URLs and logs: 1--50 ASCII letters, digits, underscores, or hyphens. Required.}
+#'   \item{\code{path}}{Path to the app directory, absolute or relative to the R working directory. Required.}
 #'   \item{\code{resident}}{Boolean. If \code{true}, app runs continuously. If \code{false} (default), app starts on-demand.}
 #'   \item{\code{appstart_timeout}}{Positive, finite number of seconds from app startup to wait for readiness before returning HTTP 503 (default: 2). Fractional seconds are supported.}
 #' }
 #'
 #' @section Host Configuration:
-#' The \code{proxy_host} field controls which network interface the server binds to:
+#' The \code{proxy_host} field controls the proxy's listening interface. The
+#' management server and backend apps always bind to \code{127.0.0.1}.
+#' Supported proxy hosts are:
 #' \itemize{
 #'   \item \code{"127.0.0.1"} or \code{"localhost"}: Localhost only (most secure)
 #'   \item \code{"0.0.0.0"}: All network interfaces (allows external access)
@@ -61,7 +67,8 @@
 #'
 #' @section Port Assignment:
 #' Apps are automatically assigned ports starting from \code{starting_port}, skipping
-#' any reserved ports (\code{proxy_port} and \code{management_port}). For example,
+#' reserved ports (\code{proxy_port} and \code{management_port}) and ports already
+#' in use. For example,
 #' with \code{starting_port: 3001}, apps might get ports 3001, 3002, 3003, etc.,
 #' but will skip 3838 and 3839 if those are the proxy and management ports.
 #'

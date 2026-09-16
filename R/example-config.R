@@ -17,6 +17,10 @@
 #'   \item Logging configuration
 #' }
 #'
+#' Run the copied configuration from the directory containing \code{examples/}.
+#' The reports and dashboard examples require DT, plotly, dplyr, and
+#' flexdashboard; document apps also need Pandoc or the Quarto CLI.
+#'
 #' @format
 #' A JSON file with the standard configuration structure. See \code{\link{config-format}}
 #' for details about the configuration format.
@@ -28,7 +32,7 @@
 #'
 #'   # View the configuration
 #'   config_content <- readLines(config_file)
-#'   cat(config_content, sep = "\\n")
+#'   cat(config_content, sep = "\n")
 #'
 #'   # Copy examples to current directory and start server
 #'   examples_path <- system.file("examples", package = "tinyshinyserver")

@@ -12,8 +12,8 @@ start_tss(config = "config.json")
 should specify apps, ports, and other server settings.}
 }
 \value{
-Invisibly returns the TinyShinyServer instance after starting.
-  The server runs until interrupted (Ctrl-C) or shut down via the
+Invisibly returns the TinyShinyServer instance after the server stops.
+  This function blocks until interrupted (Ctrl-C) or shut down via the
   management interface.
 }
 \description{
@@ -22,26 +22,11 @@ a multi-application Shiny server with automatic health monitoring, session
 management, and WebSocket support.
 }
 \details{
-The server provides:
-\itemize{
-  \item A proxy server on the configured port (default 3838)
-  \item A management interface on the configured port (default 3839)
-  \item Automatic port assignment for individual Shiny applications
-  \item Health monitoring and automatic restart for failed apps
-  \item Support for both resident (always-running) and on-demand apps
-}
+See \code{\link{config-format}} for required fields, defaults, app lifecycle
+settings, and port assignment. Relative app paths and the log directory are
+resolved from the R working directory, not the configuration file's directory.
 
-
-The configuration file should contain:
-\itemize{
-  \item \code{apps}: Array of Shiny applications with name, path, and resident settings
-  \item \code{starting_port}: Starting port for auto-assignment to apps
-  \item \code{proxy_port}: Port for the main proxy server (default 3838)
-  \item \code{management_port}: Port for the management interface (default 3839)
-  \item \code{log_dir}: Directory for log files
-}
-
-Access points after starting:
+Access points with the default ports:
 \itemize{
   \item Main landing page: \verb{http://localhost:3838}
   \item Management interface: \verb{http://localhost:3839}
