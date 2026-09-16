@@ -31,6 +31,8 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       process_manager <<- create_process_manager(config)
       template_manager <<- create_template_manager()
       connection_manager <<- create_connection_manager(config, process_manager)
+      proxy_server <<- NULL
+      management_server <<- NULL
       is_shutting_down <<- FALSE
       cleanup_in_progress <<- FALSE
 
@@ -38,6 +40,11 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
     },
     start = function() {
       "Start the complete server system"
+
+      # Cover failures before run_event_loop installs its own shutdown guard.
+      on.exit({
+        if (!is_shutting_down) shutdown()
+      }, add = TRUE)
 
       logger::log_info("Starting Tiny Shiny Server")
       logger::log_info("Press Ctrl-C to shutdown gracefully")

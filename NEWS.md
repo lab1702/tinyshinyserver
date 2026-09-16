@@ -1,5 +1,7 @@
 # tinyshinyserver 0.2.0
 
+* Fixed stale startup callbacks, connection shutdown, partial startup cleanup, duplicate app names, and proxy response headers, redirects, and cookie paths.
+
 * Isolated proxy request cookies, escaped connection metadata in the management UI, and made startup waits and backend HTTP requests asynchronous.
 
 * Added per-app `appstart_timeout` to configure the startup grace period (default: 2 seconds).

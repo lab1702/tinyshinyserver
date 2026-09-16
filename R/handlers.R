@@ -212,6 +212,7 @@ forward_request <- function(method, target_url, req, app_name, config) {
   tryCatch({
     startup_state <- config$get_app_startup_state(app_name)
     app_config <- config$get_app_config(app_name)
+    request_process <- config$get_app_process(app_name)
     grace_period <- app_config$appstart_timeout %||% 2
     wait_seconds <- 0
     starting <- !is.null(startup_state)
@@ -253,6 +254,9 @@ forward_request <- function(method, target_url, req, app_name, config) {
     }
 
     response <- promises::then(wait_for_backend(target_url, wait_seconds), function(ready) {
+      if (!identical(config$get_app_process(app_name), request_process)) {
+        return(create_503_response(sprintf("App '%s' restarted, please retry", app_name), 2))
+      }
       if (!ready) {
         message <- if (starting) {
           sprintf("App '%s' is starting up, please retry", app_name)
@@ -264,29 +268,69 @@ forward_request <- function(method, target_url, req, app_name, config) {
       if (starting) config$set_app_ready(app_name)
       handle <- curl::new_handle(
         customrequest = method, nobody = identical(method, "HEAD"),
-        timeout = 30, followlocation = TRUE, maxredirs = 10,
-        accept_encoding = ""
+        timeout = 30, followlocation = FALSE,
+        accept_encoding = "identity", http_content_decoding = FALSE
       )
       curl::handle_setheaders(handle, .list = headers)
       if (!is.null(body) && length(body) > 0) {
         curl::handle_setopt(handle, postfields = body)
       }
       promises::then(fetch_backend_async(target_url, handle), function(response) {
-        response_headers <- curl::parse_headers_list(response$headers)
+        response_headers <- proxy_response_headers(response$headers, target_url, app_name, method)
         content_type <- response_headers[["content-type"]] %||% "text/html"
         content <- response$content
         is_binary <- grepl("image/|font/|application/octet-stream|application/pdf",
           content_type, ignore.case = TRUE
-        ) || any(content == 0)
+        ) || any(content == 0) || !is.null(response_headers[["content-encoding"]])
+        if (is.null(response_headers[["content-type"]])) response_headers[["content-type"]] <- content_type
         list(
           status = response$status_code,
-          headers = list("Content-Type" = content_type),
+          headers = response_headers,
           body = if (is_binary) content else rawToChar(content)
         )
       })
     })
     promises::then(response, onRejected = proxy_error)
   }, error = proxy_error)
+}
+
+# Preserve end-to-end headers, including repeated Set-Cookie fields. Transfer
+# framing belongs to httpuv; libcurl already removes chunk framing, but content
+# decoding is disabled so Content-Encoding still describes the returned bytes.
+proxy_response_headers <- function(raw_headers, target_url, app_name, method) {
+  headers <- curl::parse_headers_list(raw_headers)
+  connection <- as.character(unlist(headers[names(headers) == "connection"], use.names = FALSE))
+  nominated <- tolower(trimws(unlist(strsplit(connection, ",", fixed = TRUE))))
+  excluded <- c("connection", "keep-alive", "transfer-encoding", "te", "trailer",
+    "upgrade", "proxy-authenticate", "proxy-authorization", nominated)
+  if (method != "HEAD") excluded <- c(excluded, "content-length")
+  headers <- headers[!names(headers) %in% excluded]
+  prefix <- paste0("/proxy/", app_name)
+  authority <- sub("^(https?://[^/]+).*", "\\1", target_url)
+  for (i in seq_along(headers)) {
+    value <- headers[[i]]
+    if (names(headers)[i] == "location") {
+      # Keep backend-local redirects on this app's public proxy route.
+      if (identical(value, authority)) value <- "/"
+      if (startsWith(value, paste0(authority, "/"))) value <- substring(value, nchar(authority) + 1)
+      if (startsWith(value, "/") && !startsWith(value, "//")) value <- paste0(prefix, value)
+      headers[[i]] <- value
+    } else if (names(headers)[i] == "set-cookie") {
+      # Backend cookies must not become shared cookies for every hosted app.
+      if (!grepl(";[[:space:]]*path=/", value, ignore.case = TRUE)) {
+        request_path <- sub("[?#].*$", "", substring(target_url, nchar(authority) + 1))
+        default_path <- sub("/[^/]*$", "", request_path)
+        if (default_path == "" || !startsWith(default_path, "/")) default_path <- "/"
+        value <- paste0(value, "; Path=", default_path)
+      }
+      value <- gsub("(;[[:space:]]*path=)(/[^;]*)", paste0("\\1", prefix, "\\2"), value,
+        ignore.case = TRUE, perl = TRUE)
+      value <- gsub(";[[:space:]]*domain=\\.?((127\\.0\\.0\\.1)|localhost)(?=;|$)", "", value,
+        ignore.case = TRUE, perl = TRUE)
+      headers[[i]] <- value
+    }
+  }
+  headers
 }
 
 # Drive libcurl with zero-timeout polls so other HTTP and WebSocket callbacks

@@ -75,7 +75,10 @@ ConnectionManager <- setRefClass("ConnectionManager",
 
       backend_ws$onClose(function(event) {
         logger::log_info("Backend connection closed for app {app_name}", app_name = app_name)
+        conn <- config$get_backend_connection(session_id)
+        if (is.null(conn) || !identical(conn$ws, backend_ws)) return()
         config$remove_backend_connection(session_id)
+        close_client_connection(session_id)
       })
 
       backend_ws$onError(function(event) {
@@ -163,6 +166,15 @@ ConnectionManager <- setRefClass("ConnectionManager",
         app_name = app_name, client_ip = client_ip
       )
     },
+    close_client_connection = function(session_id) {
+      "Close a client socket and idempotently clean up its session"
+      conn <- config$get_ws_connection(session_id)
+      # Remove tracking before closing sockets: close callbacks may run inline.
+      remove_client_connection(session_id)
+      if (!is.null(conn$ws)) {
+        tryCatch(conn$ws$close(), error = function(e) {})
+      }
+    },
     remove_client_connection = function(session_id) {
       "Remove a client WebSocket connection and cleanup"
 
@@ -183,10 +195,10 @@ ConnectionManager <- setRefClass("ConnectionManager",
       # Clean up backend connection
       backend_conn <- config$get_backend_connection(session_id)
       if (!is.null(backend_conn)) {
+        config$remove_backend_connection(session_id)
         if (!is.null(backend_conn$ws)) {
           tryCatch(backend_conn$ws$close(), error = function(e) {})
         }
-        config$remove_backend_connection(session_id)
       }
     },
     get_connection_stats = function() {

@@ -166,6 +166,9 @@ ProcessManager <- setRefClass("ProcessManager",
         max_attempts <- max(10, ceiling((app_config$appstart_timeout %||% 2) / 0.5))
       }
 
+      # Ignore callbacks from stopped or replaced process generations.
+      if (!identical(config$get_app_process(app_name), process)) return(FALSE)
+
       # Check if process is still alive
       if (!is_process_alive(process)) {
         logger::log_error("App {app_name} process died during startup", app_name = app_name)
@@ -414,13 +417,16 @@ ProcessManager <- setRefClass("ProcessManager",
                 session_id = session_id, time = format(conn_info$last_activity)
               )
 
-              if (!is.null(conn_info$ws)) {
-                tryCatch(conn_info$ws$close(), error = function(e) {
-                  logger::log_debug("Error closing backend ws: {error}", error = e$message)
-                })
+              if (!is.null(config$get_ws_connection(session_id))) {
+                create_connection_manager(config, .self)$close_client_connection(session_id)
+              } else {
+                config$remove_backend_connection(session_id)
+                if (!is.null(conn_info$ws)) {
+                  tryCatch(conn_info$ws$close(), error = function(e) {
+                    logger::log_debug("Error closing backend ws: {error}", error = e$message)
+                  })
+                }
               }
-
-              config$remove_backend_connection(session_id)
               connections_cleaned <- connections_cleaned + 1
             }
           },
@@ -451,11 +457,9 @@ ProcessManager <- setRefClass("ProcessManager",
                 time = format(conn_info$last_activity)
               )
 
-              # Use idempotent remove (safe if already removed by callback)
-              result <- config$remove_ws_connection(session_id)
-              if (result) {
-                connections_cleaned <- connections_cleaned + 1
-              }
+              # Close both sockets and run the normal idle-app cleanup path.
+              create_connection_manager(config, .self)$close_client_connection(session_id)
+              connections_cleaned <- connections_cleaned + 1
             }
           },
           error = function(e) {

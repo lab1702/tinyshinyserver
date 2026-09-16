@@ -1,3 +1,5 @@
+# Keep scheduled process-manager callbacks out of other test files.
+later::with_loop(later::create_loop(), {
 # Test for process management functions
 # Tests for ProcessManager class methods
 
@@ -948,6 +950,7 @@ test_that("check_app_ready returns TRUE when port is listening", {
     get_pid = function() 12345,
     is_alive = function() TRUE
   )
+  config$add_app_process("app1", live_process)
   config$set_app_starting("app1")
 
   pm <- ProcessManager$new(config)
@@ -972,6 +975,7 @@ test_that("check_app_ready returns FALSE when max attempts exceeded", {
     get_pid = function() 12345,
     is_alive = function() TRUE
   )
+  config$add_app_process("app1", live_process)
   config$set_app_starting("app1")
 
   pm <- ProcessManager$new(config)
@@ -994,6 +998,7 @@ test_that("readiness checks continue for apps with a longer appstart_timeout", {
   config$config <- list(apps = list(list(name = "app1", appstart_timeout = 10)))
   config$set_app_starting("app1")
   pm <- ProcessManager$new(config)
+  config$add_app_process("app1", list())
   local_mocked_bindings(
     is_process_alive = function(process) TRUE,
     wait_for_backend = function(url, wait_seconds = 0) promises::promise_resolve(FALSE)
@@ -1005,4 +1010,6 @@ test_that("readiness checks continue for apps with a longer appstart_timeout", {
     expect_false(await_response(pm$check_app_ready("app1", 3001, list(), attempt = 20)))
     expect_false(config$is_app_starting("app1"))
   })
+})
+
 })

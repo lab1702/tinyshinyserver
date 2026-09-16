@@ -137,6 +137,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         return(list(valid = FALSE, error = "Apps must be a non-empty list"))
       }
 
+      app_names <- character()
       # Validate each app configuration
       for (i in seq_along(config$apps)) {
         app <- config$apps[[i]]
@@ -179,6 +180,11 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         if (nchar(app$name) > 50) {
           return(list(valid = FALSE, error = paste("App", i, "name too long")))
         }
+
+        if (app$name %in% app_names) {
+          return(list(valid = FALSE, error = paste("Duplicate app name:", app$name)))
+        }
+        app_names <- c(app_names, app$name)
 
         # Validate path
         if (!is.character(app$path) || length(app$path) != 1) {

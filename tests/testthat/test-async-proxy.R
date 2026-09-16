@@ -181,3 +181,90 @@ test_that("process manager readiness probes are asynchronous", {
   expect_true(await_response(result))
   expect_null(config$get_app_startup_state("app"))
 })
+
+test_that("proxy preserves download, cookie, cache and redirect headers over HTTP", {
+  backend <- start_test_http_server(function(req) {
+    if (req$PATH_INFO == "/redirect") return(list(status = 302L,
+      headers = list("Location" = "/download"), body = "redirect"))
+    if (req$PATH_INFO == "/absolute") return(list(status = 302L,
+      headers = list("Location" = paste0("http://127.0.0.1:", req$SERVER_PORT, "/download")), body = "redirect"))
+    list(status = 200L, headers = structure(list("text/csv", "attachment; filename=report.csv",
+      "private, no-store", "a=1; Path=/; HttpOnly", "b=2; Path=/; SameSite=Lax"),
+      names = c("Content-Type", "Content-Disposition", "Cache-Control", "Set-Cookie", "Set-Cookie")),
+      body = "a,b\n1,2")
+  })
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  config <- proxy_test_config(backend$port)
+  proxy <- start_test_http_server(function(req) {
+    handle_proxy_request(req$PATH_INFO, req$REQUEST_METHOD, req$QUERY_STRING, req, config)
+  })
+  on.exit(httpuv::stopServer(proxy$server), add = TRUE)
+  result <- await_response(fetch_backend_async(paste0(proxy$url, "/proxy/app/download"), curl::new_handle()))
+  headers <- curl::parse_headers_list(result$headers)
+  expect_equal(result$status_code, 200)
+  expect_equal(headers$`content-disposition`, "attachment; filename=report.csv")
+  expect_equal(headers$`cache-control`, "private, no-store")
+  expect_equal(unname(unlist(headers[names(headers) == "set-cookie"])),
+    c("a=1; Path=/proxy/app/; HttpOnly", "b=2; Path=/proxy/app/; SameSite=Lax"))
+  expect_equal(rawToChar(result$content), "a,b\n1,2")
+  for (path in c("/redirect", "/absolute")) {
+    response <- await_response(forward_request("GET", paste0(backend$url, path), list(), "app", config))
+    expect_equal(response$status, 302)
+    expect_equal(response$headers$location, "/proxy/app/download")
+  }
+})
+
+test_that("encoded backend bodies retain matching content encoding", {
+  file <- tempfile()
+  on.exit(unlink(file), add = TRUE)
+  stream <- gzfile(file, "wb")
+  writeBin(charToRaw("compressed response"), stream)
+  close(stream)
+  compressed <- readBin(file, "raw", file.info(file)$size)
+  backend <- start_test_http_server(function(req) list(status = 200L,
+    headers = list("Content-Type" = "text/plain", "Content-Encoding" = "gzip"), body = compressed))
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  response <- await_response(forward_request("GET", backend$url, list(), "app", proxy_test_config(backend$port)))
+  expect_equal(response$status, 200)
+  expect_equal(response$headers$`content-encoding`, "gzip")
+  expect_identical(response$body, compressed)
+  expect_equal(memDecompress(response$body, type = "gzip", asChar = TRUE), "compressed response")
+})
+
+test_that("query-string colons do not change the backend readiness port", {
+  backend <- start_test_http_server(function(req) create_html_response(req$QUERY_STRING))
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  config <- proxy_test_config(backend$port)
+  result <- await_response(handle_proxy_request("/proxy/app/", "GET", "time=12:34", list(), config))
+  expect_equal(result$status, 200)
+  expect_equal(result$body, "?time=12:34")
+})
+
+test_that("a real backend WebSocket close reaches the browser", {
+  received <- FALSE
+  backend <- start_test_http_server(function(req) create_html_response("backend"), on_ws = function(ws) {
+    ws$onMessage(function(binary, message) {
+      received <<- identical(message, "init")
+      ws$close()
+    })
+  })
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  config <- proxy_test_config(backend$port)
+  cm <- ConnectionManager$new(config)
+  proxy <- start_test_http_server(function(req) create_html_response("proxy"), on_ws = function(ws) {
+    handle_websocket_connection(ws, config, cm)
+  })
+  on.exit(httpuv::stopServer(proxy$server), add = TRUE)
+  client <- websocket::WebSocket$new(paste0(sub("^http", "ws", proxy$url), "/proxy/app/websocket"))
+  on.exit(client$close(), add = TRUE)
+  result <- promises::promise(function(resolve, reject) {
+    client$onOpen(function(event) client$send("init"))
+    client$onClose(function(event) resolve(TRUE))
+    client$onError(function(event) reject(simpleError(event$message)))
+  })
+  expect_true(await_response(result))
+  expect_true(received)
+  expect_equal(config$get_app_connection_count("app"), 0)
+  expect_length(config$get_all_ws_connections(), 0)
+  expect_length(config$get_all_backend_connections(), 0)
+})
