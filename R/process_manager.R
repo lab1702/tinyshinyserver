@@ -349,34 +349,39 @@ ProcessManager <- setRefClass("ProcessManager",
       for (app_config in config$config$apps) {
         app_name <- app_config$name
         if (!is.null(pending_restarts[[app_name]])) next
-        process <- config$get_app_process(app_name)
+        tryCatch({
+          process <- config$get_app_process(app_name)
 
-        if (!is.null(process)) {
-          if (!is_process_alive(process)) {
-            logger::log_error("App {app_name} died, restarting", app_name = app_name)
+          if (!is.null(process)) {
+            if (!is_process_alive(process)) {
+              logger::log_error("App {app_name} died, restarting", app_name = app_name)
 
-            # Clean up connections for this app
-            cleanup_app_connections(app_name)
+              # Clean up connections for this app
+              cleanup_app_connections(app_name)
 
-            # Remove dead process
-            config$remove_app_process(app_name)
+              # Remove dead process
+              config$remove_app_process(app_name)
 
-            # Only restart if it's a resident app
+              # Only restart if it's a resident app
+              if (app_config$resident) {
+                schedule_restart(app_config)
+              } else {
+                logger::log_info("Non-resident app {app_name} died, will start on next request", app_name = app_name)
+              }
+            }
+          } else {
+            # App not running - only start if it's resident
             if (app_config$resident) {
-              schedule_restart(app_config)
+              logger::log_info("Resident app {app_name} not running, starting", app_name = app_name)
+              start_app(app_config)
             } else {
-              logger::log_info("Non-resident app {app_name} died, will start on next request", app_name = app_name)
+              logger::log_debug("Non-resident app {app_name} is stopped (normal state)", app_name = app_name)
             }
           }
-        } else {
-          # App not running - only start if it's resident
-          if (app_config$resident) {
-            logger::log_info("Resident app {app_name} not running, starting", app_name = app_name)
-            start_app(app_config)
-          } else {
-            logger::log_debug("Non-resident app {app_name} is stopped (normal state)", app_name = app_name)
-          }
-        }
+        }, error = function(e) {
+          logger::log_error("Health check failed for app {app_name}: {error}",
+            app_name = app_name, error = conditionMessage(e))
+        })
       }
     },
     cleanup_app_connections = function(app_name) {

@@ -91,3 +91,118 @@ test_that("health checks delay crashed resident app restarts without duplicates"
   await_response(promises::promise(function(resolve, reject) later::later(function() resolve(TRUE), .1)))
   expect_equal(starts, 1)
 })
+
+test_that("termination stops a real child worker as well as its parent", {
+  marker <- tempfile()
+  child_pid_file <- tempfile()
+  parent <- callr::r_bg(function(marker, child_pid_file) {
+    child <- callr::r_bg(function(marker) {
+      repeat {
+        cat("tick\n", file = marker, append = TRUE)
+        Sys.sleep(.02)
+      }
+    }, args = list(marker = marker), supervise = FALSE)
+    writeLines(as.character(child$get_pid()), child_pid_file)
+    Sys.sleep(30)
+  }, args = list(marker = marker, child_pid_file = child_pid_file))
+  on.exit({
+    parent$kill_tree()
+    if (file.exists(child_pid_file)) try(tools::pskill(as.integer(readLines(child_pid_file))), silent = TRUE)
+    unlink(c(marker, child_pid_file))
+  }, add = TRUE)
+  deadline <- Sys.time() + 5
+  while ((!file.exists(marker) || !file.exists(child_pid_file)) && Sys.time() < deadline) Sys.sleep(.02)
+  expect_true(file.exists(marker))
+  expect_true(kill_process_safely(parent))
+  expect_false(parent$is_alive())
+  Sys.sleep(.1)
+  size <- file.info(marker)$size
+  Sys.sleep(.15)
+  expect_equal(file.info(marker)$size, size)
+})
+
+test_that("backend errors close sessions once and ignore replaced connections", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", port = 3001, resident = TRUE)))
+  callbacks <- new.env()
+  backend <- list(onMessage = function(f) NULL, onOpen = function(f) NULL,
+    onError = function(f) callbacks$error <- f, onClose = function(f) callbacks$close <- f,
+    close = function() callbacks$close(list()))
+  local_mocked_bindings(WebSocket = list(new = function(...) backend), .package = "websocket")
+  cm <- ConnectionManager$new(config)
+  closed <- 0
+  client <- list(close = function() { closed <<- closed + 1; cm$remove_client_connection("s") })
+  cm$add_client_connection("s", client, "app", "127.0.0.1", "test")
+  cm$create_backend_connection("app", "s", client)
+  callbacks$error(list(message = "Connection refused"))
+  callbacks$error(list(message = "Connection refused"))
+  expect_equal(closed, 1)
+  expect_null(config$get_ws_connection("s"))
+  expect_null(config$get_backend_connection("s"))
+  expect_equal(config$get_app_connection_count("app"), 0)
+  cm$add_client_connection("s", client, "app", "127.0.0.1", "test")
+  replacement <- list(ws = list(generation = 2))
+  config$add_backend_connection("s", replacement)
+  callbacks$error(list(message = "Old error"))
+  expect_equal(closed, 1)
+  expect_identical(config$get_backend_connection("s"), replacement)
+})
+
+test_that("health checks isolate startup errors and retry failed apps", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = lapply(c("bad", "next", "healthy"), function(name) list(name = name, resident = TRUE)))
+  healthy <- list(is_alive = function() TRUE)
+  config$add_app_process("healthy", healthy)
+  pm <- ProcessManager$new(config)
+  attempted <- character()
+  fail <- TRUE
+  assign("start_app", function(app_config) {
+    attempted <<- c(attempted, app_config$name)
+    if (app_config$name == "bad" && fail) stop("Resource temporarily unavailable")
+    config$add_app_process(app_config$name, list(is_alive = function() TRUE))
+    TRUE
+  }, envir = pm)
+  expect_no_error(pm$health_check())
+  expect_equal(attempted, c("bad", "next"))
+  expect_identical(config$get_app_process("healthy"), healthy)
+  fail <- FALSE
+  pm$health_check()
+  expect_equal(attempted, c("bad", "next", "bad"))
+  expect_true(config$get_app_process("bad")$is_alive())
+})
+
+test_that("monitoring continues after an unexpected health-check error", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(log_dir = tempdir())
+  local_mocked_bindings(create_server_config = function(...) config, setup_logging = function(...) NULL)
+  server <- TinyShinyServer$new()
+  assign("health_check", function() stop("Unexpected failure"), envir = server$process_manager)
+  scheduled <- list()
+  local_mocked_bindings(later = function(func, ...) scheduled[[length(scheduled) + 1]] <<- func, .package = "later")
+  server$start_monitoring_services()
+  expect_length(scheduled, 2)
+  expect_no_error(scheduled[[1]]())
+  expect_length(scheduled, 3)
+  expect_false(server$is_shutting_down)
+  server$is_shutting_down <- TRUE
+  scheduled[[3]]()
+  expect_length(scheduled, 3)
+})
+
+test_that("backend-local redirects preserve paths queries and fragments", {
+  rewrite <- function(location) {
+    raw <- charToRaw(paste0("HTTP/1.1 302 Found\r\nLocation: ", location, "\r\n\r\n"))
+    proxy_response_headers(raw, "http://127.0.0.1:3001/", "app", "GET")$location
+  }
+  for (authority in c("http://127.0.0.1:3001", "//127.0.0.1:3001")) {
+    for (suffix in c("", "?foo=1", "#section", "/next?x=a%2Fb#section", "//nested/path")) {
+      path <- if (startsWith(suffix, "/")) suffix else paste0("/", suffix)
+      expect_equal(rewrite(paste0(authority, suffix)), paste0("/proxy/app", path))
+    }
+  }
+  for (location in c("//example.com/next", "https://example.com/?foo=1", "http://127.0.0.1:3002/next",
+    "http://127.0.0.1:3001.example.com/next", "../next?x=1", "?foo=1", "#section")) {
+    expect_equal(rewrite(location), location)
+  }
+  expect_equal(rewrite("/next?foo=1#section"), "/proxy/app/next?foo=1#section")
+})

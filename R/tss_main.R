@@ -91,8 +91,12 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       # Health check scheduler
       schedule_health_check <- function() {
         if (!is_shutting_down) {
-          process_manager$health_check()
-          later::later(schedule_health_check, config$config$health_check_interval %||% 10)
+          tryCatch(process_manager$health_check(), error = function(e) {
+            logger::log_error("Health check failed: {error}", error = conditionMessage(e))
+          })
+          if (!is_shutting_down) {
+            later::later(schedule_health_check, config$config$health_check_interval %||% 10)
+          }
         }
       }
       later::later(schedule_health_check, 5)

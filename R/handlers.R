@@ -302,14 +302,22 @@ proxy_response_headers <- function(raw_headers, target_url, app_name, method) {
   if (method != "HEAD") excluded <- c(excluded, "content-length")
   headers <- headers[!names(headers) %in% excluded]
   prefix <- paste0("/proxy/", app_name)
-  authority <- sub("^(https?://[^/]+).*", "\\1", target_url)
+  authority <- sub("^(https?://[^/?#]+).*", "\\1", target_url)
   for (i in seq_along(headers)) {
     value <- headers[[i]]
     if (names(headers)[i] == "location") {
       # Keep backend-local redirects on this app's public proxy route.
-      if (identical(value, authority)) value <- "/"
-      if (startsWith(value, paste0(authority, "/"))) value <- substring(value, nchar(authority) + 1)
-      if (startsWith(value, "/") && !startsWith(value, "//")) value <- paste0(prefix, value)
+      parts <- regmatches(value, regexec("^(?:https?:)?//([^/?#]+)(.*)$", value,
+        ignore.case = TRUE, perl = TRUE))[[1]]
+      backend_authority <- sub("^https?://", "", authority)
+      backend_local <- length(parts) == 3 && tolower(parts[2]) == tolower(backend_authority)
+      if (backend_local) {
+        value <- parts[3]
+        if (!startsWith(value, "/")) value <- paste0("/", value)
+      }
+      if (backend_local || (startsWith(value, "/") && !startsWith(value, "//"))) {
+        value <- paste0(prefix, value)
+      }
       headers[[i]] <- value
     } else if (names(headers)[i] == "set-cookie") {
       # Backend cookies must not become shared cookies for every hosted app.

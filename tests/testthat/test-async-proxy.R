@@ -318,3 +318,24 @@ test_that("WebSocket proxy forwards each browser's own authentication headers", 
     ws$close()
   }
 })
+
+test_that("a refused backend WebSocket disconnects the browser and clears tracking", {
+  backend <- start_test_http_server(function(req) create_html_response("ok"))
+  config <- proxy_test_config(backend$port)
+  httpuv::stopServer(backend$server)
+  cm <- ConnectionManager$new(config)
+  proxy <- start_test_http_server(function(req) create_html_response("ok"),
+    on_ws = function(ws) handle_websocket_connection(ws, config, cm))
+  on.exit(httpuv::stopServer(proxy$server), add = TRUE)
+  ws <- websocket::WebSocket$new(paste0(sub("http:", "ws:", proxy$url), "/proxy/app/websocket/"))
+  on.exit(ws$close(), add = TRUE)
+  closed <- promises::promise(function(resolve, reject) {
+    ws$onOpen(function(event) ws$send("init"))
+    ws$onClose(function(event) resolve(TRUE))
+    ws$onError(function(event) reject(simpleError(event$message)))
+  })
+  expect_true(await_response(closed))
+  expect_length(config$get_all_ws_connections(), 0)
+  expect_length(config$get_all_backend_connections(), 0)
+  expect_equal(config$get_app_connection_count("app"), 0)
+})

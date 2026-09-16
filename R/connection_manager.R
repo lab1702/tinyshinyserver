@@ -98,6 +98,9 @@ ConnectionManager <- setRefClass("ConnectionManager",
         logger::log_error("Backend connection error for app {app_name}: {error}",
           app_name = app_name, error = event$message
         )
+        conn <- config$get_backend_connection(session_id)
+        if (is.null(conn) || !identical(conn$ws, backend_ws)) return()
+        close_client_connection(session_id)
       })
 
       return(backend_ws)

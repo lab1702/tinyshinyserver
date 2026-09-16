@@ -180,14 +180,9 @@ kill_process_safely <- function(process, force = FALSE) {
 
   tryCatch(
     {
-      if (force) {
-        process$kill_tree()
-      } else {
-        process$kill()
-        if (is_process_alive(process)) {
-          process$kill_tree()
-        }
-      }
+      # Discover and terminate descendants while their parent still exists.
+      process$kill_tree()
+      if (!force && is_process_alive(process)) process$kill()
       return(!is_process_alive(process))
     },
     error = function(e) {
