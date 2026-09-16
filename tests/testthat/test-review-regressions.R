@@ -1,3 +1,29 @@
+test_that("a new page can connect after the last old session closes during HTTP", {
+  for (reconnect in c(FALSE, TRUE)) {
+    config <- ShinyServerConfig$new()
+    config$config <- list(apps = list(list(name = "app", resident = FALSE)))
+    config$add_app_process("app", list(generation = 1))
+    stops <- 0
+    cm <- ConnectionManager$new(config, list(stop_app_immediately = function(...) stops <<- stops + 1))
+    callback <- NULL
+    delays <- numeric()
+    local_mocked_bindings(later = function(func, delay, ...) {
+      callback <<- func
+      delays <<- c(delays, delay)
+    }, .package = "later")
+    cm$add_client_connection("old", list(), "app", "127.0.0.1", "test")
+    cm$begin_http_request("app")
+    cm$remove_client_connection("old")
+    expect_equal(stops, 0)
+    cm$end_http_request("app")
+    expect_equal(stops, 0)
+    expect_equal(delays, 30)
+    if (reconnect) cm$add_client_connection("new", list(), "app", "127.0.0.1", "test")
+    callback()
+    expect_equal(stops, if (reconnect) 0 else 1)
+  }
+})
+
 test_that("malformed proxy prefixes never start apps or form backend URLs", {
   config <- ShinyServerConfig$new()
   config$config <- list(apps = list(list(name = "app", resident = FALSE)))

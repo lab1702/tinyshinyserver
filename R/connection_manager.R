@@ -255,7 +255,8 @@ ConnectionManager <- setRefClass("ConnectionManager",
         assign(app_name, NULL, envir = config$deferred_idle_stops)
         # Completion of an old request must never stop a replacement process.
         if (identical(config$get_app_process(app_name), pending$process)) {
-          maybe_stop_idle_app(app_name)
+          # The response may be a new page whose WebSocket has not opened yet.
+          schedule_session_check(app_name)
         }
       } else if (count == 0L) {
         schedule_session_check(app_name)

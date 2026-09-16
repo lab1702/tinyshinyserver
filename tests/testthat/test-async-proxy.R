@@ -402,6 +402,7 @@ test_that("idle shutdown waits for every concurrent HTTP response", {
   }))
   on.exit(httpuv::stopServer(backend$server), add = TRUE)
   config <- proxy_test_config(backend$port)
+  config$HTTP_SESSION_GRACE_SECONDS <- 0.2
   config$config$apps[[1]]$resident <- FALSE
   alive <- TRUE
   kills <- 0
@@ -430,6 +431,9 @@ test_that("idle shutdown waits for every concurrent HTTP response", {
   response <- await_response(first)
   expect_equal(response$status_code, 200)
   expect_match(rawToChar(response$content), "first")
-  expect_equal(kills, 1)
+  expect_equal(kills, 0)
   expect_equal(config$active_http_requests$app, 0)
+  deadline <- Sys.time() + 2
+  while (kills == 0 && Sys.time() < deadline) later::run_now(.01)
+  expect_equal(kills, 1)
 })
