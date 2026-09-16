@@ -13,6 +13,32 @@ proxy_test_config <- function(port, timeout = 2) {
   config
 }
 
+test_that("WebSocket proxy preserves document paths and query strings", {
+  backend <- start_test_http_server(function(req) handle_health_check(), on_ws = function(ws) {
+    ws$onMessage(function(binary, message) {
+      ws$send(paste0(ws$request$PATH_INFO, ws$request$QUERY_STRING))
+    })
+  })
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  config <- proxy_test_config(backend$port)
+  cm <- ConnectionManager$new(config)
+  proxy <- start_test_http_server(function(req) handle_health_check(),
+    on_ws = function(ws) handle_websocket_connection(ws, config, cm))
+  on.exit(httpuv::stopServer(proxy$server), add = TRUE)
+  clients <- list()
+  on.exit(lapply(clients, function(client) client$close()), add = TRUE, after = FALSE)
+  for (suffix in c("/websocket/", "/second.Rmd/websocket/?token=a%2Fb&n=1", "/folder/doc.Rmd/websocket?x=1")) {
+    client <- websocket::WebSocket$new(paste0(sub("^http", "ws", proxy$url), "/proxy/app", suffix))
+    clients[[length(clients) + 1L]] <- client
+    response <- promises::promise(function(resolve, reject) {
+      client$onOpen(function(event) client$send("init"))
+      client$onMessage(function(event) resolve(event$data))
+      client$onError(function(event) reject(simpleError(event$message)))
+    })
+    expect_identical(await_response(response), suffix)
+  }
+})
+
 test_that("proxy preserves binary WebSocket frames before and after backend readiness", {
   observed <- list()
   backend <- start_test_http_server(function(req) handle_health_check(), on_ws = function(ws) {
@@ -127,7 +153,8 @@ test_that("slow backend responses do not block unrelated HTTP requests", {
   })
   health <- promises::then(health, function(x) {completed <<- c(completed, "health"); x})
   ws <- NULL
-  on.exit(if (!is.null(ws)) ws$close(), add = TRUE)
+  # Close the client before stopping the server that owns its peer.
+  on.exit(if (!is.null(ws)) ws$close(), add = TRUE, after = FALSE)
   websocket_response <- promises::promise(function(resolve, reject) {
     later::later(function() {
       ws <<- websocket::WebSocket$new(sub("^http", "ws", proxy$url))

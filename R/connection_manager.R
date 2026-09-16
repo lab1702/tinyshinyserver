@@ -21,7 +21,17 @@ ConnectionManager <- setRefClass("ConnectionManager",
         return(NULL)
       }
 
-      backend_url <- paste0("ws://127.0.0.1:", app_config$port, "/websocket/")
+      backend_path <- "/websocket/"
+      client_path <- client_ws$request$PATH_INFO
+      prefix <- paste0("/proxy/", app_name)
+      if (!is.null(client_path) && startsWith(client_path, paste0(prefix, "/"))) {
+        backend_path <- substring(client_path, nchar(prefix) + 1L)
+      }
+      backend_query <- client_ws$request$QUERY_STRING %||% ""
+      if (backend_query != "" && !startsWith(backend_query, "?")) {
+        backend_query <- paste0("?", backend_query)
+      }
+      backend_url <- paste0("ws://127.0.0.1:", app_config$port, backend_path, backend_query)
       logger::log_info("Connecting to backend: {backend_url} for app {app_name}",
         backend_url = backend_url, app_name = app_name
       )
