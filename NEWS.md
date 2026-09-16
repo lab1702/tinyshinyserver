@@ -1,5 +1,7 @@
 # tinyshinyserver 0.2.0
 
+* Isolated proxy request cookies, escaped connection metadata in the management UI, and made startup waits and backend HTTP requests asynchronous.
+
 * Added per-app `appstart_timeout` to configure the startup grace period (default: 2 seconds).
 
 # tinyshinyserver 0.1.0

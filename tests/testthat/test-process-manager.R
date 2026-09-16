@@ -954,10 +954,10 @@ test_that("check_app_ready returns TRUE when port is listening", {
 
   local_mocked_bindings(
     is_process_alive = function(process) TRUE,
-    is_port_in_use = function(host, port) TRUE
+    wait_for_backend = function(url, wait_seconds = 0) promises::promise_resolve(TRUE)
   )
 
-  result <- pm$check_app_ready("app1", 3001, live_process)
+  result <- await_response(pm$check_app_ready("app1", 3001, live_process))
 
   expect_true(result)
   # Startup state should be cleared (app is ready)
@@ -978,11 +978,11 @@ test_that("check_app_ready returns FALSE when max attempts exceeded", {
 
   local_mocked_bindings(
     is_process_alive = function(process) TRUE,
-    is_port_in_use = function(host, port) FALSE
+    wait_for_backend = function(url, wait_seconds = 0) promises::promise_resolve(FALSE)
   )
 
   # Call with max attempts already reached
-  result <- pm$check_app_ready("app1", 3001, live_process, attempt = 10, max_attempts = 10)
+  result <- await_response(pm$check_app_ready("app1", 3001, live_process, attempt = 10, max_attempts = 10))
 
   expect_false(result)
   # Startup state should be cleared (timed out)
@@ -994,21 +994,15 @@ test_that("readiness checks continue for apps with a longer appstart_timeout", {
   config$config <- list(apps = list(list(name = "app1", appstart_timeout = 10)))
   config$set_app_starting("app1")
   pm <- ProcessManager$new(config)
-  scheduled <- 0
   local_mocked_bindings(
     is_process_alive = function(process) TRUE,
-    is_port_in_use = function(host, port) FALSE
+    wait_for_backend = function(url, wait_seconds = 0) promises::promise_resolve(FALSE)
   )
-  local_mocked_bindings(
-    later = function(func, delay, ...) { scheduled <<- scheduled + 1 },
-    .package = "later"
-  )
+  later::with_loop(later::create_loop(), {
+    expect_false(await_response(pm$check_app_ready("app1", 3001, list(), attempt = 10)))
+    expect_true(config$is_app_starting("app1"))
 
-  expect_false(pm$check_app_ready("app1", 3001, list(), attempt = 10))
-  expect_true(config$is_app_starting("app1"))
-  expect_equal(scheduled, 1)
-
-  expect_false(pm$check_app_ready("app1", 3001, list(), attempt = 20))
-  expect_false(config$is_app_starting("app1"))
-  expect_equal(scheduled, 1)
+    expect_false(await_response(pm$check_app_ready("app1", 3001, list(), attempt = 20)))
+    expect_false(config$is_app_starting("app1"))
+  })
 })

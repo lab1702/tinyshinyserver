@@ -47,7 +47,7 @@ Rscript -e "devtools::install('.')"
 
 The package automatically installs required R dependencies:
 
-**Core:** shiny, callr, jsonlite, later, httr, digest, httpuv, websocket, openssl
+**Core:** shiny, callr, jsonlite, later, curl, promises, digest, httpuv, websocket, openssl
 **Async:** future
 **Docs:** rmarkdown, quarto
 **Utils:** logger

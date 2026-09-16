@@ -174,31 +174,41 @@ ProcessManager <- setRefClass("ProcessManager",
         return(FALSE)
       }
 
-      # Check if port has a process listening (app is ready)
-      if (is_port_in_use("127.0.0.1", app_port)) {
-        logger::log_info("App {app_name} is ready on port {port} (attempt {attempt})",
-          app_name = app_name, port = app_port, attempt = attempt
-        )
-        config$set_app_ready(app_name) # Mark as ready
-        return(TRUE)
-      }
+      # Use the same nonblocking TCP probe as HTTP startup requests.
+      tracked_process <- config$get_app_process(app_name)
+      return(promises::then(wait_for_backend(paste0("http://127.0.0.1:", app_port)), function(ready) {
+        # A replacement may have been registered while the probe was pending.
+        if (!identical(config$get_app_process(app_name), tracked_process)) return(FALSE)
+        if (ready) {
+          logger::log_info("App {app_name} is ready on port {port} (attempt {attempt})",
+            app_name = app_name, port = app_port, attempt = attempt
+          )
+          config$set_app_ready(app_name) # Mark as ready
+          return(TRUE)
+        }
 
-      # If not ready and haven't exceeded max attempts, schedule another check
-      if (attempt < max_attempts) {
-        later::later(function() {
-          check_app_ready(app_name, app_port, process, attempt + 1, max_attempts)
-        }, delay = 0.5)
-        logger::log_debug("App {app_name} not ready yet, will retry (attempt {attempt}/{max})",
-          app_name = app_name, attempt = attempt, max = max_attempts
-        )
-      } else {
-        logger::log_error("App {app_name} failed to become ready after {max} attempts",
-          app_name = app_name, max = max_attempts
-        )
-        config$set_app_ready(app_name) # Remove startup state (timed out)
-      }
+        # If not ready and haven't exceeded max attempts, schedule another check
+        if (attempt < max_attempts) {
+          later::later(function() {
+            check_app_ready(app_name, app_port, process, attempt + 1, max_attempts)
+          }, delay = 0.5)
+          logger::log_debug("App {app_name} not ready yet, will retry (attempt {attempt}/{max})",
+            app_name = app_name, attempt = attempt, max = max_attempts
+          )
+        } else {
+          logger::log_error("App {app_name} failed to become ready after {max} attempts",
+            app_name = app_name, max = max_attempts
+          )
+          config$set_app_ready(app_name) # Remove startup state (timed out)
+        }
 
-      return(FALSE)
+        return(FALSE)
+      }, onRejected = function(e) {
+        logger::log_error("Readiness check failed for {app_name}: {error}",
+          app_name = app_name, error = conditionMessage(e)
+        )
+        FALSE
+      }))
     },
     start_app_on_demand = function(app_name) {
       "Start a non-resident app on demand if not already running"

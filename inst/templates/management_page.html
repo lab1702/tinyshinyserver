@@ -257,34 +257,26 @@
                         return;
                     }
 
-                    let tableHTML =
-                        "<table class=\"connections-table\">" +
-                            "<thead>" +
-                                "<tr>" +
-                                    "<th>App</th>" +
-                                    "<th>Client IP</th>" +
-                                    "<th>User Agent</th>" +
-                                    "<th>Connected</th>" +
-                                    "<th>Duration</th>" +
-                                    "<th>Last Activity</th>" +
-                                "</tr>" +
-                            "</thead>" +
-                            "<tbody>";
-
-                    Object.values(data).forEach(conn => {
-                        tableHTML +=
-                            "<tr>" +
-                                "<td>" + conn.app_name + "</td>" +
-                                "<td>" + conn.client_ip + "</td>" +
-                                "<td class=\"user-agent\">" + conn.user_agent + "</td>" +
-                                "<td>" + conn.connected_at + "</td>" +
-                                "<td>" + formatDuration(conn.duration_seconds) + "</td>" +
-                                "<td>" + conn.last_activity + "</td>" +
-                            "</tr>";
+                    const table = document.createElement("table");
+                    table.className = "connections-table";
+                    const heading = table.createTHead().insertRow();
+                    ["App", "Client IP", "User Agent", "Connected", "Duration", "Last Activity"].forEach(label => {
+                        const cell = document.createElement("th");
+                        cell.textContent = label;
+                        heading.appendChild(cell);
                     });
-
-                    tableHTML += "</tbody></table>";
-                    container.innerHTML = tableHTML;
+                    const body = table.createTBody();
+                    Object.values(data).forEach(conn => {
+                        const row = body.insertRow();
+                        [conn.app_name, conn.client_ip, conn.user_agent,
+                         conn.connected_at, formatDuration(conn.duration_seconds), conn.last_activity]
+                            .forEach((value, index) => {
+                                const cell = row.insertCell();
+                                cell.textContent = value == null ? "" : String(value);
+                                if (index === 2) cell.className = "user-agent";
+                            });
+                    });
+                    container.replaceChildren(table);
                 })
                 .catch(error => {
                     console.error("Error fetching connections:", error);

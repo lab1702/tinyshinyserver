@@ -200,200 +200,140 @@ handle_proxy_request <- function(path, method, query_string, req, config, proces
 }
 
 forward_request <- function(method, target_url, req, app_name, config) {
-  "Forward HTTP request to backend Shiny app"
+  "Forward HTTP requests without blocking the server's event loop"
 
-  tryCatch(
-    {
-      logger::log_debug("Forwarding {method} to {target_url} for app {app_name}",
-        method = method, target_url = target_url, app_name = app_name
-      )
+  proxy_error <- function(e) {
+    logger::log_error("Proxy error for app {app_name}: {error}",
+      app_name = app_name, error = conditionMessage(e)
+    )
+    create_error_response(paste("Bad Gateway:", conditionMessage(e)), 502)
+  }
 
-      # Extract port from target_url for availability check
-      port <- as.numeric(gsub(".*:(\\d+).*", "\\1", target_url))
-
-      # Check if app is currently starting up
-      startup_state <- config$get_app_startup_state(app_name)
-      if (!is.null(startup_state)) {
-        if (startup_state$state == "starting") {
-          elapsed <- startup_state$elapsed
-
-          # Allow the configured startup grace period before returning 503
-          # Poll briefly if within grace period
-          app_config <- config$get_app_config(app_name)
-          grace_period <- app_config$appstart_timeout %||% 2
-          if (elapsed < grace_period) {
-            wait_remaining <- grace_period - elapsed
-            start_wait <- Sys.time()
-            while (as.numeric(difftime(Sys.time(), start_wait, units = "secs")) < wait_remaining) {
-              if (is_port_in_use("127.0.0.1", port)) {
-                logger::log_info("App {app_name} became ready during grace period", app_name = app_name)
-                config$set_app_ready(app_name)
-                break
-              }
-              Sys.sleep(0.1)
-            }
-            # Re-check startup state after waiting
-            startup_state <- config$get_app_startup_state(app_name)
-            if (is.null(startup_state) || is_port_in_use("127.0.0.1", port)) {
-              # App is ready, continue to proxy (fall through)
-            } else {
-              # Still not ready after grace period, return 503
-              retry_after <- min(5, max(2, ceiling(3 - grace_period)))
-              logger::log_info("App {app_name} not ready after {grace}s grace period, returning 503",
-                app_name = app_name, grace = grace_period
-              )
-              return(create_503_response(
-                sprintf("App '%s' is starting up, please retry", app_name),
-                retry_after_seconds = retry_after
-              ))
-            }
-          } else {
-            # Past grace period, return 503 immediately
-            retry_after <- min(5, max(2, ceiling(3 - elapsed)))
-            logger::log_info("App {app_name} is starting (elapsed: {elapsed}s), returning 503 with Retry-After: {retry}s",
-              app_name = app_name, elapsed = round(elapsed, 1), retry = retry_after
-            )
-            return(create_503_response(
-              sprintf("App '%s' is starting up, please retry", app_name),
-              retry_after_seconds = retry_after
-            ))
-          }
-        } else if (startup_state$state == "timeout") {
-          # Startup timed out
-          logger::log_error("App {app_name} startup timed out", app_name = app_name)
-          return(create_error_response("App startup timed out", 502))
-        }
+  tryCatch({
+    startup_state <- config$get_app_startup_state(app_name)
+    app_config <- config$get_app_config(app_name)
+    grace_period <- app_config$appstart_timeout %||% 2
+    wait_seconds <- 0
+    starting <- !is.null(startup_state)
+    if (starting) {
+      if (startup_state$state == "timeout") {
+        return(create_error_response("App startup timed out", 502))
       }
-
-      # Quick single check if port has a process listening (non-blocking)
-      if (!is_port_in_use("127.0.0.1", port)) {
-        # Port not in use but app is not marked as starting
-        # This could mean the app just died or hasn't started yet
-        logger::log_warn("Port {port} not available for app {app_name} but app not in startup state",
-          port = port, app_name = app_name
-        )
+      wait_seconds <- max(0, grace_period - startup_state$elapsed)
+      if (wait_seconds == 0) {
         return(create_503_response(
-          sprintf("App '%s' is not ready", app_name),
-          retry_after_seconds = 2
+          sprintf("App '%s' is starting up, please retry", app_name), 2
         ))
       }
-
-      # Make the request with timeout
-      timeout_config <- httr::timeout(30)
-
-      # Build headers to forward from original request
-      # Skip hop-by-hop headers and headers that httr manages
-      # Use underscore format to match rook/httpuv header names (HTTP_HEADER_NAME)
-      skip_headers <- c(
-        "HOST", "CONNECTION", "KEEP_ALIVE", "TRANSFER_ENCODING",
-        "TE", "TRAILER", "UPGRADE", "PROXY_AUTHORIZATION",
-        "PROXY_AUTHENTICATE", "CONTENT_LENGTH", "CONTENT_TYPE"
-      )
-
-      forward_headers <- list()
-      for (name in names(req)) {
-        if (startsWith(name, "HTTP_")) {
-          header_name <- substring(name, 6) # Remove "HTTP_" prefix
-          if (!header_name %in% skip_headers) {
-            # Convert underscores to hyphens for HTTP header format
-            header_name_http <- gsub("_", "-", header_name)
-            forward_headers[[header_name_http]] <- req[[name]]
-          }
-        }
-      }
-
-      # Convert to httr's add_headers format
-      headers_config <- if (length(forward_headers) > 0) {
-        do.call(httr::add_headers, forward_headers)
-      } else {
-        NULL
-      }
-
-      if (method == "GET" || method == "HEAD" || method == "OPTIONS") {
-        if (!is.null(headers_config)) {
-          response <- httr::VERB(method, target_url, headers_config, timeout_config)
-        } else {
-          response <- httr::VERB(method, target_url, timeout_config)
-        }
-      } else {
-        # Methods that may have a body (POST, PUT, PATCH, DELETE)
-        # Read body as raw bytes to handle both text and binary data
-        body <- NULL
-        if (!is.null(req$rook.input)) {
-          body <- req$rook.input$read()
-        }
-
-        # Get Content-Type from original request
-        request_content_type <- req$CONTENT_TYPE %||% req$HTTP_CONTENT_TYPE
-
-        # Build the request with body, content type, and forwarded headers
-        if (!is.null(body) && length(body) > 0) {
-          if (!is.null(request_content_type) && !is.null(headers_config)) {
-            response <- httr::VERB(
-              method, target_url,
-              body = body,
-              httr::content_type(request_content_type),
-              headers_config,
-              timeout_config
-            )
-          } else if (!is.null(request_content_type)) {
-            response <- httr::VERB(
-              method, target_url,
-              body = body,
-              httr::content_type(request_content_type),
-              timeout_config
-            )
-          } else if (!is.null(headers_config)) {
-            response <- httr::VERB(method, target_url, body = body, headers_config, timeout_config)
-          } else {
-            response <- httr::VERB(method, target_url, body = body, timeout_config)
-          }
-        } else {
-          if (!is.null(headers_config)) {
-            response <- httr::VERB(method, target_url, headers_config, timeout_config)
-          } else {
-            response <- httr::VERB(method, target_url, timeout_config)
-          }
-        }
-      }
-
-      # Get response headers safely
-      response_headers <- response$headers
-      content_type <- if (!is.null(response_headers) && "content-type" %in% names(response_headers)) {
-        response_headers[["content-type"]]
-      } else {
-        "text/html"
-      }
-
-      # Handle binary vs text content
-      raw_content <- httr::content(response, "raw")
-
-      # Check if content is binary
-      is_binary <- grepl("image/|font/|application/octet-stream|application/pdf", content_type, ignore.case = TRUE) ||
-        any(raw_content == 0)
-
-      # Return response
-      if (is_binary) {
-        return(list(
-          status = httr::status_code(response),
-          headers = list("Content-Type" = content_type),
-          body = raw_content
-        ))
-      } else {
-        return(list(
-          status = httr::status_code(response),
-          headers = list("Content-Type" = content_type),
-          body = rawToChar(raw_content)
-        ))
-      }
-    },
-    error = function(e) {
-      logger::log_error("Proxy error for app {app_name}: {error}",
-        app_name = app_name, error = e$message
-      )
-      return(create_error_response(paste("Bad Gateway:", e$message), 502))
     }
-  )
+
+    # Capture the request body while the httpuv input stream is available.
+    # A new curl handle below owns all transport state for this request only.
+    skip_headers <- c(
+      "HOST", "CONNECTION", "KEEP_ALIVE", "TRANSFER_ENCODING",
+      "TE", "TRAILER", "UPGRADE", "PROXY_AUTHORIZATION",
+      "PROXY_AUTHENTICATE", "CONTENT_LENGTH", "CONTENT_TYPE"
+    )
+    headers <- list()
+    for (name in names(req)) {
+      if (startsWith(name, "HTTP_")) {
+        header_name <- substring(name, 6)
+        if (!header_name %in% skip_headers) {
+          headers[[gsub("_", "-", header_name)]] <- req[[name]]
+        }
+      }
+    }
+    body <- NULL
+    if (!method %in% c("GET", "HEAD", "OPTIONS")) {
+      if (!is.null(req$rook.input)) body <- req$rook.input$read()
+      content_type <- req$CONTENT_TYPE %||% req$HTTP_CONTENT_TYPE
+      if (!is.null(body) && length(body) > 0 && !is.null(content_type)) {
+        headers[["Content-Type"]] <- content_type
+      }
+    }
+
+    response <- promises::then(wait_for_backend(target_url, wait_seconds), function(ready) {
+      if (!ready) {
+        message <- if (starting) {
+          sprintf("App '%s' is starting up, please retry", app_name)
+        } else {
+          sprintf("App '%s' is not ready", app_name)
+        }
+        return(create_503_response(message, 2))
+      }
+      if (starting) config$set_app_ready(app_name)
+      handle <- curl::new_handle(
+        customrequest = method, nobody = identical(method, "HEAD"),
+        timeout = 30, followlocation = TRUE, maxredirs = 10,
+        accept_encoding = ""
+      )
+      curl::handle_setheaders(handle, .list = headers)
+      if (!is.null(body) && length(body) > 0) {
+        curl::handle_setopt(handle, postfields = body)
+      }
+      promises::then(fetch_backend_async(target_url, handle), function(response) {
+        response_headers <- curl::parse_headers_list(response$headers)
+        content_type <- response_headers[["content-type"]] %||% "text/html"
+        content <- response$content
+        is_binary <- grepl("image/|font/|application/octet-stream|application/pdf",
+          content_type, ignore.case = TRUE
+        ) || any(content == 0)
+        list(
+          status = response$status_code,
+          headers = list("Content-Type" = content_type),
+          body = if (is_binary) content else rawToChar(content)
+        )
+      })
+    })
+    promises::then(response, onRejected = proxy_error)
+  }, error = proxy_error)
+}
+
+# Drive libcurl with zero-timeout polls so other HTTP and WebSocket callbacks
+# can run between polls. Each transfer has its own pool and fresh easy handle;
+# neither cookies nor authentication state can survive into another request.
+fetch_backend_async <- function(url, handle) {
+  promises::promise(function(resolve, reject) {
+    pool <- curl::new_pool()
+    curl::curl_fetch_multi(url, handle = handle, pool = pool,
+      done = resolve, fail = function(message) reject(simpleError(as.character(message)))
+    )
+    pump <- function() {
+      tryCatch({
+        result <- curl::multi_run(timeout = 0, pool = pool)
+        if (result$pending > 0) later::later(pump, 0.01)
+      }, error = function(e) {
+        curl::multi_cancel(handle)
+        reject(e)
+      })
+    }
+    later::later(pump, 0)
+  })
+}
+
+# Probe TCP readiness without sending an HTTP request (in particular, never
+# replay a POST while waiting for startup). Both the probe and retry are async.
+wait_for_backend <- function(url, wait_seconds = 0) {
+  promises::promise(function(resolve, reject) {
+    deadline <- Sys.time() + wait_seconds
+    probe <- function() {
+      remaining <- as.numeric(difftime(deadline, Sys.time(), units = "secs"))
+      timeout_ms <- if (wait_seconds > 0) max(1, min(1000, remaining * 1000)) else 1000
+      handle <- curl::new_handle(connect_only = TRUE, timeout_ms = ceiling(timeout_ms))
+      promises::then(fetch_backend_async(url, handle),
+        onFulfilled = function(response) resolve(TRUE),
+        onRejected = function(error) {
+          remaining <- as.numeric(difftime(deadline, Sys.time(), units = "secs"))
+          if (remaining > 0) {
+            later::later(probe, min(0.1, remaining))
+          } else {
+            resolve(FALSE)
+          }
+        }
+      )
+    }
+    probe()
+  })
 }
 
 # WebSocket handler
