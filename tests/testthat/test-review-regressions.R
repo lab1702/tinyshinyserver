@@ -1,3 +1,35 @@
+test_that("removing a starting process allows the next on-demand launch", {
+  for (removal in c("health", "cleanup", "stop")) {
+    config <- ShinyServerConfig$new()
+    config$config <- list(apps = list(list(name = "app", port = 3001,
+      resident = FALSE, appstart_timeout = 60)))
+    old <- list(is_alive = function() FALSE)
+    config$add_app_process("app", old)
+    config$set_app_starting("app")
+    pm <- ProcessManager$new(config)
+    starts <- 0
+    replacement <- list(is_alive = function() TRUE)
+    assign("start_app", function(app_config) {
+      starts <<- starts + 1
+      config$add_app_process("app", replacement)
+      config$set_app_starting("app")
+      TRUE
+    }, envir = pm)
+
+    switch(removal, health = pm$health_check(), cleanup = pm$cleanup_dead_processes(),
+      stop = pm$stop_app("app"))
+    expect_null(config$get_app_process("app"), info = removal)
+    expect_false(config$is_app_starting("app"), info = removal)
+    expect_false(pm$check_app_ready("app", 3001, old))
+    expect_true(pm$start_app_on_demand("app"))
+    expect_equal(starts, 1, info = removal)
+    expect_identical(config$get_app_process("app"), replacement)
+    # A delayed callback from the old process must not clear the new launch.
+    expect_false(pm$check_app_ready("app", 3001, old))
+    expect_true(config$is_app_starting("app"), info = removal)
+  }
+})
+
 test_that("backend traffic keeps both connections alive and ignores old sockets", {
   config <- ShinyServerConfig$new()
   config$config <- list(apps = list(list(name = "app", port = 3001, resident = TRUE)))
@@ -30,14 +62,17 @@ test_that("failed termination retains the process and prevents replacement", {
   config$config <- list(apps = list(list(name = "app", resident = TRUE)), restart_delay = 0)
   process <- list(is_alive = function() TRUE)
   config$add_app_process("app", process)
+  config$set_app_starting("app")
   local_mocked_bindings(kill_process_safely = function(process) FALSE)
   pm <- ProcessManager$new(config)
   starts <- 0
   assign("start_app", function(app_config) { starts <<- starts + 1; TRUE }, envir = pm)
   expect_false(pm$stop_app("app")$success)
   expect_identical(config$get_app_process("app"), process)
+  expect_true(config$is_app_starting("app"))
   expect_false(pm$restart_app("app")$success)
   expect_identical(config$get_app_process("app"), process)
+  expect_true(config$is_app_starting("app"))
   expect_equal(starts, 0)
 })
 

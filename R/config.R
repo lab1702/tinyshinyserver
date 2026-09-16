@@ -256,6 +256,8 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     remove_app_process = function(app_name) {
       "Remove a process from tracking"
       app_processes[[app_name]] <<- NULL
+      # Startup state belongs to the removed process generation.
+      set_app_ready(app_name)
     },
     get_app_process = function(app_name) {
       "Get a tracked process by app name"
