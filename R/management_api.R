@@ -28,6 +28,12 @@ handle_management_request <- function(req, config, process_manager, template_man
 route_management_request <- function(path, method, req, config, process_manager, template_manager) {
   "Route management requests to appropriate handlers"
 
+  # A custom header makes browser mutations require a same-origin request.
+  # Cross-origin preflights are deliberately not granted CORS permission.
+  if (method == "POST" && !identical(req$HTTP_X_TINYSHINYSERVER_REQUEST, "management")) {
+    return(create_error_response("Missing or invalid X-TinyShinyServer-Request header", 403))
+  }
+
   # Management dashboard
   if (path == "/" && method == "GET") {
     return(handle_management_dashboard(template_manager))

@@ -145,7 +145,7 @@ The server uses a JSON configuration file. Here's a minimal example:
 
 **Alternative methods:**
 - Press `Ctrl-C` in the R console
-- API call: `curl -X POST http://localhost:3839/api/shutdown`
+- API call: `curl -X POST -H "X-TinyShinyServer-Request: management" http://localhost:3839/api/shutdown`
 
 ✅ **Graceful shutdown** closes all connections and cleans up resources.
 
@@ -370,7 +370,7 @@ Visit **http://localhost:3839** to access the management dashboard.
 
 ### Management API
 
-The management interface exposes a REST API for programmatic access:
+The management interface exposes a REST API for programmatic access. POST requests require the `X-TinyShinyServer-Request: management` header to prevent cross-origin browser requests. The dashboard sends this header automatically. Cross-origin CORS access must remain disabled on any reverse proxy:
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -386,10 +386,10 @@ The management interface exposes a REST API for programmatic access:
 curl http://localhost:3839/api/status
 
 # Restart the sales app
-curl -X POST http://localhost:3839/api/apps/sales/restart
+curl -X POST -H "X-TinyShinyServer-Request: management" http://localhost:3839/api/apps/sales/restart
 
 # Shutdown server
-curl -X POST http://localhost:3839/api/shutdown
+curl -X POST -H "X-TinyShinyServer-Request: management" http://localhost:3839/api/shutdown
 ```
 
 ### Dark Mode Support

@@ -1,5 +1,7 @@
 # tinyshinyserver 0.2.0
 
+* Protected management POST actions against cross-origin browser requests. API clients must send `X-TinyShinyServer-Request: management`; the dashboard sends it automatically.
+
 * Preserved in-flight HTTP requests during on-demand shutdown and redirected bare app URLs to their trailing-slash form.
 
 * Fixed child-process cleanup, failed WebSocket connection cleanup, health-check failure isolation, and additional backend-local redirect forms.

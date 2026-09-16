@@ -60,7 +60,7 @@ test_that("route_management_request routes POST /api/apps/{name}/restart", {
   )
   pm <- ProcessManager$new(config)
 
-  result <- route_management_request("/api/apps/myapp/restart", "POST", list(), config, pm, list())
+  result <- route_management_request("/api/apps/myapp/restart", "POST", list(HTTP_X_TINYSHINYSERVER_REQUEST = "management"), config, pm, list())
 
   expect_equal(result$status, 200)
   expect_match(result$headers[["Content-Type"]], "application/json")
@@ -70,7 +70,7 @@ test_that("route_management_request routes POST /api/shutdown", {
   config <- ShinyServerConfig$new()
   config$config <- list(log_dir = tempdir())
 
-  result <- route_management_request("/api/shutdown", "POST", list(), config, list(), list())
+  result <- route_management_request("/api/shutdown", "POST", list(HTTP_X_TINYSHINYSERVER_REQUEST = "management"), config, list(), list())
 
   expect_equal(result$status, 200)
   expect_match(result$headers[["Content-Type"]], "application/json")

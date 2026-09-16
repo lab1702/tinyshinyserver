@@ -290,7 +290,8 @@
             button.textContent = "Restarting...";
 
             fetch("/api/apps/" + appName + "/restart", {
-                method: "POST"
+                method: "POST",
+                headers: { "X-TinyShinyServer-Request": "management" }
             })
             .then(response => response.json())
             .then(data => {
@@ -331,7 +332,8 @@
             }
 
             fetch("/api/shutdown", {
-                method: "POST"
+                method: "POST",
+                headers: { "X-TinyShinyServer-Request": "management" }
             })
             .then(response => response.json())
             .then(data => {
