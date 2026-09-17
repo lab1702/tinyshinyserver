@@ -366,10 +366,6 @@ devtools::check()
 
 Edit help-page documentation in the roxygen comments in `R/`, then regenerate `man/` with `devtools::document()`.
 
-## License
-
-This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details.
-
 ## Help and support
 
 - **R help**: `?tinyshinyserver`, `?start_tss`, `help("config-format")`, `help("example-config")`
