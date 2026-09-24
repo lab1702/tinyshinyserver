@@ -26,6 +26,7 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
 
       # Initialize logging
       setup_logging(config$config$log_dir)
+      config$log_port_assignments()
 
       # Initialize other components
       process_manager <<- create_process_manager(config)

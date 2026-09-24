@@ -16,6 +16,7 @@ Imports:
     methods,
     shiny,
     callr,
+    ps,
     jsonlite,
     later,
     curl,

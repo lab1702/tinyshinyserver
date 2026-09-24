@@ -599,7 +599,8 @@ test_that("forward_request honors each app's startup grace period", {
     list(timeout = 60, elapsed = 35, polls = TRUE)
   )) {
     config <- ShinyServerConfig$new()
-    config$config <- list(apps = list(list(name = "app", appstart_timeout = case$timeout)))
+    config$config <- list(apps = list(list(name = "app", port = 3001, appstart_timeout = case$timeout)))
+    config$add_app_process("app", test_backend_process())
     assign("app", list(state = "starting", started_at = Sys.time() - case$elapsed),
       envir = config$app_startup_state)
     waits <- numeric()
@@ -608,6 +609,7 @@ test_that("forward_request honors each app's startup grace period", {
         waits <<- c(waits, wait_seconds)
         promises::promise_resolve(TRUE)
       },
+      process_owns_port = function(process, port) TRUE,
       fetch_backend_async = function(url, handle) promises::promise_resolve(list(
         status_code = 200L, headers = charToRaw("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n"),
         content = charToRaw("ready")

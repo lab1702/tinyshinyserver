@@ -948,7 +948,7 @@ test_that("check_app_ready returns FALSE if process dies", {
 
 test_that("check_app_ready returns TRUE when port is listening", {
   config <- ShinyServerConfig$new()
-  config$config <- list(apps = list())
+  config$config <- list(apps = list(list(name = "app1", port = 3001)))
 
   live_process <- list(
     get_pid = function() 12345,
@@ -961,6 +961,7 @@ test_that("check_app_ready returns TRUE when port is listening", {
 
   local_mocked_bindings(
     is_process_alive = function(process) TRUE,
+    process_owns_port = function(process, port) TRUE,
     wait_for_backend = function(url, wait_seconds = 0) promises::promise_resolve(TRUE)
   )
 

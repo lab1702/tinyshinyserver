@@ -1,6 +1,7 @@
 proxy_test_config <- function(port, timeout = 2) {
   config <- ShinyServerConfig$new()
   config$config <- list(apps = list(list(name = "app", port = port, resident = TRUE, appstart_timeout = timeout)))
+  config$add_app_process("app", test_backend_process())
   config
 }
 
@@ -212,7 +213,8 @@ test_that("async transfer failures become 502 responses", {
   config <- proxy_test_config(3001)
   local_mocked_bindings(
     wait_for_backend = function(url, wait_seconds) promises::promise_resolve(TRUE),
-    fetch_backend_async = function(url, handle) promises::promise_reject(simpleError("transfer failed"))
+    fetch_backend_async = function(url, handle) promises::promise_reject(simpleError("transfer failed")),
+    process_owns_port = function(process, port) TRUE
   )
   result <- await_response(forward_request("GET", "http://127.0.0.1:3001/", list(), "app", config))
   expect_equal(result$status, 502)
@@ -223,7 +225,7 @@ test_that("process manager readiness probes are asynchronous", {
   backend <- start_test_http_server(function(req) create_html_response("ready"))
   on.exit(httpuv::stopServer(backend$server), add = TRUE)
   config <- proxy_test_config(backend$port)
-  process <- list(is_alive = function() TRUE)
+  process <- test_backend_process()
   config$add_app_process("app", process)
   config$set_app_starting("app")
   local_mocked_bindings(is_port_in_use = function(...) stop("Blocking probe must not be used"))
@@ -424,7 +426,7 @@ test_that("idle shutdown waits for every concurrent HTTP response", {
   config$config$apps[[1]]$resident <- FALSE
   alive <- TRUE
   kills <- 0
-  config$add_app_process("app", list(is_alive = function() alive, kill_tree = function() {
+  config$add_app_process("app", list(is_alive = function() alive, get_pid = function() Sys.getpid(), kill_tree = function() {
     kills <<- kills + 1
     alive <<- FALSE
     httpuv::stopServer(backend$server)
@@ -454,4 +456,38 @@ test_that("idle shutdown waits for every concurrent HTTP response", {
   deadline <- Sys.time() + 2
   while (kills == 0 && Sys.time() < deadline) later::run_now(.01)
   expect_equal(kills, 1)
+})
+
+test_that("the proxy never forwards to another program holding an app's port", {
+  skip_if_not(ps::ps_is_supported())
+  hits <- 0
+  backend <- start_test_http_server(function(req) {
+    hits <<- hits + 1
+    create_html_response("foreign")
+  })
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  # A live app process that failed to bind: this R session holds its port.
+  app <- callr::r_bg(function() Sys.sleep(60))
+  on.exit(app$kill(), add = TRUE)
+  config <- proxy_test_config(backend$port)
+  config$add_app_process("app", app)
+  expect_true(process_owns_port(test_backend_process(), backend$port))
+  expect_false(process_owns_port(app, backend$port))
+
+  config$set_app_starting("app")
+  pm <- ProcessManager$new(config)
+  expect_false(await_response(pm$check_app_ready("app", backend$port, app, max_attempts = 1)))
+  result <- await_response(forward_request("GET", backend$url,
+    list(HTTP_COOKIE = "session=secret"), "app", config))
+  expect_equal(result$status, 503)
+
+  closed <- FALSE
+  client <- list(request = list(PATH_INFO = "/proxy/app/websocket/", HTTP_COOKIE = "session=secret"),
+    close = function() closed <<- TRUE)
+  cm <- ConnectionManager$new(config)
+  cm$add_client_connection("s", client, "app", "127.0.0.1", "test")
+  expect_null(cm$create_backend_connection("app", "s", client))
+  expect_true(closed)
+  expect_null(config$get_backend_connection("s"))
+  expect_equal(hits, 0)
 })

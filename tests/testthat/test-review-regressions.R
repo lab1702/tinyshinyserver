@@ -303,6 +303,8 @@ test_that("backend traffic keeps both connections alive and ignores old sockets"
   backend <- list(onMessage = function(f) message_callback <<- f,
     onOpen = function(f) NULL, onClose = function(f) NULL, onError = function(f) NULL, close = function() NULL)
   local_mocked_bindings(WebSocket = list(new = function(...) backend), .package = "websocket")
+  local_mocked_bindings(process_owns_port = function(process, port) TRUE)
+  config$add_app_process("app", test_backend_process())
   closed <- FALSE
   messages <- character()
   client <- list(send = function(data) messages <<- c(messages, data), close = function() closed <<- TRUE)
@@ -464,6 +466,8 @@ test_that("backend errors close sessions once and ignore replaced connections", 
     onError = function(f) callbacks$error <- f, onClose = function(f) callbacks$close <- f,
     close = function() callbacks$close(list()))
   local_mocked_bindings(WebSocket = list(new = function(...) backend), .package = "websocket")
+  local_mocked_bindings(process_owns_port = function(process, port) TRUE)
+  config$add_app_process("app", test_backend_process())
   cm <- ConnectionManager$new(config)
   closed <- 0
   client <- list(close = function() { closed <<- closed + 1; cm$remove_client_connection("s") })
@@ -770,4 +774,19 @@ test_that("setup_logging leaves the caller's logger configuration alone", {
   expect_identical(logger::log_appender(), global_appender)
   # Package log calls still reach the server log
   expect_true(any(grepl("Logging system initialized", readLines(file.path(log_dir, "server.log")))))
+})
+
+test_that("port assignments reach the server log", {
+  path <- tempfile(fileext = ".json")
+  log_dir <- tempfile("tss-logs")
+  on.exit({
+    logger::log_appender(logger::appender_console, namespace = "tinyshinyserver")
+    unlink(c(path, log_dir), recursive = TRUE)
+  }, add = TRUE)
+  writeLines(jsonlite::toJSON(list(apps = list(list(name = "app", path = "/tmp")),
+    log_dir = log_dir, starting_port = 3001), auto_unbox = TRUE), path)
+  local_mocked_bindings(is_port_in_use = function(...) FALSE)
+  TinyShinyServer$new(path)
+  log <- readLines(file.path(log_dir, "server.log"))
+  expect_true(any(grepl("App 'app' -> port 3001", log, fixed = TRUE)))
 })

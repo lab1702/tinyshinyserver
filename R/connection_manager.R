@@ -20,6 +20,14 @@ ConnectionManager <- setRefClass("ConnectionManager",
         logger::log_error("App not found: {app_name}", app_name = app_name)
         return(NULL)
       }
+      # Browser cookies and credentials go only to the app's own process.
+      if (!config$app_backend_verified(app_name)) {
+        logger::log_warn("Not connecting to app {app_name}: its process does not own port {port}",
+          app_name = app_name, port = app_config$port
+        )
+        close_client_connection(session_id)
+        return(NULL)
+      }
 
       backend_path <- "/websocket/"
       client_path <- client_ws$request$PATH_INFO

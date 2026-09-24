@@ -21,6 +21,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     deferred_idle_stops = "environment",
     pending_session_checks = "environment",
     app_startup_state = "environment", # Track app startup progress (starting/ready)
+    verified_backends = "environment", # Process generations confirmed to own their app port
     management_server = "ANY",
 
     # Constants
@@ -41,7 +42,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       CONNECTION_TIMEOUT_MINUTES <<- 30
       CLEANUP_INTERVAL_SECONDS <<- 300
       MAX_PATH_LENGTH <<- 1000
-      MAX_QUERY_LENGTH <<- 2048
+      MAX_QUERY_LENGTH <<- 8192
       MAX_MESSAGE_SIZE <<- 1048576
       ALLOWED_HTTP_METHODS <<- c("GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS")
       APP_STARTUP_TIMEOUT_SECONDS <<- 30
@@ -56,6 +57,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       deferred_idle_stops <<- new.env(hash = TRUE, parent = emptyenv())
       pending_session_checks <<- new.env(hash = TRUE, parent = emptyenv())
       app_startup_state <<- new.env(hash = TRUE, parent = emptyenv())
+      verified_backends <<- new.env(hash = TRUE, parent = emptyenv())
       management_server <<- NULL
 
       # Initialize empty config (to be loaded via load_config)
@@ -267,10 +269,23 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       app_processes[[app_name]] <<- NULL
       # Startup state belongs to the removed process generation.
       set_app_ready(app_name)
+      if (exists(app_name, envir = verified_backends, inherits = FALSE)) {
+        rm(list = app_name, envir = verified_backends)
+      }
     },
     get_app_process = function(app_name) {
       "Get a tracked process by app name"
       return(app_processes[[app_name]])
+    },
+    app_backend_verified = function(app_name) {
+      "Whether the app's live tracked process is the listener on its port"
+      process <- get_app_process(app_name)
+      port <- get_app_config(app_name)$port
+      if (is.null(port) || !is_process_alive(process)) return(FALSE)
+      if (identical(verified_backends[[app_name]], process)) return(TRUE)
+      if (!process_owns_port(process, port)) return(FALSE)
+      assign(app_name, process, envir = verified_backends)
+      TRUE
     },
     add_ws_connection = function(session_id, connection_info) {
       "Add a WebSocket connection to tracking with cache management
@@ -596,8 +611,9 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
           paste(conflict_details, collapse = "; ")
         ))
       }
-
-      # Log port assignments
+    },
+    log_port_assignments = function() {
+      "Log the assigned ports (after logging is set up, so they reach server.log)"
       logger::log_info("Port assignments:")
       for (app in config$apps) {
         logger::log_info("  App '{name}' -> port {port}", name = app$name, port = app$port)

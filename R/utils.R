@@ -287,6 +287,22 @@ is_valid_url <- function(url) {
 }
 
 # Network utilities
+# Whether a managed process or one of its descendants (such as the R session
+# behind a Quarto server) listens on a port. The proxy forwards cookies and
+# credentials, so a successful TCP probe must not trust another program that
+# has taken an app's port. Where ps cannot list sockets, the probe alone decides.
+process_owns_port <- function(process, port) {
+  if (!ps::ps_is_supported()) return(TRUE)
+  tryCatch({
+    root <- if (is.function(process$as_ps_handle)) process$as_ps_handle() else ps::ps_handle(process$get_pid())
+    for (handle in c(list(root), ps::ps_children(root, recursive = TRUE))) {
+      sockets <- tryCatch(ps::ps_connections(handle), error = function(e) NULL)
+      if (any(sockets$state %in% "CONN_LISTEN" & sockets$lport %in% port)) return(TRUE)
+    }
+    FALSE
+  }, error = function(e) FALSE)
+}
+
 is_port_in_use <- function(host, port) {
   "Check if a port is in use (has a process listening on it)"
 

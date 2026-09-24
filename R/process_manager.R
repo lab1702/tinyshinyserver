@@ -178,6 +178,12 @@ ProcessManager <- setRefClass("ProcessManager",
       return(promises::then(wait_for_backend(paste0("http://127.0.0.1:", app_port)), function(ready) {
         # A replacement may have been registered while the probe was pending.
         if (!identical(config$get_app_process(app_name), tracked_process)) return(FALSE)
+        if (ready && !config$app_backend_verified(app_name)) {
+          logger::log_warn("Port {port} for app {app_name} is held by another program",
+            app_name = app_name, port = app_port
+          )
+          ready <- FALSE
+        }
         if (ready) {
           logger::log_info("App {app_name} is ready on port {port} (attempt {attempt})",
             app_name = app_name, port = app_port, attempt = attempt

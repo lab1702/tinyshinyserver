@@ -50,7 +50,7 @@ validate_http_method <- function(method, allowed_methods = c("GET", "POST", "PUT
   return(list(valid = TRUE, sanitized = method))
 }
 
-validate_query_string <- function(query_string, max_length = 2048) {
+validate_query_string <- function(query_string, max_length = 8192) {
   "Validate URL query strings"
 
   if (is.null(query_string)) {

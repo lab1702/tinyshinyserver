@@ -162,6 +162,11 @@ test_that("validate_query_string rejects strings that are too long", {
   expect_match(result$error, "too long")
 })
 
+test_that("validate_query_string accepts long Shiny bookmark URLs by default", {
+  expect_true(validate_query_string(paste0("_inputs_&x=", strrep("a", 8000)))$valid)
+  expect_false(validate_query_string(strrep("a", 8193))$valid)
+})
+
 test_that("validate_query_string validates URL encoding", {
   # Invalid: % followed by non-hex
   result <- validate_query_string("key=%ZZ")

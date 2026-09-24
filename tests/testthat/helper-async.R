@@ -35,3 +35,7 @@ stop_test_app_processes <- function(config) {
   }
   config$app_processes <- list()
 }
+
+# In-process test backends are owned by this R session, so this stands in for
+# an app process that holds its port.
+test_backend_process <- function() list(is_alive = function() TRUE, get_pid = function() Sys.getpid())

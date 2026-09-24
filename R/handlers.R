@@ -291,6 +291,12 @@ forward_request <- function(method, target_url, req, app_name, config) {
       if (!identical(config$get_app_process(app_name), request_process)) {
         return(create_503_response(sprintf("App '%s' restarted, please retry", app_name), 2))
       }
+      if (ready && !config$app_backend_verified(app_name)) {
+        logger::log_warn("Not forwarding to app {app_name}: its process does not own port {port}",
+          app_name = app_name, port = app_config$port
+        )
+        ready <- FALSE
+      }
       if (!ready) {
         message <- if (starting) {
           sprintf("App '%s' is starting up, please retry", app_name)
@@ -300,9 +306,11 @@ forward_request <- function(method, target_url, req, app_name, config) {
         return(create_503_response(message, 2))
       }
       if (starting) config$set_app_ready(app_name)
+      # Bound stalled transfers rather than total time, so slow downloads and
+      # documents that render during the request still complete.
       handle <- curl::new_handle(
         customrequest = method, nobody = identical(method, "HEAD"),
-        timeout = 30, followlocation = FALSE,
+        connecttimeout = 10, low_speed_limit = 1, low_speed_time = 600, followlocation = FALSE,
         accept_encoding = "identity", http_content_decoding = FALSE
       )
       curl::handle_setheaders(handle, .list = headers)
