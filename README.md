@@ -160,6 +160,8 @@ Once the app accepts a connection, a proxied HTTP request fails with HTTP 502 on
 
 The server is intended for development and internal use. It does not provide built-in authentication or TLS. For external access, put an authenticated HTTPS reverse proxy in front of it and restrict direct access with firewall rules.
 
+The proxy checks the `Host` header against DNS rebinding only when `proxy_host` is a loopback address. With `"0.0.0.0"` or `"::"`, any website visited by someone who can reach the proxy port can point its own domain at this server and then read and drive the apps from that person's browser, so a firewall that admits a whole network does not keep the apps private from the web. In that setup, allow direct connections to the proxy port only from the reverse proxy.
+
 ### Caddy example
 
 Keep `proxy_host` set to `"127.0.0.1"` when running Caddy on the same machine. Replace the domains, usernames, and hash placeholders below. Generate each password hash with `caddy hash-password`; Caddy's [`basic_auth` directive](https://caddyserver.com/docs/caddyfile/directives/basic_auth) requires hashed passwords.
