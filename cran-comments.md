@@ -21,17 +21,24 @@ documented in NEWS.md and README.md.
   are kept.
 * On-demand apps stop 30 seconds after their last WebSocket closes, so
   reloading a page no longer kills and cold-starts the app.
+* The proxy forwards requests and WebSocket sessions only when the app's own
+  process is listening on the app's port, so another program holding that
+  port never receives users' cookies or credentials.
+* Proxied HTTP requests are no longer cut off after 30 seconds, and query
+  strings may be up to 8,192 characters.
 * `start_tss()` configures logging only in the package's own logger
-  namespace, leaving the caller's logger settings unchanged.
+  namespace, leaving the caller's logger settings unchanged. Port assignments
+  are written to `server.log`.
 * Removed the unused `future` dependency; `tools` and `utils` are now declared
-  imports.
+  imports. Added `ps`, already required by `callr`.
 
 ## Test environments
 
 * Local: Windows 11 x64 (build 28000), x86_64-w64-mingw32,
   R 4.6.1 (2026-06-24 ucrt).
-  Checked with `R CMD check --as-cran` on the source tarball, with remote
-  incoming checks disabled and OpenMP thread limit set to one.
+  Checked with `R CMD check --as-cran --no-manual` on the source tarball, with
+  remote incoming checks disabled and OpenMP thread limit set to one. The PDF
+  manual was not built locally.
 * R-hub: pending. Run the R-hub workflow on the release commit and record the
   platforms, results, and run link here before submitting.
 
@@ -39,7 +46,7 @@ documented in NEWS.md and README.md.
 
 Local: 0 errors | 0 warnings | 0 notes.
 
-Local test results: 1450 passes, 0 failures, 0 warnings, 1 intentional skip
+Local test results: 1461 passes, 0 failures, 0 warnings, 1 intentional skip
 on CRAN (the invalid-device-path write test).
 
 ## Downstream dependencies

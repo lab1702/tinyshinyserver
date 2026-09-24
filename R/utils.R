@@ -287,19 +287,18 @@ is_valid_url <- function(url) {
 }
 
 # Network utilities
-# Whether a managed process or one of its descendants (such as the R session
-# behind a Quarto server) listens on a port. The proxy forwards cookies and
-# credentials, so a successful TCP probe must not trust another program that
-# has taken an app's port. Where ps cannot list sockets, the probe alone decides.
+# Whether a managed app process listens on a port. Shiny, R Markdown and
+# Quarto apps all serve from the R process itself. The proxy forwards cookies
+# and credentials, so a successful TCP probe must not trust another program
+# that has taken an app's port. Only that process's own sockets are listed:
+# walking the process table would block the event loop on every check.
+# Where ps cannot list sockets, the probe alone decides.
 process_owns_port <- function(process, port) {
   if (!ps::ps_is_supported()) return(TRUE)
   tryCatch({
-    root <- if (is.function(process$as_ps_handle)) process$as_ps_handle() else ps::ps_handle(process$get_pid())
-    for (handle in c(list(root), ps::ps_children(root, recursive = TRUE))) {
-      sockets <- tryCatch(ps::ps_connections(handle), error = function(e) NULL)
-      if (any(sockets$state %in% "CONN_LISTEN" & sockets$lport %in% port)) return(TRUE)
-    }
-    FALSE
+    handle <- if (is.function(process$as_ps_handle)) process$as_ps_handle() else ps::ps_handle(process$get_pid())
+    sockets <- ps::ps_connections(handle)
+    any(sockets$state %in% "CONN_LISTEN" & sockets$lport %in% port)
   }, error = function(e) FALSE)
 }
 

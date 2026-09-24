@@ -126,9 +126,9 @@ On-demand apps stop 30 seconds after their last WebSocket connection closes, pro
 
 `appstart_timeout` controls how long a request waits for startup readiness (default: 2 seconds, measured from app startup). If the app is still starting, the proxy returns HTTP 503. Increase this value for slow-starting apps; fractional seconds are supported.
 
-The proxy forwards traffic to an app only when the app's own process, or one of its child processes, is listening on the app's port. If another program holds that port, for example a second server instance with the same `starting_port`, the proxy returns HTTP 503 and logs a warning instead of sending the other program your users' requests.
+The proxy forwards traffic to an app only when the app's own process is listening on the app's port. If another program holds that port, for example a second server instance with the same `starting_port`, the proxy returns HTTP 503 and logs a warning instead of sending the other program your users' requests.
 
-Proxied HTTP requests fail with HTTP 502 if the app cannot be reached within 10 seconds or sends no data for 10 minutes; there is no limit on total transfer time. Requests with query strings longer than 8,192 characters are rejected with HTTP 400, and browser WebSocket messages larger than 1 MB close the session.
+Once the app accepts a connection, a proxied HTTP request fails with HTTP 502 only if the app sends no data for 10 minutes; there is no limit on total transfer time. If a running app does not accept connections, the proxy returns HTTP 503. Requests with query strings longer than 8,192 characters are rejected with HTTP 400, and browser WebSocket messages larger than 1 MB close the session.
 
 ### Configuration options
 

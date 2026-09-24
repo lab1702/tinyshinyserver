@@ -471,6 +471,8 @@ test_that("the proxy never forwards to another program holding an app's port", {
   on.exit(app$kill(), add = TRUE)
   config <- proxy_test_config(backend$port)
   config$add_app_process("app", app)
+  # Checks run on the event loop, so they must not walk the process table.
+  local_mocked_bindings(ps_children = function(...) stop("Process table walked"), .package = "ps")
   expect_true(process_owns_port(test_backend_process(), backend$port))
   expect_false(process_owns_port(app, backend$port))
 

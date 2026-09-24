@@ -16,7 +16,7 @@
 
 * Management responses send `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors 'none'` so the dashboard's restart controls cannot be clickjacked from a framing page.
 
-* The proxy forwards HTTP requests and WebSocket sessions, with their cookies and credentials, only when the app's own process (or one of its child processes) is listening on the app's port. Previously, another program holding a dormant on-demand app's port, such as a second server instance with the same `starting_port`, received that app's traffic.
+* The proxy forwards HTTP requests and WebSocket sessions, with their cookies and credentials, only when the app's own process is listening on the app's port. Previously, another program holding a dormant on-demand app's port, such as a second server instance with the same `starting_port`, received that app's traffic.
 
 * Client IP addresses shown in the management dashboard and logs are taken from `X-Forwarded-For` or `X-Real-IP` only when the request comes from a reverse proxy on the same machine, and then from the entry that proxy added.
 
@@ -30,7 +30,7 @@
 
 * WebSocket messages for a client session that is no longer tracked no longer open an orphaned backend session.
 
-* Proxied HTTP requests are no longer cut off after 30 seconds. A request now fails only if the app cannot be reached within 10 seconds or sends no data for 10 minutes, so slow downloads and documents rendered on request complete.
+* Proxied HTTP requests are no longer cut off after 30 seconds. Once the app accepts the connection, a request fails only if the app sends no data for 10 minutes, so slow downloads and documents rendered on request complete.
 
 * Query strings may now be up to 8,192 characters (previously 2,048), so Shiny URL bookmarks with many inputs load.
 
