@@ -274,7 +274,14 @@ test_that("is_port_in_use detects open and closed ports without warnings", {
   on.exit(httpuv::stopServer(backend$server), add = TRUE)
   expect_no_warning(expect_true(is_port_in_use("127.0.0.1", backend$port)))
   httpuv::stopServer(backend$server)
-  expect_no_warning(expect_false(is_port_in_use("127.0.0.1", backend$port)))
+  # httpuv closes the listener asynchronously on its background thread
+  deadline <- Sys.time() + 5
+  repeat {
+    in_use <- expect_no_warning(is_port_in_use("127.0.0.1", backend$port))
+    if (!in_use || Sys.time() > deadline) break
+    Sys.sleep(0.05)
+  }
+  expect_false(in_use)
 })
 
 # ============================================================================

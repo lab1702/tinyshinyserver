@@ -67,14 +67,15 @@ setup_logging <- function(log_dir, log_level = "INFO") {
     dir.create(log_dir, recursive = TRUE)
   }
 
-  # Set log level threshold
-  logger::log_threshold(log_level)
+  # Configure only this package's logger namespace so the caller's own
+  # logger settings are left untouched
+  logger::log_threshold(log_level, namespace = "tinyshinyserver")
 
   # Configure file appender with same format as console
   log_file <- file.path(log_dir, "server.log")
 
   # Use tee appender to log to both console and file
-  logger::log_appender(logger::appender_tee(log_file))
+  logger::log_appender(logger::appender_tee(log_file), namespace = "tinyshinyserver")
 
   # Log initialization message
   logger::log_info("Logging system initialized with file output to {log_file}", log_file = log_file)

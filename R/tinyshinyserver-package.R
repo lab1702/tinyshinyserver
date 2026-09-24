@@ -47,6 +47,8 @@
 #' @importFrom quarto quarto_serve
 #' @importFrom rmarkdown run
 #' @importFrom shiny runApp
+#' @importFrom tools file_ext
+#' @importFrom utils capture.output head sessionInfo tail
 #' @importFrom websocket WebSocket
 "_PACKAGE"
 

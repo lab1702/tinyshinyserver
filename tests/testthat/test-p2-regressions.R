@@ -44,6 +44,10 @@ test_that("stale cleanup closes sockets and stops idle on-demand apps once", {
   killed <- 0
   config$add_app_process("app", list(is_alive = function() TRUE))
   local_mocked_bindings(kill_process_safely = function(process) { killed <<- killed + 1; TRUE })
+  callbacks <- list()
+  local_mocked_bindings(later = function(func, delay, ...) {
+    callbacks[[length(callbacks) + 1L]] <<- func
+  }, .package = "later")
   cm <- ConnectionManager$new(config, pm)
   client_closed <- 0
   backend_closed <- 0
@@ -57,6 +61,10 @@ test_that("stale cleanup closes sockets and stops idle on-demand apps once", {
   expect_equal(pm$cleanup_stale_connections(), 1)
   expect_equal(client_closed, 1)
   expect_equal(backend_closed, 1)
+  # The idle app stops once the reconnect grace period passes
+  expect_equal(killed, 0)
+  expect_length(callbacks, 1)
+  callbacks[[1]]()
   expect_equal(killed, 1)
   expect_null(config$get_ws_connection("s"))
   expect_null(config$get_backend_connection("s"))

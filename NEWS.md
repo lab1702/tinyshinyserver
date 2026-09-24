@@ -1,5 +1,9 @@
 # tinyshinyserver (development version)
 
+* `start_tss()` now configures logging only for the package's own logger namespace, so the caller's `logger` threshold and appender are no longer changed for the rest of the R session.
+
+* On-demand apps now stop 30 seconds after their last WebSocket connection closes instead of immediately. Reloading or navigating within an on-demand app previously stopped it between pages, forcing a cold restart that could make the new page's requests fail with HTTP 503.
+
 * Removed the unused `future` dependency.
 
 * When `proxy_host` is a loopback address, the proxy now rejects requests whose `Host` header is not a loopback name, so DNS-rebinding websites cannot read or drive local apps. **A reverse proxy in front of the app port must forward the upstream address as the host** (for Caddy, `header_up Host {upstream_hostport}`; see the README).

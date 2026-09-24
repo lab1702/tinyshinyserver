@@ -220,9 +220,11 @@ ConnectionManager <- setRefClass("ConnectionManager",
       # Clean up client connection
       config$remove_ws_connection(session_id)
 
-      # Check if we should stop an idle on-demand app
+      # Stop an idle on-demand app only after a grace period: on a reload or
+      # navigation the old page's socket closes after the new page's response
+      # has completed, just before the new page reconnects
       if (!is.null(app_name)) {
-        maybe_stop_idle_app(app_name)
+        schedule_session_check(app_name)
       }
 
       # Clean up backend connection

@@ -122,7 +122,7 @@ Apps receive ports in configuration order, starting from `starting_port`. Alloca
 | Resident (`"resident": true`) | At server startup; restarted after a process failure | At server shutdown or restart | Immediate access matters |
 | On-demand (`"resident": false`, default) | On the first HTTP request or WebSocket connection | When unused, as described below | Saving resources matters more than startup delay |
 
-On-demand apps stop when their last WebSocket connection closes, provided no HTTP requests remain. If requests are in flight, shutdown waits for them to finish and allows 30 seconds for a new page to establish its WebSocket session. Visits that never open a WebSocket session allow 30 seconds without HTTP activity before shutdown. Failed on-demand apps start again on the next request.
+On-demand apps stop 30 seconds after their last WebSocket connection closes, provided no new connection opens and no HTTP requests remain; the grace period lets a reloaded or newly opened page reconnect without restarting the app. If requests are in flight, shutdown waits for them to finish before the grace period applies. Visits that never open a WebSocket session allow 30 seconds without HTTP activity before shutdown. Failed on-demand apps start again on the next request.
 
 `appstart_timeout` controls how long a request waits for startup readiness (default: 2 seconds, measured from app startup). If the app is still starting, the proxy returns HTTP 503. Increase this value for slow-starting apps; fractional seconds are supported.
 

@@ -96,7 +96,7 @@ test_that("a new page can connect after the last old session closes during HTTP"
     expect_equal(stops, 0)
     cm$end_http_request("app")
     expect_equal(stops, 0)
-    expect_equal(delays, 30)
+    expect_equal(unique(delays), 30)
     if (reconnect) cm$add_client_connection("new", list(), "app", "127.0.0.1", "test")
     callback()
     expect_equal(stops, if (reconnect) 0 else 1)
@@ -244,7 +244,11 @@ test_that("HTTP-only launches stop after a cancellable session grace period", {
   cm$add_client_connection("s", list(), "app", "127.0.0.1", "test")
   stale()
   expect_equal(stops, 1)
+  # Closing the last session waits for a reconnect before stopping
   cm$remove_client_connection("s")
+  expect_equal(stops, 1)
+  expect_equal(tail(delays, 1), 30)
+  tail(callbacks, 1)[[1]]()
   expect_equal(stops, 2)
 
   cm$begin_http_request("app")
@@ -724,4 +728,46 @@ test_that("a loopback proxy rejects rebound Host names", {
   config$config$proxy_host <- "0.0.0.0"
   req <- list(PATH_INFO = "/health", REQUEST_METHOD = "GET", HTTP_HOST = "server.internal:3838")
   expect_equal(handle_http_request(req, config, NULL, NULL, pm)$status, 200)
+})
+
+test_that("reloading an on-demand page does not stop its app between pages", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = FALSE)))
+  config$add_app_process("app", list(generation = 1))
+  stops <- 0
+  cm <- ConnectionManager$new(config, list(stop_app_immediately = function(...) stops <<- stops + 1))
+  callbacks <- list()
+  local_mocked_bindings(later = function(func, delay, ...) {
+    callbacks[[length(callbacks) + 1L]] <<- func
+  }, .package = "later")
+  cm$add_client_connection("old", list(), "app", "127.0.0.1", "test")
+  # The new page's document completes before the old page unloads
+  cm$begin_http_request("app")
+  cm$end_http_request("app")
+  cm$remove_client_connection("old")
+  expect_equal(stops, 0)
+  cm$add_client_connection("new", list(), "app", "127.0.0.1", "test")
+  for (callback in callbacks) callback()
+  expect_equal(stops, 0)
+  # Once the last page really leaves, the app stops after the grace period
+  cm$remove_client_connection("new")
+  expect_equal(stops, 0)
+  tail(callbacks, 1)[[1]]()
+  expect_equal(stops, 1)
+})
+
+test_that("setup_logging leaves the caller's logger configuration alone", {
+  global_threshold <- logger::log_threshold()
+  global_appender <- logger::log_appender()
+  log_dir <- tempfile("tss-logging")
+  on.exit({
+    logger::log_threshold(logger::INFO, namespace = "tinyshinyserver")
+    logger::log_appender(logger::appender_console, namespace = "tinyshinyserver")
+    unlink(log_dir, recursive = TRUE)
+  }, add = TRUE)
+  setup_logging(log_dir, "INFO")
+  expect_identical(logger::log_threshold(), global_threshold)
+  expect_identical(logger::log_appender(), global_appender)
+  # Package log calls still reach the server log
+  expect_true(any(grepl("Logging system initialized", readLines(file.path(log_dir, "server.log")))))
 })
