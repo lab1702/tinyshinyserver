@@ -1,5 +1,9 @@
 # tinyshinyserver (development version)
 
+* The proxy now rejects app WebSocket connections whose browser `Origin` does not match the request host, so other websites can no longer open app sessions with a visitor's cookies or reverse-proxy credentials. Reverse proxies must preserve `Host` or set `X-Forwarded-Host`.
+
+* Management responses now send `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors 'none'` so the dashboard's restart controls cannot be clickjacked from a framing page.
+
 * The proxy's public `/api/apps` endpoint now returns only each app's name, status, mode, and connection count. App paths, ports, and process IDs are available only from the loopback management API.
 
 * The management server now rejects requests whose `Host` header is not a loopback name (`localhost`, `127.0.0.1`, or `[::1]`), protecting it from DNS-rebinding attacks. **A reverse proxy in front of the management port must forward the upstream address as the host** (for Caddy, `header_up Host {upstream_hostport}`; see the README).

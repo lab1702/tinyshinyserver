@@ -5,6 +5,17 @@
 handle_management_request <- function(req, config, process_manager, template_manager) {
   "Handle management interface requests"
 
+  # Management pages carry one-click restart controls, so never allow them
+  # to be framed by another site
+  response <- handle_management_request_unframed(req, config, process_manager, template_manager)
+  response$headers[["X-Frame-Options"]] <- "DENY"
+  response$headers[["Content-Security-Policy"]] <- "frame-ancestors 'none'"
+  response
+}
+
+handle_management_request_unframed <- function(req, config, process_manager, template_manager) {
+  "Validate and route a management request"
+
   # The management server listens on loopback only. Rejecting other Host
   # names stops DNS-rebinding pages from becoming same-origin with it.
   if (!is_loopback_host_header(req$HTTP_HOST)) {

@@ -178,6 +178,8 @@ manage.myapp.example.com {
 }
 ```
 
+The proxy accepts app WebSocket connections only from pages served by the same host: a browser `Origin` must match the request's `Host` header (or, from a reverse proxy on the same machine, its `X-Forwarded-Host` header). Caddy preserves `Host` by default; other reverse proxies must preserve `Host` or set `X-Forwarded-Host`.
+
 Include the management site only if remote administration is needed. The management server rejects requests whose `Host` header is not `localhost`, `127.0.0.1`, or `[::1]` (protecting it from DNS rebinding), so its reverse proxy must forward the upstream address as the host, as `header_up Host {upstream_hostport}` does above. Keep cross-origin CORS access disabled on its reverse proxy; see [Management API](#management-api) for the required request header.
 
 ## Monitoring and management
@@ -309,6 +311,7 @@ Source code lives in `R/`, generated help pages in `man/`, example apps in `inst
 - Ensure backend app is running and healthy
 - Check for firewall issues blocking WebSocket connections
 - If using a reverse proxy, confirm it forwards WebSocket upgrades
+- If using a reverse proxy, confirm it preserves the `Host` header or sets `X-Forwarded-Host`; cross-origin WebSocket connections are rejected
 - Monitor logs for WebSocket connection messages
 </details>
 

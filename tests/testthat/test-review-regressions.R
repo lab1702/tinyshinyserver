@@ -653,3 +653,50 @@ test_that("app output from child processes reaches the log without blocking", {
   expect_gte(nchar(output), 200000)
   expect_equal(readLines(file.path(log_dir, "app_output.prev.log")), "previous run")
 })
+
+test_that("cross-origin WebSocket handshakes are rejected before routing", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", port = 1, resident = TRUE)))
+  cm <- ConnectionManager$new(config)
+  closed <- 0
+  for (origin in c("https://evil.example", "http://myapp.example.com.evil.example", "null",
+                   "http://myapp.example.com:8080", "file://")) {
+    ws <- list(request = list(PATH_INFO = "/proxy/app/websocket/", HTTP_HOST = "myapp.example.com",
+      HTTP_ORIGIN = origin, REMOTE_ADDR = "203.0.113.5", HTTP_X_FORWARDED_HOST = "evil.example"),
+      close = function() closed <<- closed + 1,
+      onMessage = function(...) stop("Cross-origin socket must not register callbacks"))
+    handle_websocket_connection(ws, config, cm)
+  }
+  expect_equal(closed, 5)
+  expect_length(config$get_all_ws_connections(), 0)
+})
+
+test_that("same-origin WebSocket handshakes are recognised", {
+  same <- function(...) is_same_origin_websocket(list(...))
+  expect_true(same(HTTP_HOST = "localhost:3838"))
+  expect_true(same(HTTP_HOST = "localhost:3838", HTTP_ORIGIN = "http://localhost:3838"))
+  expect_true(same(HTTP_HOST = "[::1]:3838", HTTP_ORIGIN = "http://[::1]:3838"))
+  expect_true(same(HTTP_HOST = "MyApp.example.com", HTTP_ORIGIN = "https://myapp.example.com"))
+  expect_true(same(HTTP_HOST = "myapp.example.com:443", HTTP_ORIGIN = "https://myapp.example.com"))
+  # A local reverse proxy that rewrites Host reports the original host
+  expect_true(same(HTTP_HOST = "127.0.0.1:3838", HTTP_ORIGIN = "https://myapp.example.com",
+    REMOTE_ADDR = "127.0.0.1", HTTP_X_FORWARDED_HOST = "myapp.example.com"))
+  expect_false(same(HTTP_HOST = "127.0.0.1:3838", HTTP_ORIGIN = "https://myapp.example.com",
+    REMOTE_ADDR = "203.0.113.5", HTTP_X_FORWARDED_HOST = "myapp.example.com"))
+  expect_false(same(HTTP_HOST = "localhost:3838", HTTP_ORIGIN = "http://localhost:3839"))
+})
+
+test_that("management responses cannot be framed", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list())
+  pm <- list(get_all_app_status = function() list())
+  for (req in list(
+    list(PATH_INFO = "/api/apps", REQUEST_METHOD = "GET", HTTP_HOST = "127.0.0.1:3839"),
+    list(PATH_INFO = "/missing", REQUEST_METHOD = "GET"),
+    list(PATH_INFO = "/api/apps", REQUEST_METHOD = "GET", HTTP_HOST = "evil.example")
+  )) {
+    response <- handle_management_request(req, config, pm, NULL)
+    expect_equal(response$headers[["X-Frame-Options"]], "DENY")
+    expect_equal(response$headers[["Content-Security-Policy"]], "frame-ancestors 'none'")
+  }
+})

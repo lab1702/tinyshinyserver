@@ -418,11 +418,48 @@ wait_for_backend <- function(url, wait_seconds = 0) {
   })
 }
 
+is_same_origin_websocket <- function(req) {
+  "Whether a WebSocket handshake has no Origin or one matching the request host"
+
+  origin <- req$HTTP_ORIGIN
+  if (is.null(origin) || identical(origin, "")) {
+    return(TRUE) # Non-browser clients do not send Origin
+  }
+  origin <- tolower(trimws(origin))
+  match <- regmatches(origin, regexec("^(https?)://([^/]+)$", origin))[[1]]
+  if (length(match) != 3) {
+    return(FALSE)
+  }
+  normalize <- function(authority, default_port) {
+    sub(paste0(":", default_port, "$"), "", tolower(trimws(authority)))
+  }
+  default_port <- if (match[2] == "https") "443" else "80"
+  origin_authority <- normalize(match[3], default_port)
+
+  hosts <- req$HTTP_HOST
+  # A reverse proxy on this machine may rewrite Host but report the original
+  remote_addr <- req$REMOTE_ADDR
+  if (!is.null(remote_addr) && remote_addr %in% c("127.0.0.1", "::1", "::ffff:127.0.0.1") &&
+      !is.null(req$HTTP_X_FORWARDED_HOST)) {
+    hosts <- c(hosts, strsplit(req$HTTP_X_FORWARDED_HOST, ",")[[1]])
+  }
+  hosts <- hosts[!is.na(hosts) & trimws(hosts) != ""]
+  origin_authority %in% normalize(hosts, default_port)
+}
+
 # WebSocket handler
 handle_websocket_connection <- function(ws, config, connection_manager, process_manager = NULL) {
   "Handle new WebSocket connections"
 
   logger::log_info("WebSocket connection opened")
+
+  # Browsers attach cookies and cached credentials to cross-site WebSocket
+  # handshakes, so only accept sessions opened by pages served from this host
+  if (!is_same_origin_websocket(ws$request)) {
+    logger::log_warn("Rejecting cross-origin WebSocket from {origin}", origin = ws$request$HTTP_ORIGIN)
+    ws$close()
+    return()
+  }
 
   # Generate session ID
   session_id <- generate_session_id(ws$request)
