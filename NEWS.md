@@ -36,7 +36,11 @@
 
 * Port assignments are now written to `server.log`, not only to the console.
 
-* A shutdown through the management API no longer leaves `shutdown.flag` behind in `log_dir`.
+* A shutdown through the management API now stops only that server. It previously wrote `shutdown.flag` to `log_dir`, which also stopped any other server sharing that directory, and left the file behind.
+
+* App processes are now supervised, so they stop instead of holding their ports if the R session running the server is killed or crashes.
+
+* Package log messages are formatted correctly even when the session's global `logger` formatter is not glue.
 
 ## Package
 

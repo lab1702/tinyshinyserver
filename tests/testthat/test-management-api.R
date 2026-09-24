@@ -82,10 +82,7 @@ test_that("route_management_request routes POST /api/shutdown", {
 
   expect_equal(result$status, 200)
   expect_match(result$headers[["Content-Type"]], "application/json")
-
-  # Cleanup shutdown flag
-  shutdown_file <- file.path(tempdir(), "shutdown.flag")
-  if (file.exists(shutdown_file)) unlink(shutdown_file)
+  expect_true(config$shutdown_requested)
 })
 
 test_that("route_management_request routes /templates/ to static files", {
@@ -489,12 +486,14 @@ test_that("handle_app_restart returns failure for unknown app", {
 # handle_server_shutdown() Tests
 # ============================================================================
 
-test_that("handle_server_shutdown creates shutdown flag", {
+test_that("handle_server_shutdown requests shutdown of this instance only", {
+  log_dir <- tempfile("tss-shutdown")
+  dir.create(log_dir)
+  on.exit(unlink(log_dir, recursive = TRUE), add = TRUE)
   config <- ShinyServerConfig$new()
-  config$config <- list(log_dir = tempdir())
-
-  shutdown_file <- file.path(tempdir(), "shutdown.flag")
-  if (file.exists(shutdown_file)) unlink(shutdown_file)
+  config$config <- list(log_dir = log_dir)
+  other <- ShinyServerConfig$new()
+  other$config <- list(log_dir = log_dir)
 
   result <- handle_server_shutdown(config)
 
@@ -502,23 +501,21 @@ test_that("handle_server_shutdown creates shutdown flag", {
   body <- jsonlite::fromJSON(result$body)
   expect_true(body$success)
   expect_match(body$message, "Shutdown initiated")
-  expect_true(file.exists(shutdown_file))
-
-  # Cleanup
-  unlink(shutdown_file)
+  expect_true(config$shutdown_requested)
+  # Another instance sharing the log directory keeps running
+  expect_false(other$shutdown_requested)
+  expect_length(list.files(log_dir), 0)
 })
 
-test_that("handle_server_shutdown handles write errors", {
+test_that("handle_server_shutdown does not need a writable log directory", {
   config <- ShinyServerConfig$new()
   config$config <- list(log_dir = "/nonexistent/directory/that/does/not/exist")
 
-  # The actual implementation uses status 500 for write errors but still returns JSON
-  result <- suppressWarnings(handle_server_shutdown(config))
+  result <- handle_server_shutdown(config)
 
-  # Returns JSON with success=false and error info
-  body <- jsonlite::fromJSON(result$body)
-  expect_false(body$success)
-  expect_true("error" %in% names(body))
+  expect_equal(result$status, 200)
+  expect_true(jsonlite::fromJSON(result$body)$success)
+  expect_true(config$shutdown_requested)
 })
 
 # ============================================================================

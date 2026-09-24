@@ -16,7 +16,7 @@ test_that("management mutation guard rejects simple browser requests before side
     }
   }
   expect_equal(restarts, 0)
-  expect_false(file.exists(file.path(config$config$log_dir, "shutdown.flag")))
+  expect_false(config$shutdown_requested)
   expect_equal(route_management_request("/api/shutdown", "POST", list(), config, pm, NULL)$status, 403)
 })
 
@@ -40,9 +40,9 @@ test_that("management custom-header clients work and preflight grants no access"
     HTTP_ACCESS_CONTROL_REQUEST_HEADERS = "x-tinyshinyserver-request")
   response <- handle_management_request(req, config, pm, NULL)
   expect_false(any(tolower(names(response$headers)) == "access-control-allow-origin"))
-  expect_false(file.exists(file.path(config$config$log_dir, "shutdown.flag")))
+  expect_false(config$shutdown_requested)
   req$REQUEST_METHOD <- "POST"
   req$HTTP_X_TINYSHINYSERVER_REQUEST <- "management"
   expect_equal(handle_management_request(req, config, pm, NULL)$status, 200)
-  expect_true(file.exists(file.path(config$config$log_dir, "shutdown.flag")))
+  expect_true(config$shutdown_requested)
 })

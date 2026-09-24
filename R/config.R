@@ -23,6 +23,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     app_startup_state = "environment", # Track app startup progress (starting/ready)
     verified_backends = "environment", # Process generations confirmed to own their app port
     management_server = "ANY",
+    shutdown_requested = "logical", # Set by the management API; read by the event loop
 
     # Constants
     MAX_PENDING_MESSAGES = "numeric",
@@ -59,6 +60,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       app_startup_state <<- new.env(hash = TRUE, parent = emptyenv())
       verified_backends <<- new.env(hash = TRUE, parent = emptyenv())
       management_server <<- NULL
+      shutdown_requested <<- FALSE
 
       # Initialize empty config (to be loaded via load_config)
       config <<- list()

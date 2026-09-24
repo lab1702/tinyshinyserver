@@ -21,7 +21,7 @@ main <- function() {
   on.exit(httpuv::stopServer(management$server), add = TRUE)
   foreign <- serve(function(req) {
     if (req$PATH_INFO == "/state") return(create_json_response(list(restarts = restarts,
-      shutdown = file.exists(file.path(folder, "shutdown.flag")))))
+      shutdown = isTRUE(config$shutdown_requested))))
     create_html_response("<!doctype html><title>Foreign origin</title>")
   })
   on.exit(httpuv::stopServer(foreign$server), add = TRUE)

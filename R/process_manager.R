@@ -136,7 +136,9 @@ ProcessManager <- setRefClass("ProcessManager",
           qmd_files = qmd_files
         ),
         stdout = output_log,
-        stderr = error_log
+        stderr = error_log,
+        # Stop the app even if this R session dies without cleaning up
+        supervise = TRUE
       )
 
       config$add_app_process(app_name, process)

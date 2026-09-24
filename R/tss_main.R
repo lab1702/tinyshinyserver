@@ -50,9 +50,6 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       logger::log_info("Starting Tiny Shiny Server")
       logger::log_info("Press Ctrl-C to shutdown gracefully")
 
-      # Create shutdown flag monitoring
-      setup_shutdown_monitoring()
-
       # Start all Shiny applications
       start_all_apps()
 
@@ -191,24 +188,14 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       # If async processing is needed in the future, ensure proper synchronization
       logger::log_info("Async processing: using sequential mode to avoid race conditions")
     },
-    setup_shutdown_monitoring = function() {
-      "Set up shutdown flag monitoring"
-
-      shutdown_flag_file <- file.path(config$config$log_dir, "shutdown.flag")
-      if (file.exists(shutdown_flag_file)) {
-        file.remove(shutdown_flag_file)
-      }
-    },
     run_event_loop = function() {
       "Main event loop with proper error handling"
 
-      shutdown_flag_file <- file.path(config$config$log_dir, "shutdown.flag")
-
       tryCatch({
         while (TRUE) {
-          # Check for shutdown flag
-          if (file.exists(shutdown_flag_file)) {
-            logger::log_info("Shutdown flag detected, initiating graceful shutdown")
+          # Check for a shutdown requested through the management API
+          if (isTRUE(config$shutdown_requested)) {
+            logger::log_info("Shutdown requested, initiating graceful shutdown")
             break
           }
 
@@ -268,10 +255,6 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       if (!is.null(process_manager)) {
         process_manager$stop_all_apps()
       }
-
-      # The management API's shutdown request has been handled
-      log_dir <- config$config$log_dir
-      if (!is.null(log_dir)) unlink(file.path(log_dir, "shutdown.flag"))
 
       logger::log_info("Server shutdown complete")
       # NOTE: Intentionally not calling quit() here to avoid killing the host R session

@@ -70,6 +70,8 @@ setup_logging <- function(log_dir, log_level = "INFO") {
   # Configure only this package's logger namespace so the caller's own
   # logger settings are left untouched
   logger::log_threshold(log_level, namespace = "tinyshinyserver")
+  # Package messages use glue placeholders, whatever the global formatter is
+  logger::log_formatter(logger::formatter_glue, namespace = "tinyshinyserver")
 
   # Configure file appender with same format as console
   log_file <- file.path(log_dir, "server.log")

@@ -246,23 +246,11 @@ handle_server_shutdown <- function(config) {
 
   logger::log_info("Shutdown requested via management API")
 
-  # Create shutdown flag file
-  shutdown_flag_file <- file.path(config$config$log_dir, "shutdown.flag")
-
-  tryCatch(
-    {
-      writeLines("shutdown", shutdown_flag_file)
-      return(create_json_response(list(
-        success = TRUE,
-        message = "Shutdown initiated"
-      )))
-    },
-    error = function(e) {
-      logger::log_error("Error creating shutdown flag: {error}", error = e$message)
-      return(create_json_response(list(
-        success = FALSE,
-        error = e$message
-      ), 500))
-    }
-  )
+  # Signal only this server's event loop; a file in log_dir would also stop
+  # other instances sharing that directory
+  config$shutdown_requested <- TRUE
+  create_json_response(list(
+    success = TRUE,
+    message = "Shutdown initiated"
+  ))
 }

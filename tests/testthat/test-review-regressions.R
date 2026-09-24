@@ -614,7 +614,7 @@ test_that("management server rejects non-loopback Host headers", {
     }
   }
   expect_equal(restarts, 0)
-  expect_false(file.exists(file.path(config$config$log_dir, "shutdown.flag")))
+  expect_false(config$shutdown_requested)
   for (host in list(NULL, "127.0.0.1:3839", "localhost:3839", "LOCALHOST", "[::1]:3839", "127.0.0.1")) {
     req <- list(PATH_INFO = "/api/apps/app/restart", REQUEST_METHOD = "POST", HTTP_HOST = host,
       HTTP_X_TINYSHINYSERVER_REQUEST = "management")
@@ -791,17 +791,42 @@ test_that("port assignments reach the server log", {
   expect_true(any(grepl("App 'app' -> port 3001", log, fixed = TRUE)))
 })
 
-test_that("shutdown removes the management API's shutdown flag", {
-  log_dir <- tempfile("tss-shutdown")
-  dir.create(log_dir)
-  on.exit(unlink(log_dir, recursive = TRUE), add = TRUE)
+test_that("the event loop stops when the management API requests shutdown", {
   config <- ShinyServerConfig$new()
-  config$config <- list(log_dir = log_dir)
+  config$config <- list(log_dir = tempdir())
   local_mocked_bindings(create_server_config = function(...) config, setup_logging = function(...) NULL)
   server <- TinyShinyServer$new()
-  server$setup_shutdown_monitoring()
-  flag <- file.path(log_dir, "shutdown.flag")
-  writeLines("shutdown", flag)
-  server$shutdown()
-  expect_false(file.exists(flag))
+  handle_server_shutdown(config)
+  local_mocked_bindings(service = function(...) stop("Loop must stop before servicing"), .package = "httpuv")
+  server$run_event_loop()
+  expect_true(server$is_shutting_down)
+})
+
+test_that("start_app supervises app processes", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", path = tempdir(), port = 1, resident = TRUE)),
+    log_dir = tempdir())
+  args <- NULL
+  local_mocked_bindings(r_bg = function(...) {
+    args <<- list(...)
+    list(is_alive = function() TRUE)
+  }, .package = "callr")
+  ProcessManager$new(config)$start_app(config$config$apps[[1]])
+  # Retire the fake process so its scheduled readiness check does nothing
+  config$remove_app_process("app")
+  expect_true(args$supervise)
+})
+
+test_that("package log messages use glue whatever the global formatter", {
+  log_dir <- tempfile("tss-logging")
+  on.exit({
+    logger::log_formatter(logger::formatter_glue, namespace = "tinyshinyserver")
+    logger::log_appender(logger::appender_console, namespace = "tinyshinyserver")
+    unlink(log_dir, recursive = TRUE)
+  }, add = TRUE)
+  logger::log_formatter(logger::formatter_sprintf, namespace = "tinyshinyserver")
+  setup_logging(log_dir, "INFO")
+  log <- readLines(file.path(log_dir, "server.log"))
+  expect_true(any(grepl("file output to .*server\\.log", log)))
+  expect_false(any(grepl("{log_file}", log, fixed = TRUE)))
 })
