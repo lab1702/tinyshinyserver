@@ -181,7 +181,10 @@ kill_process_safely <- function(process, force = FALSE) {
   tryCatch(
     {
       # processx tracks descendants by inherited markers, even after parent exit.
-      if (is.function(process$kill_tree)) process$kill_tree()
+      # Tree members can exit between being listed and being signalled.
+      if (is.function(process$kill_tree)) {
+        tryCatch(process$kill_tree(), no_such_process = function(e) NULL)
+      }
       if (!force && is_process_alive(process)) process$kill()
       # Signal delivery can precede process exit, particularly on macOS.
       # Wait briefly for termination, but still report a surviving process.

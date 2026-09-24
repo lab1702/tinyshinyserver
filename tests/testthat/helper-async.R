@@ -28,7 +28,8 @@ await_response <- function(value, timeout = 5) {
 stop_test_app_processes <- function(config) {
   for (process in config$get_all_app_processes()) {
     if (is.function(process$kill_tree)) {
-      process$kill_tree()
+      # Tree members can exit between being listed and being signalled.
+      tryCatch(process$kill_tree(), no_such_process = function(e) NULL)
       process$wait(timeout = 5000)
     }
   }

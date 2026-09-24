@@ -367,6 +367,19 @@ test_that("termination waits for exit after kill signals are delivered", {
   expect_identical(events, c("tree", "kill", "wait"))
 })
 
+test_that("termination tolerates tree members exiting before they are signalled", {
+  alive <- TRUE
+  process <- list(
+    is_alive = function() alive,
+    kill_tree = function() stop(structure(class = c("no_such_process", "ps_error", "error", "condition"),
+      list(message = "Failed to send signal to some processes: 4002", call = NULL))),
+    kill = function() NULL,
+    wait = function(timeout) alive <<- FALSE
+  )
+  expect_true(kill_process_safely(process))
+  expect_false(alive)
+})
+
 test_that("restart delays yield and are cancelled by stop and shutdown", {
   config <- ShinyServerConfig$new()
   config$config <- list(apps = list(list(name = "app", resident = TRUE)), restart_delay = 0.05)
