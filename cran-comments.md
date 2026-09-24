@@ -36,9 +36,9 @@ documented in NEWS.md and README.md.
 
 * Local: Windows 11 x64 (build 28000), x86_64-w64-mingw32,
   R 4.6.1 (2026-06-24 ucrt).
-  Checked with `R CMD check --as-cran --no-manual` on the source tarball, with
-  remote incoming checks disabled and OpenMP thread limit set to one. The PDF
-  manual was not built locally.
+  Checked with `R CMD check --as-cran` on the source tarball, including the
+  PDF manual, with remote incoming checks disabled and OpenMP thread limit set
+  to one.
 * R-hub: pending. Run the R-hub workflow on the release commit and record the
   platforms, results, and run link here before submitting.
 
@@ -46,7 +46,7 @@ documented in NEWS.md and README.md.
 
 Local: 0 errors | 0 warnings | 0 notes.
 
-Local test results: 1473 passes, 0 failures, 0 warnings, 2 intentional skips
+Local test results: 1474 passes, 0 failures, 0 warnings, 2 intentional skips
 on CRAN (the invalid-device-path write test and a test that launches a real
 Shiny app).
 
