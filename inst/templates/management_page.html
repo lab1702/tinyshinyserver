@@ -180,6 +180,11 @@
                 });
         }
 
+        function escapeHtml(value) {
+            return String(value == null ? "" : value).replace(/[&<>"']/g,
+                c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[c]);
+        }
+
         function updateApps() {
             fetch("/api/apps")
                 .then(response => {
@@ -203,13 +208,13 @@
                         // Build the basic app info HTML
                         let appHTML = 
                             "<div class=\"app-header\">" +
-                                "<div class=\"app-name\">" + app.name + "</div>" +
-                                "<span class=\"status-badge status-" + app.status + "\">" + app.status + "</span>" +
+                                "<div class=\"app-name\">" + escapeHtml(app.name) + "</div>" +
+                                "<span class=\"status-badge status-" + escapeHtml(app.status) + "\">" + escapeHtml(app.status) + "</span>" +
                             "</div>" +
                             "<div class=\"app-details\">" +
-                                "<div class=\"app-detail\"><strong>Port:</strong> " + app.port + "</div>" +
-                                "<div class=\"app-detail\"><strong>Connections:</strong> " + app.connections + "</div>" +
-                                "<div class=\"app-detail\"><strong>Path:</strong> " + app.path + "</div>" +
+                                "<div class=\"app-detail\"><strong>Port:</strong> " + escapeHtml(app.port) + "</div>" +
+                                "<div class=\"app-detail\"><strong>Connections:</strong> " + escapeHtml(app.connections) + "</div>" +
+                                "<div class=\"app-detail\"><strong>Path:</strong> " + escapeHtml(app.path) + "</div>" +
                                 "<div class=\"app-detail\"><strong>PID:</strong> " + (typeof app.pid === "number" ? app.pid : "N/A") + "</div>";
                         
                         // Add resident status if available

@@ -11,7 +11,7 @@ Description: A lightweight, 'WebSocket'-enabled proxy server for hosting multipl
     a JSON configuration file.
 License: MIT + file LICENSE
 Encoding: UTF-8
-Depends: R (>= 4.0)
+Depends: R (>= 4.1.0)
 Imports:
     methods,
     shiny,

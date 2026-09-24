@@ -16,10 +16,11 @@ const { chromium } = require('playwright');
     hostile: { app_name: 'app', client_ip: injectedIp, user_agent: injectedAgent,
       connected_at: '2026-09-16 00:00:00', duration_seconds: 0, last_activity: '2026-09-16 00:00:00' }
   };
-  // A stopped app's missing PID arrives as {} from jsonlite.
+  // A stopped app's missing PID arrives as {} from jsonlite; app paths are free-form.
+  const markupPath = '/srv/<b>R&amp;D</b>';
   const apps = {
     live: { name: 'live', status: 'running', resident: true, port: 3001, connections: 1, path: '/apps/live', pid: 4242 },
-    dormant: { name: 'dormant', status: 'stopped', resident: false, port: 3002, connections: 0, path: '/apps/dormant', pid: {} }
+    dormant: { name: 'dormant', status: 'stopped', resident: false, port: 3002, connections: 0, path: markupPath, pid: {} }
   };
   const browser = await chromium.launch({ headless: true, executablePath: process.env.TSS_TEST_BROWSER || undefined });
   try {
@@ -46,10 +47,13 @@ const { chromium } = require('playwright');
     await page.waitForFunction(() => document.querySelectorAll('#appsContainer .app-card').length === 2);
     const pids = await page.locator('#appsContainer .app-detail').filter({ hasText: 'PID:' }).allTextContents();
     assert.deepEqual(pids, ['PID: 4242', 'PID: N/A']);
+    const paths = await page.locator('#appsContainer .app-detail').filter({ hasText: 'Path:' }).allTextContents();
+    assert.deepEqual(paths, ['Path: /apps/live', 'Path: ' + markupPath]);
+    assert.equal(await page.locator('#appsContainer b').count(), 0);
     connections = {};
     await page.evaluate(() => updateConnections());
     await page.waitForFunction(() => document.getElementById('connectionsContainer').textContent === 'No active connections');
-    console.log('PASS: hostile headers render literally; ordinary metadata and empty-state rendering work.');
+    console.log('PASS: hostile headers and app paths render literally; ordinary metadata and empty-state rendering work.');
   } finally {
     await browser.close();
   }

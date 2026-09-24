@@ -46,7 +46,11 @@
 
 * The management dashboard shows "N/A" instead of "[object Object]" as the PID of apps that are not running.
 
+* The management dashboard shows app paths containing characters such as `<` or `&` literally instead of interpreting them as HTML.
+
 ## Package
+
+* The package now requires R 4.1.0 or later, as its `promises` and `quarto` dependencies already do.
 
 * Removed the unused `future` dependency. `tools` and `utils` are now declared imports. Added `ps`, already required by `callr`, to identify the process listening on an app's port.
 
