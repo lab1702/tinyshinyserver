@@ -210,7 +210,7 @@
                                 "<div class=\"app-detail\"><strong>Port:</strong> " + app.port + "</div>" +
                                 "<div class=\"app-detail\"><strong>Connections:</strong> " + app.connections + "</div>" +
                                 "<div class=\"app-detail\"><strong>Path:</strong> " + app.path + "</div>" +
-                                "<div class=\"app-detail\"><strong>PID:</strong> " + (app.pid || "N/A") + "</div>";
+                                "<div class=\"app-detail\"><strong>PID:</strong> " + (typeof app.pid === "number" ? app.pid : "N/A") + "</div>";
                         
                         // Add resident status if available
                         if (app.resident !== undefined) {

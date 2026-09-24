@@ -16,6 +16,11 @@ const { chromium } = require('playwright');
     hostile: { app_name: 'app', client_ip: injectedIp, user_agent: injectedAgent,
       connected_at: '2026-09-16 00:00:00', duration_seconds: 0, last_activity: '2026-09-16 00:00:00' }
   };
+  // A stopped app's missing PID arrives as {} from jsonlite.
+  const apps = {
+    live: { name: 'live', status: 'running', resident: true, port: 3001, connections: 1, path: '/apps/live', pid: 4242 },
+    dormant: { name: 'dormant', status: 'stopped', resident: false, port: 3002, connections: 0, path: '/apps/dormant', pid: {} }
+  };
   const browser = await chromium.launch({ headless: true, executablePath: process.env.TSS_TEST_BROWSER || undefined });
   try {
     const page = await browser.newPage();
@@ -24,7 +29,7 @@ const { chromium } = require('playwright');
       if (pathname === '/') return route.fulfill({ contentType: 'text/html', body: html });
       const data = pathname === '/api/connections' ? connections
         : pathname === '/api/status' ? { total_apps: 1, running_apps: 1, total_connections: 2 }
-        : pathname === '/api/apps' ? {} : null;
+        : pathname === '/api/apps' ? apps : null;
       return route.fulfill({ status: data === null ? 404 : 200, contentType: 'application/json', body: JSON.stringify(data) });
     });
     await page.goto('http://tss.test/');
@@ -38,6 +43,9 @@ const { chromium } = require('playwright');
     assert.equal(await rows.nth(1).locator('.user-agent').textContent(), injectedAgent);
     assert.equal(await page.locator('#connectionsContainer img, #connectionsContainer svg').count(), 0);
     assert.equal(await page.evaluate(() => window.__agentInjected || window.__ipInjected || false), false);
+    await page.waitForFunction(() => document.querySelectorAll('#appsContainer .app-card').length === 2);
+    const pids = await page.locator('#appsContainer .app-detail').filter({ hasText: 'PID:' }).allTextContents();
+    assert.deepEqual(pids, ['PID: 4242', 'PID: N/A']);
     connections = {};
     await page.evaluate(() => updateConnections());
     await page.waitForFunction(() => document.getElementById('connectionsContainer').textContent === 'No active connections');

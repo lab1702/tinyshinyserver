@@ -44,6 +44,8 @@
 
 * Resident apps that die during startup, or are found without a process by a health check, now wait `restart_delay` before restarting instead of restarting at the next health check.
 
+* The management dashboard shows "N/A" instead of "[object Object]" as the PID of apps that are not running.
+
 ## Package
 
 * Removed the unused `future` dependency. `tools` and `utils` are now declared imports. Added `ps`, already required by `callr`, to identify the process listening on an app's port.
