@@ -5,8 +5,8 @@ function(input, output) {
     count <- input$items
     validate(need(
       is.numeric(count) && length(count) == 1L && is.finite(count) &&
-        count >= 0 && count == floor(count),
-      "Enter a non-negative whole number of items."
+        count >= 0 && count <= 10000 && count == floor(count),
+      "Enter a whole number of items from 0 to 10,000."
     ))
     data.frame(
       Item = sprintf("Product %d", seq_len(count)),

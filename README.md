@@ -37,7 +37,7 @@ Rscript -e "devtools::install('.')"
 
 ### Prerequisites
 
-- **R** (≥ 4.0)
+- **R** (≥ 4.1.0)
 - **Pandoc** (for R Markdown apps)
 - **Quarto CLI** (optional, for Quarto dashboards)
 

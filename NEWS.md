@@ -48,6 +48,8 @@
 
 * The management dashboard shows app paths containing characters such as `<` or `&` literally instead of interpreting them as HTML.
 
+* The inventory example app accepts at most 10,000 items, so a visitor can no longer make it allocate unbounded memory.
+
 ## Package
 
 * The package now requires R 4.1.0 or later, as its `promises` and `quarto` dependencies already do.
