@@ -232,15 +232,16 @@ test_that("handle_apps_api returns app status without process manager", {
   expect_equal(body$app1$name, "app1")
   expect_equal(body$app1$status, "stopped")
   expect_true(body$app1$resident)
-  expect_equal(body$app1$port, 3001)
   expect_equal(body$app1$connections, 0)
+  expect_null(body$app1$port)
+  expect_null(body$app1$path)
 
   # Check app2
   expect_true("app2" %in% names(body))
   expect_equal(body$app2$name, "app2")
   expect_equal(body$app2$status, "dormant")
   expect_false(body$app2$resident)
-  expect_equal(body$app2$port, 3002)
+  expect_null(body$app2$port)
 })
 
 test_that("handle_apps_api sorts apps alphabetically", {
@@ -290,7 +291,9 @@ test_that("handle_apps_api uses process manager when available", {
   expect_equal(body$app1$name, "app1")
   expect_equal(body$app1$status, "running")
   expect_equal(body$app1$connections, 5)
-  expect_equal(body$app1$pid, 12345)
+  # Internal details stay on the management API
+  expect_null(body$app1$pid)
+  expect_null(body$app1$port)
 })
 
 # ============================================================================

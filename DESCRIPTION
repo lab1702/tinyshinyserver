@@ -1,7 +1,7 @@
 Package: tinyshinyserver
 Type: Package
 Title: Tiny 'shiny' Server - Lightweight Multi-App 'shiny' Proxy
-Version: 0.2.1
+Version: 0.2.1.9000
 Authors@R: c(
     person(given = "Lars", family = "Bernhardsson", role = c("aut", "cre"), email = "cran.sherry228@passinbox.com")
     )

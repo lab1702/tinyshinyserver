@@ -1,5 +1,7 @@
 # tinyshinyserver (development version)
 
+* The proxy's public `/api/apps` endpoint now returns only each app's name, status, mode, and connection count. App paths, ports, and process IDs are available only from the loopback management API.
+
 * The management server now rejects requests whose `Host` header is not a loopback name (`localhost`, `127.0.0.1`, or `[::1]`), protecting it from DNS-rebinding attacks. **A reverse proxy in front of the management port must forward the upstream address as the host** (for Caddy, `header_up Host {upstream_hostport}`; see the README).
 
 * App processes now write their stdout and stderr directly to the per-app log files. Output from child processes and native code (for example pandoc) is now logged and can no longer fill an unread pipe and hang the app.

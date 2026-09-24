@@ -128,6 +128,12 @@ handle_apps_api <- function(config, process_manager = NULL) {
         }
       }
 
+      # The proxy port may be public, so expose only what the landing page
+      # needs; paths, ports, and PIDs stay on the loopback management API
+      apps_status <- lapply(apps_status, function(app) {
+        app[intersect(c("name", "status", "resident", "connections"), names(app))]
+      })
+
       return(create_json_response(apps_status))
     },
     error = function(e) {
