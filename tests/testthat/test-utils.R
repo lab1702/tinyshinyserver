@@ -5,8 +5,8 @@
 # get_client_ip() tests
 # ============================================================================
 
-test_that("get_client_ip extracts IP from X-Forwarded-For", {
-  req <- list(HTTP_X_FORWARDED_FOR = "192.168.1.100")
+test_that("get_client_ip extracts IP from X-Forwarded-For behind a local proxy", {
+  req <- list(HTTP_X_FORWARDED_FOR = "192.168.1.100", REMOTE_ADDR = "127.0.0.1")
   result <- get_client_ip(req)
   expect_equal(result, "192.168.1.100")
 })
@@ -17,13 +17,25 @@ test_that("get_client_ip falls back to REMOTE_ADDR", {
   expect_equal(result, "10.0.0.5")
 })
 
-test_that("get_client_ip prefers X-Forwarded-For over REMOTE_ADDR", {
+test_that("get_client_ip ignores forwarding headers from non-local peers", {
   req <- list(
     HTTP_X_FORWARDED_FOR = "192.168.1.100",
+    HTTP_X_REAL_IP = "192.168.1.101",
     REMOTE_ADDR = "10.0.0.5"
   )
   result <- get_client_ip(req)
-  expect_equal(result, "192.168.1.100")
+  expect_equal(result, "10.0.0.5")
+  expect_equal(get_client_ip(list(HTTP_X_FORWARDED_FOR = "192.168.1.100")), "unknown")
+})
+
+test_that("get_client_ip uses the entry added by the local proxy", {
+  req <- list(
+    HTTP_X_FORWARDED_FOR = "1.2.3.4, 203.0.113.7",
+    REMOTE_ADDR = "127.0.0.1"
+  )
+  expect_equal(get_client_ip(req), "203.0.113.7")
+  req <- list(HTTP_X_REAL_IP = "203.0.113.8", REMOTE_ADDR = "::1")
+  expect_equal(get_client_ip(req), "203.0.113.8")
 })
 
 test_that("get_client_ip returns unknown for missing info", {

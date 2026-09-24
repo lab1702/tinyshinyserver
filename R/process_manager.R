@@ -40,36 +40,28 @@ ProcessManager <- setRefClass("ProcessManager",
         logger::log_info("Detected traditional Shiny app for {app_name}", app_name = app_name)
       }
 
-      # Prepare log files
+      # Prepare log files, keeping the previous run's logs (e.g. a crash
+      # traceback) for one restart
       output_log <- file.path(config$config$log_dir, paste0(app_name, "_output.log"))
       error_log <- file.path(config$config$log_dir, paste0(app_name, "_error.log"))
+      for (log_file in c(output_log, error_log)) {
+        if (file.exists(log_file)) {
+          previous_log <- sub("\\.log$", ".prev.log", log_file)
+          tryCatch(
+            suppressWarnings({
+              unlink(previous_log)
+              file.rename(log_file, previous_log)
+            }),
+            error = function(e) FALSE
+          )
+        }
+      }
 
-      # Start the app process
+      # Start the app process. Its stdout and stderr go straight to the log
+      # files so that output from child processes and native code is captured
+      # and can never fill an unread pipe.
       process <- callr::r_bg(
-        function(app_path, port, output_log, error_log, is_rmd_app, rmd_files, is_qmd_app, qmd_files) {
-          # Redirect output to log files
-          output_con <- file(output_log, open = "w", encoding = "UTF-8")
-          error_con <- file(error_log, open = "w", encoding = "UTF-8")
-
-          # Ensure file handles are closed on exit
-          on.exit({
-            tryCatch(
-              {
-                sink(type = "output") # Reset output sink to default
-                sink(type = "message") # Reset message sink to default
-                if (exists("output_con")) close(output_con)
-                if (exists("error_con")) close(error_con)
-              },
-              error = function(e) {
-                # Log cleanup errors but don't fail
-                cat("Warning: Error during file handle cleanup:", e$message, "\n")
-              }
-            )
-          })
-
-          sink(output_con, type = "output")
-          sink(error_con, type = "message")
-
+        function(app_path, port, is_rmd_app, rmd_files, is_qmd_app, qmd_files) {
           if (is_qmd_app && length(qmd_files) > 0) {
             # Load quarto library with error handling
             tryCatch(
@@ -138,13 +130,13 @@ ProcessManager <- setRefClass("ProcessManager",
         args = list(
           app_path = app_path,
           port = app_port,
-          output_log = output_log,
-          error_log = error_log,
           is_rmd_app = is_rmd_app,
           rmd_files = rmd_files,
           is_qmd_app = is_qmd_app,
           qmd_files = qmd_files
-        )
+        ),
+        stdout = output_log,
+        stderr = error_log
       )
 
       config$add_app_process(app_name, process)

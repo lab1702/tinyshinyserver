@@ -583,3 +583,73 @@ test_that("root redirect does not launch a dormant app", {
   expect_equal(response$status, 308)
   expect_equal(response$headers$Location, "/proxy/app/?x=1")
 })
+
+test_that("management server rejects non-loopback Host headers", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(log_dir = tempfile())
+  dir.create(config$config$log_dir)
+  on.exit(unlink(config$config$log_dir, recursive = TRUE), add = TRUE)
+  restarts <- 0
+  pm <- list(get_app_status = function(name) list(status = "running"),
+    restart_app = function(name) { restarts <<- restarts + 1; list(success = TRUE) },
+    get_all_app_status = function() list())
+  for (host in c("evil.example:3839", "evil.example", "127.0.0.1.evil.example:3839",
+                 "manage.myapp.example.com", "[::2]:3839")) {
+    for (req in list(
+      list(PATH_INFO = "/api/apps/app/restart", REQUEST_METHOD = "POST", HTTP_HOST = host,
+        HTTP_X_TINYSHINYSERVER_REQUEST = "management"),
+      list(PATH_INFO = "/api/shutdown", REQUEST_METHOD = "POST", HTTP_HOST = host,
+        HTTP_X_TINYSHINYSERVER_REQUEST = "management"),
+      list(PATH_INFO = "/api/apps", REQUEST_METHOD = "GET", HTTP_HOST = host)
+    )) {
+      expect_equal(handle_management_request(req, config, pm, NULL)$status, 403)
+    }
+  }
+  expect_equal(restarts, 0)
+  expect_false(file.exists(file.path(config$config$log_dir, "shutdown.flag")))
+  for (host in list(NULL, "127.0.0.1:3839", "localhost:3839", "LOCALHOST", "[::1]:3839", "127.0.0.1")) {
+    req <- list(PATH_INFO = "/api/apps/app/restart", REQUEST_METHOD = "POST", HTTP_HOST = host,
+      HTTP_X_TINYSHINYSERVER_REQUEST = "management")
+    expect_equal(handle_management_request(req, config, pm, NULL)$status, 200)
+  }
+  expect_equal(restarts, 6)
+})
+
+test_that("messages for untracked sessions do not open backend connections", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", port = 1, resident = TRUE)))
+  cm <- ConnectionManager$new(config)
+  expect_false(cm$handle_client_message("gone", "{}", "app"))
+  expect_null(config$get_backend_connection("gone"))
+})
+
+test_that("app output from child processes reaches the log without blocking", {
+  app_dir <- tempfile("tss-output-app")
+  log_dir <- tempfile("tss-output-logs")
+  dir.create(app_dir)
+  dir.create(log_dir)
+  on.exit(unlink(c(app_dir, log_dir), recursive = TRUE), add = TRUE)
+  marker <- file.path(app_dir, "done")
+  writeLines("cat(strrep('x', 200000))", file.path(app_dir, "writer.R"))
+  writeLines(c(
+    sprintf("system2(%s, %s)", deparse(file.path(R.home("bin"), "Rscript")),
+      deparse(shQuote(file.path(app_dir, "writer.R")))),
+    sprintf("writeLines('done', %s)", deparse(marker)),
+    "Sys.sleep(60)"
+  ), file.path(app_dir, "app.R"))
+  writeLines("previous run", file.path(log_dir, "app_output.log"))
+
+  config <- ShinyServerConfig$new()
+  on.exit(stop_test_app_processes(config), add = TRUE, after = FALSE)
+  config$config <- list(apps = list(list(name = "app", path = app_dir, port = 1, resident = TRUE)),
+    log_dir = log_dir)
+  pm <- ProcessManager$new(config)
+  pm$start_app(config$config$apps[[1]])
+
+  deadline <- Sys.time() + 30
+  while (!file.exists(marker) && Sys.time() < deadline) Sys.sleep(0.1)
+  expect_true(file.exists(marker))
+  output <- paste(readLines(file.path(log_dir, "app_output.log"), warn = FALSE), collapse = "")
+  expect_gte(nchar(output), 200000)
+  expect_equal(readLines(file.path(log_dir, "app_output.prev.log")), "previous run")
+})

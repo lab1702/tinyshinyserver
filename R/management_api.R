@@ -5,6 +5,12 @@
 handle_management_request <- function(req, config, process_manager, template_manager) {
   "Handle management interface requests"
 
+  # The management server listens on loopback only. Rejecting other Host
+  # names stops DNS-rebinding pages from becoming same-origin with it.
+  if (!is_loopback_host_header(req$HTTP_HOST)) {
+    return(create_error_response("Invalid Host header", 403))
+  }
+
   # Validate inputs
   validation_result <- validate_request_inputs(
     req$PATH_INFO %||% "/",
@@ -23,6 +29,18 @@ handle_management_request <- function(req, config, process_manager, template_man
 
   # Route management requests
   return(route_management_request(path, method, req, config, process_manager, template_manager))
+}
+
+is_loopback_host_header <- function(host) {
+  "Whether a Host header is absent or names a loopback address"
+
+  if (is.null(host) || identical(host, "")) {
+    return(TRUE)
+  }
+  host <- tolower(trimws(host))
+  host <- sub("^(\\[[^]]*\\]):[0-9]+$", "\\1", host)
+  host <- sub("^([^:]+):[0-9]+$", "\\1", host)
+  host %in% c("localhost", "127.0.0.1", "[::1]")
 }
 
 route_management_request <- function(path, method, req, config, process_manager, template_manager) {

@@ -131,10 +131,14 @@ ConnectionManager <- setRefClass("ConnectionManager",
 
       # Update last activity timestamp
       conn_info <- config$get_ws_connection(session_id)
-      if (!is.null(conn_info)) {
-        conn_info$last_activity <- Sys.time()
-        config$add_ws_connection(session_id, conn_info)
+      if (is.null(conn_info)) {
+        # The session was already removed (e.g. by an app restart); do not
+        # open a backend session that no client can use.
+        logger::log_debug("Ignoring message for untracked session {session_id}", session_id = session_id)
+        return(FALSE)
       }
+      conn_info$last_activity <- Sys.time()
+      config$add_ws_connection(session_id, conn_info)
 
       tryCatch(
         {

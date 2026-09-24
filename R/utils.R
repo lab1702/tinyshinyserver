@@ -10,23 +10,29 @@
 get_client_ip <- function(req) {
   "Extract client IP address from request headers"
 
-  # Try to get real IP from headers (for reverse proxy setups)
-  forwarded_for <- req$HTTP_X_FORWARDED_FOR
-  if (!is.null(forwarded_for) && forwarded_for != "") {
-    # Take the first IP if multiple are present
-    ip <- strsplit(forwarded_for, ",")[[1]][1]
-    return(trimws(ip))
-  }
-
-  # Try other common headers
-  real_ip <- req$HTTP_X_REAL_IP
-  if (!is.null(real_ip) && real_ip != "") {
-    return(trimws(real_ip))
-  }
-
-  # Fall back to REMOTE_ADDR
   remote_addr <- req$REMOTE_ADDR
-  if (!is.null(remote_addr) && remote_addr != "") {
+  has_remote_addr <- !is.null(remote_addr) && remote_addr != ""
+
+  # Forwarding headers are client-controlled, so trust them only when the
+  # request arrives from a reverse proxy on this machine
+  if (has_remote_addr && remote_addr %in% c("127.0.0.1", "::1", "::ffff:127.0.0.1")) {
+    forwarded_for <- req$HTTP_X_FORWARDED_FOR
+    if (!is.null(forwarded_for) && forwarded_for != "") {
+      # The last entry is the one added by the proxy itself
+      ips <- trimws(strsplit(forwarded_for, ",")[[1]])
+      ips <- ips[ips != ""]
+      if (length(ips) > 0) {
+        return(ips[length(ips)])
+      }
+    }
+
+    real_ip <- req$HTTP_X_REAL_IP
+    if (!is.null(real_ip) && real_ip != "") {
+      return(trimws(real_ip))
+    }
+  }
+
+  if (has_remote_addr) {
     return(remote_addr)
   }
 

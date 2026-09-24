@@ -1,3 +1,15 @@
+# tinyshinyserver (development version)
+
+* The management server now rejects requests whose `Host` header is not a loopback name (`localhost`, `127.0.0.1`, or `[::1]`), protecting it from DNS-rebinding attacks. **A reverse proxy in front of the management port must forward the upstream address as the host** (for Caddy, `header_up Host {upstream_hostport}`; see the README).
+
+* App processes now write their stdout and stderr directly to the per-app log files. Output from child processes and native code (for example pandoc) is now logged and can no longer fill an unread pipe and hang the app.
+
+* Starting an app keeps the previous run's logs as `{app_name}_output.prev.log` and `{app_name}_error.prev.log`, so a crash traceback survives the automatic restart.
+
+* WebSocket messages for a client session that is no longer tracked no longer open an orphaned backend session.
+
+* Client IP addresses shown in the management dashboard and logs are taken from `X-Forwarded-For` or `X-Real-IP` only when the request comes from a reverse proxy on the same machine, and then from the entry that proxy added.
+
 # tinyshinyserver 0.2.1
 
 * Fixed a race in WebSocket proxy tests that caused `invalid state` errors on some CRAN check machines: test clients are now closed before the servers they are connected to are stopped.

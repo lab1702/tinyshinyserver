@@ -169,14 +169,16 @@ myapp.example.com {
 }
 
 manage.myapp.example.com {
-    reverse_proxy 127.0.0.1:3839
+    reverse_proxy 127.0.0.1:3839 {
+        header_up Host {upstream_hostport}
+    }
     basic_auth {
         admin REPLACE_WITH_ADMIN_PASSWORD_HASH
     }
 }
 ```
 
-Include the management site only if remote administration is needed. Keep cross-origin CORS access disabled on its reverse proxy; see [Management API](#management-api) for the required request header.
+Include the management site only if remote administration is needed. The management server rejects requests whose `Host` header is not `localhost`, `127.0.0.1`, or `[::1]` (protecting it from DNS rebinding), so its reverse proxy must forward the upstream address as the host, as `header_up Host {upstream_hostport}` does above. Keep cross-origin CORS access disabled on its reverse proxy; see [Management API](#management-api) for the required request header.
 
 ## Monitoring and management
 
@@ -271,6 +273,8 @@ With `"log_dir": "./logs"`, the server writes:
 - `logs/server.log` - Main server logs
 - `logs/{app_name}_output.log` - Per-app stdout logs
 - `logs/{app_name}_error.log` - Per-app stderr logs
+
+When an app starts, its logs from the previous run are kept as `{app_name}_output.prev.log` and `{app_name}_error.prev.log`.
 
 ### Log levels
 
