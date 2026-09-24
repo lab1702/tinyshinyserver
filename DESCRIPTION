@@ -23,7 +23,6 @@ Imports:
     digest,
     httpuv,
     websocket,
-    future,
     logger,
     openssl,
     rmarkdown,

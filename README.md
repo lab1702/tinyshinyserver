@@ -180,7 +180,7 @@ manage.myapp.example.com {
 }
 ```
 
-When `proxy_host` is a loopback address, the proxy rejects requests whose `Host` header is not `localhost`, `127.0.0.1`, or `[::1]` (protecting local apps from DNS rebinding), so a reverse proxy in front of it must forward the upstream address as the host, as `header_up Host {upstream_hostport}` does above. The proxy also accepts app WebSocket connections only from pages served by the same host: a browser `Origin` must match the request's `Host` header or, from a reverse proxy on the same machine, its `X-Forwarded-Host` header, which Caddy sets by default.
+When `proxy_host` is a loopback address, the proxy rejects requests whose `Host` header is not `localhost`, `127.0.0.1`, or `[::1]` (protecting local apps from DNS rebinding), so a reverse proxy in front of it must forward the upstream address as the host, as `header_up Host {upstream_hostport}` does above. The proxy also accepts app WebSocket connections only from pages served by the same host: a browser `Origin` must match the request's `Host` header or, from a reverse proxy on the same machine, its `X-Forwarded-Host` header, which Caddy sets by default. A reverse proxy on another machine (with `proxy_host` set to `"0.0.0.0"` or `"::"`) must instead preserve the public `Host` header (for nginx, `proxy_set_header Host $host;`), because `X-Forwarded-Host` is trusted only from the same machine.
 
 Include the management site only if remote administration is needed. The management server rejects requests whose `Host` header is not `localhost`, `127.0.0.1`, or `[::1]` (protecting it from DNS rebinding), so its reverse proxy must forward the upstream address as the host, as `header_up Host {upstream_hostport}` does above. Keep cross-origin CORS access disabled on its reverse proxy; see [Management API](#management-api) for the required request header.
 
@@ -313,7 +313,7 @@ Source code lives in `R/`, generated help pages in `man/`, example apps in `inst
 - Ensure backend app is running and healthy
 - Check for firewall issues blocking WebSocket connections
 - If using a reverse proxy, confirm it forwards WebSocket upgrades
-- If using a reverse proxy, confirm it forwards the upstream address as `Host` and sets `X-Forwarded-Host` to the public host; other hosts and cross-origin WebSocket connections are rejected
+- If using a reverse proxy on the same machine, confirm it forwards the upstream address as `Host` and sets `X-Forwarded-Host` to the public host; a reverse proxy on another machine must preserve the public `Host`. Other hosts and cross-origin WebSocket connections are rejected
 - Monitor logs for WebSocket connection messages
 </details>
 

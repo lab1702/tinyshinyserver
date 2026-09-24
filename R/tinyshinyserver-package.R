@@ -41,7 +41,6 @@
 #' @aliases tinyshinyserver
 #' @keywords package
 #' @importFrom callr r_bg
-#' @importFrom future future plan multisession
 #' @importFrom httpuv startServer service stopServer
 #' @importFrom later later run_now
 #' @importFrom methods new

@@ -2,11 +2,6 @@
 
 export(start_tss)
 importFrom(callr,r_bg)
-importFrom(future,
-  future,
-  multisession,
-  plan
-)
 importFrom(httpuv,
   service,
   startServer,
