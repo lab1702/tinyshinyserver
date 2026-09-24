@@ -1,3 +1,7 @@
+# tinyshinyserver 0.2.1
+
+* Fixed a race in WebSocket proxy tests that caused `invalid state` errors on some CRAN check machines: test clients are now closed before the servers they are connected to are stopped.
+
 # tinyshinyserver 0.2.0
 
 * Process shutdown now waits briefly for exit after sending termination signals, avoiding premature failure reports on macOS.

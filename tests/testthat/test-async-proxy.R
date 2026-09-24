@@ -45,7 +45,7 @@ test_that("proxy preserves binary WebSocket frames before and after backend read
     on_ws = function(ws) handle_websocket_connection(ws, config, cm))
   on.exit(httpuv::stopServer(proxy$server), add = TRUE)
   client <- websocket::WebSocket$new(paste0(sub("^http", "ws", proxy$url), "/proxy/app/websocket/"))
-  on.exit(client$close(), add = TRUE)
+  on.exit(client$close(), add = TRUE, after = FALSE)
   payloads <- list(as.raw(c(0, 1, 127, 128, 255)), raw(), "text after binary")
   received <- list()
   result <- promises::promise(function(resolve, reject) {
@@ -307,7 +307,7 @@ test_that("a real backend WebSocket close reaches the browser", {
   })
   on.exit(httpuv::stopServer(proxy$server), add = TRUE)
   client <- websocket::WebSocket$new(paste0(sub("^http", "ws", proxy$url), "/proxy/app/websocket"))
-  on.exit(client$close(), add = TRUE)
+  on.exit(client$close(), add = TRUE, after = FALSE)
   result <- promises::promise(function(resolve, reject) {
     client$onOpen(function(event) client$send("init"))
     client$onClose(function(event) resolve(TRUE))
@@ -357,7 +357,7 @@ test_that("WebSocket proxy forwards each browser's own authentication headers", 
   for (user in c("alice", "bob", "NONE")) {
     headers <- if (user == "NONE") list() else list(Cookie = paste0("session=", user), Authorization = paste("Bearer", user))
     ws <- websocket::WebSocket$new(paste0(sub("http:", "ws:", proxy$url), "/proxy/app/websocket/"), headers = headers)
-    on.exit(ws$close(), add = TRUE)
+    on.exit(ws$close(), add = TRUE, after = FALSE)
     response <- promises::promise(function(resolve, reject) {
       ws$onOpen(function(event) ws$send("init"))
       ws$onMessage(function(event) resolve(jsonlite::fromJSON(event$data)))
@@ -379,7 +379,7 @@ test_that("a refused backend WebSocket disconnects the browser and clears tracki
     on_ws = function(ws) handle_websocket_connection(ws, config, cm))
   on.exit(httpuv::stopServer(proxy$server), add = TRUE)
   ws <- websocket::WebSocket$new(paste0(sub("http:", "ws:", proxy$url), "/proxy/app/websocket/"))
-  on.exit(ws$close(), add = TRUE)
+  on.exit(ws$close(), add = TRUE, after = FALSE)
   closed <- promises::promise(function(resolve, reject) {
     ws$onOpen(function(event) ws$send("init"))
     ws$onClose(function(event) resolve(TRUE))
