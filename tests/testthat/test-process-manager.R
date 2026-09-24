@@ -1001,7 +1001,7 @@ test_that("check_app_ready returns FALSE when max attempts exceeded", {
 
 test_that("readiness checks continue for apps with a longer appstart_timeout", {
   config <- ShinyServerConfig$new()
-  config$config <- list(apps = list(list(name = "app1", appstart_timeout = 10)))
+  config$config <- list(apps = list(list(name = "app1", appstart_timeout = 40)))
   config$set_app_starting("app1")
   pm <- ProcessManager$new(config)
   config$add_app_process("app1", list())
@@ -1010,10 +1010,31 @@ test_that("readiness checks continue for apps with a longer appstart_timeout", {
     wait_for_backend = function(url, wait_seconds = 0) promises::promise_resolve(FALSE)
   )
   later::with_loop(later::create_loop(), {
+    expect_false(await_response(pm$check_app_ready("app1", 3001, list(), attempt = 60)))
+    expect_true(config$is_app_starting("app1"))
+
+    expect_false(await_response(pm$check_app_ready("app1", 3001, list(), attempt = 80)))
+    expect_false(config$is_app_starting("app1"))
+  })
+})
+
+test_that("readiness checks cover the full startup window for short appstart_timeout", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app1")))
+  config$set_app_starting("app1")
+  pm <- ProcessManager$new(config)
+  config$add_app_process("app1", list())
+  local_mocked_bindings(
+    is_process_alive = function(process) TRUE,
+    wait_for_backend = function(url, wait_seconds = 0) promises::promise_resolve(FALSE)
+  )
+  last_attempt <- config$APP_STARTUP_TIMEOUT_SECONDS / 0.5
+  later::with_loop(later::create_loop(), {
+    # A slow app (e.g. Quarto rendering) is still starting after 10 attempts
     expect_false(await_response(pm$check_app_ready("app1", 3001, list(), attempt = 10)))
     expect_true(config$is_app_starting("app1"))
 
-    expect_false(await_response(pm$check_app_ready("app1", 3001, list(), attempt = 20)))
+    expect_false(await_response(pm$check_app_ready("app1", 3001, list(), attempt = last_attempt)))
     expect_false(config$is_app_starting("app1"))
   })
 })

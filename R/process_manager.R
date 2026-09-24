@@ -159,8 +159,10 @@ ProcessManager <- setRefClass("ProcessManager",
       "Check if app is ready to accept connections (async, non-blocking)"
 
       if (is.null(max_attempts)) {
+        # Poll for the same window in which the app counts as starting up.
         app_config <- config$get_app_config(app_name)
-        max_attempts <- max(10, ceiling((app_config$appstart_timeout %||% 2) / 0.5))
+        startup_timeout <- max(config$APP_STARTUP_TIMEOUT_SECONDS, app_config$appstart_timeout %||% 2)
+        max_attempts <- ceiling(startup_timeout / 0.5)
       }
 
       # Ignore callbacks from stopped or replaced process generations.

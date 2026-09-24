@@ -46,6 +46,8 @@
 
 * The management dashboard shows "N/A" instead of "[object Object]" as the PID of apps that are not running.
 
+* Startup readiness checks now continue for the full 30-second startup window (or `appstart_timeout`, if longer) instead of giving up after about 5 seconds. Slow-starting apps, such as Quarto documents that render first, no longer log a false "failed to become ready" error, and WebSocket clients keep receiving the "App is starting" reply until the app is ready.
+
 * The management dashboard shows app paths containing characters such as `<` or `&` literally instead of interpreting them as HTML.
 
 * The inventory example app accepts at most 10,000 items, so a visitor can no longer make it allocate unbounded memory.
