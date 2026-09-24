@@ -388,10 +388,13 @@ ProcessManager <- setRefClass("ProcessManager",
               }
             }
           } else {
-            # App not running - only start if it's resident
+            # App not running - only restart if it's resident. Apps that died
+            # during startup or were cleaned up also wait for restart_delay.
             if (app_config$resident) {
-              logger::log_info("Resident app {app_name} not running, starting", app_name = app_name)
-              start_app(app_config)
+              if (is.null(pending_restarts[[app_name]])) {
+                logger::log_info("Resident app {app_name} not running, restarting", app_name = app_name)
+                schedule_restart(app_config)
+              }
             } else {
               logger::log_debug("Non-resident app {app_name} is stopped (normal state)", app_name = app_name)
             }

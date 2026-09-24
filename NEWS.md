@@ -42,6 +42,8 @@
 
 * Package log messages are formatted correctly even when the session's global `logger` formatter is not glue.
 
+* Resident apps that die during startup, or are found without a process by a health check, now wait `restart_delay` before restarting instead of restarting at the next health check.
+
 ## Package
 
 * Removed the unused `future` dependency. `tools` and `utils` are now declared imports. Added `ps`, already required by `callr`, to identify the process listening on an app's port.

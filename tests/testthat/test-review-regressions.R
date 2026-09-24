@@ -489,7 +489,8 @@ test_that("backend errors close sessions once and ignore replaced connections", 
 
 test_that("health checks isolate startup errors and retry failed apps", {
   config <- ShinyServerConfig$new()
-  config$config <- list(apps = lapply(c("bad", "next", "healthy"), function(name) list(name = name, resident = TRUE)))
+  config$config <- list(apps = lapply(c("bad", "next", "healthy"), function(name) list(name = name, resident = TRUE)),
+    restart_delay = 0)
   healthy <- list(is_alive = function() TRUE)
   config$add_app_process("healthy", healthy)
   pm <- ProcessManager$new(config)
@@ -829,4 +830,27 @@ test_that("package log messages use glue whatever the global formatter", {
   log <- readLines(file.path(log_dir, "server.log"))
   expect_true(any(grepl("file output to .*server\\.log", log)))
   expect_false(any(grepl("{log_file}", log, fixed = TRUE)))
+})
+
+test_that("health checks restart a missing resident app only after restart_delay", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = TRUE)), restart_delay = 60)
+  pm <- ProcessManager$new(config)
+  starts <- 0
+  assign("start_app", function(app_config) {
+    starts <<- starts + 1
+    TRUE
+  }, envir = pm)
+  scheduled <- list()
+  local_mocked_bindings(later = function(func, delay = 0, ...) {
+    scheduled[[length(scheduled) + 1]] <<- list(func = func, delay = delay)
+  }, .package = "later")
+  pm$health_check()
+  pm$health_check()
+  expect_equal(starts, 0)
+  # Later health checks keep the pending restart instead of postponing it
+  expect_length(scheduled, 1)
+  expect_equal(scheduled[[1]]$delay, 60)
+  scheduled[[1]]$func()
+  expect_equal(starts, 1)
 })

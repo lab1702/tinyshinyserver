@@ -46,7 +46,7 @@ documented in NEWS.md and README.md.
 
 Local: 0 errors | 0 warnings | 0 notes.
 
-Local test results: 1469 passes, 0 failures, 0 warnings, 2 intentional skips
+Local test results: 1473 passes, 0 failures, 0 warnings, 2 intentional skips
 on CRAN (the invalid-device-path write test and a test that launches a real
 Shiny app).
 

@@ -849,7 +849,8 @@ test_that("health_check starts missing resident app", {
     apps = list(
       list(name = "app1", path = temp_app_dir, port = 3001, resident = TRUE)
     ),
-    log_dir = tempdir()
+    log_dir = tempdir(),
+    restart_delay = 0
   )
 
   pm <- ProcessManager$new(config)
