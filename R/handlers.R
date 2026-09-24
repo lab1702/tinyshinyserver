@@ -5,6 +5,10 @@
 handle_http_request <- function(req, config, template_manager, connection_manager, process_manager = NULL) {
   "Main HTTP request handler with routing"
 
+  if (!is_allowed_proxy_host(req, config)) {
+    return(create_error_response("Invalid Host header", 403))
+  }
+
   # Validate request inputs
   validation_result <- validate_request_inputs(
     req$PATH_INFO,
@@ -418,6 +422,18 @@ wait_for_backend <- function(url, wait_seconds = 0) {
   })
 }
 
+is_allowed_proxy_host <- function(req, config) {
+  "Whether the proxy should serve a request with this Host header"
+
+  # A loopback-only proxy must not answer other names, or a DNS-rebinding
+  # page could become same-origin with it and drive local apps
+  proxy_host <- config$config$proxy_host %||% "127.0.0.1"
+  if (proxy_host %in% c("127.0.0.1", "localhost", "::1")) {
+    return(is_loopback_host_header(req$HTTP_HOST))
+  }
+  TRUE
+}
+
 is_same_origin_websocket <- function(req) {
   "Whether a WebSocket handshake has no Origin or one matching the request host"
 
@@ -452,6 +468,12 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
   "Handle new WebSocket connections"
 
   logger::log_info("WebSocket connection opened")
+
+  if (!is_allowed_proxy_host(ws$request, config)) {
+    logger::log_warn("Rejecting WebSocket with Host {host}", host = ws$request$HTTP_HOST)
+    ws$close()
+    return()
+  }
 
   # Browsers attach cookies and cached credentials to cross-site WebSocket
   # handshakes, so only accept sessions opened by pages served from this host

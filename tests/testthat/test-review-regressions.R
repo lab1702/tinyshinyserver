@@ -656,7 +656,8 @@ test_that("app output from child processes reaches the log without blocking", {
 
 test_that("cross-origin WebSocket handshakes are rejected before routing", {
   config <- ShinyServerConfig$new()
-  config$config <- list(apps = list(list(name = "app", port = 1, resident = TRUE)))
+  # Bound to all interfaces, so only the Origin check applies to these hosts
+  config$config <- list(apps = list(list(name = "app", port = 1, resident = TRUE)), proxy_host = "0.0.0.0")
   cm <- ConnectionManager$new(config)
   closed <- 0
   for (origin in c("https://evil.example", "http://myapp.example.com.evil.example", "null",
@@ -699,4 +700,28 @@ test_that("management responses cannot be framed", {
     expect_equal(response$headers[["X-Frame-Options"]], "DENY")
     expect_equal(response$headers[["Content-Security-Policy"]], "frame-ancestors 'none'")
   }
+})
+
+test_that("a loopback proxy rejects rebound Host names", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", port = 1, resident = FALSE)))
+  pm <- list(start_app_on_demand = function(...) stop("must not start"))
+  closed <- 0
+  for (host in c("attacker.example:3838", "attacker.example", "127.0.0.1.attacker.example")) {
+    req <- list(PATH_INFO = "/proxy/app/", REQUEST_METHOD = "GET", HTTP_HOST = host)
+    expect_equal(handle_http_request(req, config, NULL, NULL, pm)$status, 403)
+    ws <- list(request = list(PATH_INFO = "/proxy/app/websocket/", HTTP_HOST = host,
+      HTTP_ORIGIN = paste0("http://", host)),
+      close = function() closed <<- closed + 1,
+      onMessage = function(...) stop("Rebound socket must not register callbacks"))
+    handle_websocket_connection(ws, config, ConnectionManager$new(config), pm)
+  }
+  expect_equal(closed, 3)
+  expect_length(config$get_all_ws_connections(), 0)
+  req <- list(PATH_INFO = "/health", REQUEST_METHOD = "GET", HTTP_HOST = "localhost:3838")
+  expect_equal(handle_http_request(req, config, NULL, NULL, pm)$status, 200)
+  # A proxy deliberately bound to all interfaces serves any host name
+  config$config$proxy_host <- "0.0.0.0"
+  req <- list(PATH_INFO = "/health", REQUEST_METHOD = "GET", HTTP_HOST = "server.internal:3838")
+  expect_equal(handle_http_request(req, config, NULL, NULL, pm)$status, 200)
 })
