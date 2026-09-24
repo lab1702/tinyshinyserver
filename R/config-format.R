@@ -33,7 +33,7 @@
 #' \describe{
 #'   \item{\code{apps}}{Array of Shiny applications to host. Each app must have \code{name} and \code{path}.}
 #'   \item{\code{starting_port}}{Starting port number for automatic app port assignment.}
-#'   \item{\code{log_dir}}{Directory where server and application logs will be written.}
+#'   \item{\code{log_dir}}{Directory where server and application logs will be written. Each app writes \code{<name>_output.log} and \code{<name>_error.log}; the previous run's logs are kept as \code{<name>_output.prev.log} and \code{<name>_error.prev.log}.}
 #' }
 #'
 #' @section Optional Fields:
@@ -50,7 +50,7 @@
 #' \describe{
 #'   \item{\code{name}}{Unique identifier used in URLs and logs: 1--50 ASCII letters, digits, underscores, or hyphens. Required.}
 #'   \item{\code{path}}{Path to the app directory, absolute or relative to the R working directory. Required.}
-#'   \item{\code{resident}}{Boolean. If \code{true}, app runs continuously. If \code{false} (default), app starts on-demand.}
+#'   \item{\code{resident}}{Boolean. If \code{true}, app runs continuously. If \code{false} (default), app starts on demand and stops 30 seconds after its last WebSocket connection closes.}
 #'   \item{\code{appstart_timeout}}{Positive, finite number of seconds from app startup to wait for readiness before returning HTTP 503 (default: 2). Fractional seconds are supported.}
 #' }
 #'
@@ -64,6 +64,14 @@
 #'   \item \code{"::1"}: IPv6 localhost
 #'   \item \code{"::"}: All IPv6 interfaces
 #' }
+#'
+#' To protect against DNS rebinding, the management server, and the proxy when
+#' \code{proxy_host} is a loopback address, reject requests whose \code{Host}
+#' header is not \code{localhost}, \code{127.0.0.1}, or \code{[::1]}. A reverse
+#' proxy on the same machine must therefore forward the upstream address as the
+#' host and set \code{X-Forwarded-Host} to the public host. App WebSocket
+#' connections are accepted only when the browser \code{Origin} matches the
+#' request host.
 #'
 #' @section Port Assignment:
 #' Apps are automatically assigned ports starting from \code{starting_port}, skipping

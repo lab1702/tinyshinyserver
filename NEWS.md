@@ -1,28 +1,36 @@
-# tinyshinyserver (development version)
+# tinyshinyserver 0.3.0
 
-* `start_tss()` now configures logging only for the package's own logger namespace, so the caller's `logger` threshold and appender are no longer changed for the rest of the R session.
+## Breaking changes
 
-* On-demand apps now stop 30 seconds after their last WebSocket connection closes instead of immediately. Reloading or navigating within an on-demand app previously stopped it between pages, forcing a cold restart that could make the new page's requests fail with HTTP 503.
-
-* Removed the unused `future` dependency.
-
-* When `proxy_host` is a loopback address, the proxy now rejects requests whose `Host` header is not a loopback name, so DNS-rebinding websites cannot read or drive local apps. **A reverse proxy in front of the app port must forward the upstream address as the host** (for Caddy, `header_up Host {upstream_hostport}`; see the README).
-
-* The proxy now rejects app WebSocket connections whose browser `Origin` does not match the request host, so other websites can no longer open app sessions with a visitor's cookies or reverse-proxy credentials. A reverse proxy on the same machine must set `X-Forwarded-Host` to the public host (Caddy does by default); one on another machine must preserve the public `Host` header.
-
-* Management responses now send `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors 'none'` so the dashboard's restart controls cannot be clickjacked from a framing page.
+* **Reverse proxies must now send a loopback `Host` header.** When `proxy_host` is a loopback address, the proxy rejects requests whose `Host` header is not `localhost`, `127.0.0.1`, or `[::1]`; the management server always does. A reverse proxy on the same machine must forward the upstream address as the host (for Caddy, `header_up Host {upstream_hostport}`) and set `X-Forwarded-Host` to the public host (Caddy does by default). A reverse proxy on another machine, with `proxy_host` set to `"0.0.0.0"` or `"::"`, must preserve the public `Host` header. See the updated Caddy example in the README.
 
 * The proxy's public `/api/apps` endpoint now returns only each app's name, status, mode, and connection count. App paths, ports, and process IDs are available only from the loopback management API.
 
-* The management server now rejects requests whose `Host` header is not a loopback name (`localhost`, `127.0.0.1`, or `[::1]`), protecting it from DNS-rebinding attacks. **A reverse proxy in front of the management port must forward the upstream address as the host** (for Caddy, `header_up Host {upstream_hostport}`; see the README).
+* On-demand apps now stop 30 seconds after their last WebSocket connection closes instead of immediately. Reloading or navigating within an on-demand app previously stopped it between pages, forcing a cold restart that could make the new page's requests fail with HTTP 503.
+
+## Security
+
+* The proxy and management server reject DNS-rebinding requests through the `Host` header checks above, so websites cannot read or drive local apps or the management API.
+
+* The proxy rejects app WebSocket connections whose browser `Origin` does not match the request host, so other websites can no longer open app sessions with a visitor's cookies or reverse-proxy credentials.
+
+* Management responses send `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors 'none'` so the dashboard's restart controls cannot be clickjacked from a framing page.
+
+* Client IP addresses shown in the management dashboard and logs are taken from `X-Forwarded-For` or `X-Real-IP` only when the request comes from a reverse proxy on the same machine, and then from the entry that proxy added.
+
+## Apps and logging
 
 * App processes now write their stdout and stderr directly to the per-app log files. Output from child processes and native code (for example pandoc) is now logged and can no longer fill an unread pipe and hang the app.
 
 * Starting an app keeps the previous run's logs as `{app_name}_output.prev.log` and `{app_name}_error.prev.log`, so a crash traceback survives the automatic restart.
 
+* `start_tss()` now configures logging only for the package's own logger namespace, so the caller's `logger` threshold and appender are no longer changed for the rest of the R session.
+
 * WebSocket messages for a client session that is no longer tracked no longer open an orphaned backend session.
 
-* Client IP addresses shown in the management dashboard and logs are taken from `X-Forwarded-For` or `X-Real-IP` only when the request comes from a reverse proxy on the same machine, and then from the entry that proxy added.
+## Package
+
+* Removed the unused `future` dependency. `tools` and `utils` are now declared imports.
 
 # tinyshinyserver 0.2.1
 

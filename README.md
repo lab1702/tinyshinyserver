@@ -204,7 +204,7 @@ These read-only endpoints are served on the proxy port:
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Returns `{"status": "healthy"}` while the proxy is responding; does not check each app |
-| `/api/apps` | GET | Application status used by the landing page |
+| `/api/apps` | GET | Name, status, mode, and connection count for each app, used by the landing page |
 
 ### Management API
 
@@ -264,7 +264,7 @@ The server includes automatic memory management features:
 - **Connection Cleanup**: Removes stale connections after 30 minutes of inactivity
 - **Queue Limits**: Limits pending message queues to 100 messages per connection
 - **Process Cleanup**: Removes dead process objects from memory
-- **File Handle Management**: Ensures proper cleanup of log file handles
+- **Log Files**: App output is written directly to log files, and one previous run's logs are kept per app
 
 Cleanup runs automatically every 5 minutes and logs activity for monitoring.
 
@@ -303,7 +303,7 @@ Source code lives in `R/`, generated help pages in `man/`, example apps in `inst
 
 - Check that the app directory exists and contains valid Shiny code
 - Check the startup logs for port conflicts and assigned app ports
-- Check app-specific error logs in `logs/{app_name}_error.log`
+- Check app-specific error logs in `logs/{app_name}_error.log`; after a crash and automatic restart, the crash output is in `logs/{app_name}_error.prev.log`
 - Use `?start_tss` for configuration help
 </details>
 
@@ -321,7 +321,7 @@ Source code lives in `R/`, generated help pages in `man/`, example apps in `inst
 <summary><strong>Management interface not accessible</strong></summary>
 
 - Verify server is running: check R console output
-- Access via http://localhost:3839 (not external IP)
+- Access via http://localhost:3839 (not external IP); requests whose `Host` header is not `localhost`, `127.0.0.1`, or `[::1]` receive HTTP 403
 - Ensure no firewall is blocking localhost connections
 - Check logs for management server startup messages
 </details>
