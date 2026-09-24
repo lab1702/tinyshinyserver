@@ -493,3 +493,24 @@ test_that("the proxy never forwards to another program holding an app's port", {
   expect_null(config$get_backend_connection("s"))
   expect_equal(hits, 0)
 })
+
+test_that("a launched Shiny app process owns its listening port", {
+  skip_on_cran()
+  skip_if_not(ps::ps_is_supported())
+  app_dir <- tempfile("tss-app")
+  log_dir <- tempfile("tss-logs")
+  dir.create(app_dir)
+  dir.create(log_dir)
+  on.exit(unlink(c(app_dir, log_dir), recursive = TRUE), add = TRUE)
+  writeLines("shiny::shinyApp(shiny::fluidPage('ok'), function(input, output) NULL)",
+    file.path(app_dir, "app.R"))
+  config <- ShinyServerConfig$new()
+  on.exit(stop_test_app_processes(config), add = TRUE, after = FALSE)
+  config$config <- list(apps = list(list(name = "app", path = app_dir, port = httpuv::randomPort(),
+    resident = TRUE, appstart_timeout = 60)), log_dir = log_dir)
+  ProcessManager$new(config)$start_app(config$config$apps[[1]])
+  deadline <- Sys.time() + 60
+  while (config$is_app_starting("app") && Sys.time() < deadline) later::run_now(0.1)
+  expect_false(config$is_app_starting("app"))
+  expect_true(config$app_backend_verified("app"))
+})
