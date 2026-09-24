@@ -198,16 +198,6 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       if (file.exists(shutdown_flag_file)) {
         file.remove(shutdown_flag_file)
       }
-
-      # Cleanup shutdown flag on exit
-      on.exit(
-        {
-          if (file.exists(shutdown_flag_file)) {
-            file.remove(shutdown_flag_file)
-          }
-        },
-        add = TRUE
-      )
     },
     run_event_loop = function() {
       "Main event loop with proper error handling"
@@ -278,6 +268,10 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       if (!is.null(process_manager)) {
         process_manager$stop_all_apps()
       }
+
+      # The management API's shutdown request has been handled
+      log_dir <- config$config$log_dir
+      if (!is.null(log_dir)) unlink(file.path(log_dir, "shutdown.flag"))
 
       logger::log_info("Server shutdown complete")
       # NOTE: Intentionally not calling quit() here to avoid killing the host R session

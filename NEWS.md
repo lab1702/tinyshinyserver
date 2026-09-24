@@ -36,6 +36,8 @@
 
 * Port assignments are now written to `server.log`, not only to the console.
 
+* A shutdown through the management API no longer leaves `shutdown.flag` behind in `log_dir`.
+
 ## Package
 
 * Removed the unused `future` dependency. `tools` and `utils` are now declared imports. Added `ps`, already required by `callr`, to identify the process listening on an app's port.

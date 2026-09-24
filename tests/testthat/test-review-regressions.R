@@ -790,3 +790,18 @@ test_that("port assignments reach the server log", {
   log <- readLines(file.path(log_dir, "server.log"))
   expect_true(any(grepl("App 'app' -> port 3001", log, fixed = TRUE)))
 })
+
+test_that("shutdown removes the management API's shutdown flag", {
+  log_dir <- tempfile("tss-shutdown")
+  dir.create(log_dir)
+  on.exit(unlink(log_dir, recursive = TRUE), add = TRUE)
+  config <- ShinyServerConfig$new()
+  config$config <- list(log_dir = log_dir)
+  local_mocked_bindings(create_server_config = function(...) config, setup_logging = function(...) NULL)
+  server <- TinyShinyServer$new()
+  server$setup_shutdown_monitoring()
+  flag <- file.path(log_dir, "shutdown.flag")
+  writeLines("shutdown", flag)
+  server$shutdown()
+  expect_false(file.exists(flag))
+})
