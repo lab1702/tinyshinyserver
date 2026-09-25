@@ -56,9 +56,10 @@ documented in NEWS.md and README.md.
 
 * Local: Windows 11 x64 (build 28000), x86_64-w64-mingw32,
   R 4.6.1 (2026-06-24 ucrt).
-  Checked with `R CMD check --as-cran` on the source tarball built from
-  commit d0cf0bb, including the PDF manual, with remote incoming checks
-  disabled and OpenMP thread limit set to one.
+  Checked with `R CMD check --as-cran` on the source tarball built from the
+  commit that records these results (this file is excluded from the build),
+  including the PDF manual, with remote incoming checks disabled and OpenMP
+  thread limit set to one.
 * R-hub (commit 2d78c23, run
   https://github.com/lab1702/tinyshinyserver/actions/runs/36097057817):
   linux (R-devel), windows (R-devel), macos-arm64 (R-devel), gcc16, and
@@ -72,8 +73,8 @@ R-hub at commit 2d78c23: 0 errors | 0 warnings | 0 notes on all five platforms.
 Later commits, including the configuration reload feature, have been checked
 only locally.
 
-Test results: 1652 passes locally at commit d0cf0bb, and 1541 on each R-hub
-platform at commit 2d78c23, before the configuration reload tests were added. All runs had
+Test results: 1660 passes locally, and 1541 on each R-hub platform at commit
+2d78c23, before the configuration reload tests were added. All runs had
 0 failures, 0 warnings, and 2 intentional skips on CRAN (the
 invalid-device-path write test and a test that launches a real Shiny app). One test's expectation count
 depends on timing.

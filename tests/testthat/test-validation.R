@@ -165,6 +165,9 @@ test_that("validate_query_string rejects strings that are too long", {
 test_that("validate_query_string accepts long Shiny bookmark URLs by default", {
   expect_true(validate_query_string(paste0("_inputs_&x=", strrep("a", 8000)))$valid)
   expect_false(validate_query_string(strrep("a", 8193))$valid)
+  # httpuv's QUERY_STRING includes the leading question mark.
+  expect_true(validate_query_string(paste0("?", strrep("a", 8192)))$valid)
+  expect_false(validate_query_string(paste0("?", strrep("a", 8193)))$valid)
 })
 
 test_that("validate_query_string validates URL encoding", {

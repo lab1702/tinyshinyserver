@@ -61,7 +61,8 @@ validate_query_string <- function(query_string, max_length = 8192) {
     return(list(valid = FALSE, error = "Invalid query string type"))
   }
 
-  if (nchar(query_string) > max_length) {
+  # httpuv includes the leading question mark, which does not count toward the limit.
+  if (nchar(sub("^[?]", "", query_string)) > max_length) {
     return(list(valid = FALSE, error = "Query string too long"))
   }
 
