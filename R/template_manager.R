@@ -60,18 +60,11 @@ TemplateManager <- setRefClass("TemplateManager",
     generate_landing_page = function(config) {
       "Generate the landing page HTML"
 
-      # Capture session information (first 3 lines only)
-      session_info_output <- capture.output(sessionInfo())
-      session_info_text <- paste(head(session_info_output, 3), collapse = "\n")
-      # Escape HTML characters
-      session_info_text <- html_escape(session_info_text)
-
       # Generate app cards
       app_cards <- generate_app_cards(config$config$apps)
 
       # Render template
       return(render_template("landing_page", list(
-        session_info = session_info_text,
         app_cards = app_cards,
         title = title_html()
       )))
@@ -79,7 +72,16 @@ TemplateManager <- setRefClass("TemplateManager",
     generate_management_page = function() {
       "Generate the management page HTML"
 
-      return(render_template("management_page", list(title = title_html())))
+      # Capture session information: R version, platform, and operating system
+      session_info_output <- capture.output(sessionInfo())
+      session_info_text <- paste(head(session_info_output, 3), collapse = "\n")
+      # Escape HTML characters
+      session_info_text <- html_escape(session_info_text)
+
+      return(render_template("management_page", list(
+        session_info = session_info_text,
+        title = title_html()
+      )))
     },
     generate_app_cards = function(apps) {
       "Generate HTML for app cards"

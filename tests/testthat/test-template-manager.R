@@ -17,13 +17,13 @@ create_test_template_dir <- function() {
 
   # Create landing page template
   writeLines(
-    "<html><body><div>{{session_info}}</div><div>{{app_cards}}</div></body></html>",
+    "<html><body><div>{{app_cards}}</div></body></html>",
     file.path(temp_dir, "landing_page.html")
   )
 
   # Create management page template
   writeLines(
-    "<html><body><h1>Management Dashboard</h1></body></html>",
+    "<html><body><h1>Management Dashboard</h1><div>{{session_info}}</div></body></html>",
     file.path(temp_dir, "management_page.html")
   )
 
@@ -243,7 +243,7 @@ test_that("generate_app_cards escapes HTML in app names", {
 # generate_landing_page() Tests
 # ============================================================================
 
-test_that("generate_landing_page creates HTML with session info", {
+test_that("generate_landing_page creates HTML with app cards", {
   temp_dir <- create_test_template_dir()
   on.exit(cleanup_test_template_dir(temp_dir))
 
@@ -260,9 +260,8 @@ test_that("generate_landing_page creates HTML with session info", {
 
   expect_match(result, "<html>")
   expect_match(result, "testapp")
-  # Should contain R version info from sessionInfo()
-  # Matches both "R version X.Y.Z" (stable) and "R Under development" (unstable)
-  expect_match(result, "R (version|Under development)", ignore.case = TRUE)
+  # Server information is shown on the management page only
+  expect_no_match(result, "R (version|Under development)", ignore.case = TRUE)
 })
 
 test_that("generate_landing_page handles empty apps list", {
@@ -283,7 +282,7 @@ test_that("generate_landing_page handles empty apps list", {
 # generate_management_page() Tests
 # ============================================================================
 
-test_that("generate_management_page returns HTML", {
+test_that("generate_management_page returns HTML with session info", {
   temp_dir <- create_test_template_dir()
   on.exit(cleanup_test_template_dir(temp_dir))
 
@@ -293,6 +292,10 @@ test_that("generate_management_page returns HTML", {
 
   expect_match(result, "<html>")
   expect_match(result, "Management Dashboard")
+  # Should contain R version info from sessionInfo()
+  # Matches both "R version X.Y.Z" (stable) and "R Under development" (unstable)
+  expect_match(result, "R (version|Under development)", ignore.case = TRUE)
+  expect_no_match(result, "{{session_info}}", fixed = TRUE)
 })
 
 # ============================================================================

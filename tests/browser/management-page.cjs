@@ -73,7 +73,7 @@ const { chromium } = require('playwright');
       `<span class="status-badge" id="status-${name}"></span><span id="connections-${name}"></span>` +
       `<span class="app-open"></span></div></a>`;
     const landing = fs.readFileSync(path.join(templates, 'landing_page.html'), 'utf8')
-      .replaceAll('{{base_url}}', '').replaceAll('{{title}}', 'Apps').replaceAll('{{session_info}}', '');
+      .replaceAll('{{base_url}}', '').replaceAll('{{title}}', 'Apps');
     let landingCards = ['gone', 'live'];
     let landingLoads = 0;
     const landingPage = await browser.newPage();
