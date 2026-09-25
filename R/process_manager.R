@@ -40,6 +40,10 @@ ProcessManager <- setRefClass("ProcessManager",
         logger::log_info("Detected traditional Shiny app for {app_name}", app_name = app_name)
       }
 
+      # Recreate log_dir if it was removed while the server runs; app
+      # processes cannot start without their log files
+      dir.create(config$config$log_dir, recursive = TRUE, showWarnings = FALSE)
+
       # Prepare log files, keeping the previous run's logs (e.g. a crash
       # traceback) for one restart
       output_log <- file.path(config$config$log_dir, paste0(app_name, "_output.log"))

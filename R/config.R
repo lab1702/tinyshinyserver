@@ -153,7 +153,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         )))
       }
 
-      # Logging to an unwritable file would fail every later log call
+      # An unwritable log_dir would lose the server log and the app logs
       if (!identical(new_config$log_dir, config$log_dir)) {
         log_dir_error <- check_log_dir(new_config$log_dir)
         if (!is.null(log_dir_error)) {

@@ -62,9 +62,11 @@ generate_session_id <- function(req) {
 setup_logging <- function(log_dir, log_level = "INFO") {
   "Initialize logging system with file and console output"
 
-  # Ensure log directory exists
-  if (!dir.exists(log_dir)) {
-    dir.create(log_dir, recursive = TRUE)
+  # Fail now: the appender drops file write errors, so an unwritable
+  # log_dir would otherwise lose the server log without notice
+  log_dir_error <- check_log_dir(log_dir)
+  if (!is.null(log_dir_error)) {
+    stop(log_dir_error, call. = FALSE)
   }
 
   # Configure only this package's logger namespace so the caller's own

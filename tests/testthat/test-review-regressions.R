@@ -797,6 +797,27 @@ test_that("an unwritable server log does not stop logging or shutdown", {
   expect_true(stopped)
 })
 
+test_that("setup_logging rejects a log_dir where the server log cannot be written", {
+  blocker <- tempfile("tss-blocker")
+  on.exit(unlink(blocker), add = TRUE)
+  # A directory cannot be created below a regular file
+  writeLines("", blocker)
+  expect_error(setup_logging(file.path(blocker, "logs"), "INFO"), "Cannot write the server log")
+})
+
+test_that("start_app recreates a log_dir removed while the server runs", {
+  log_dir <- tempfile("tss-logs")
+  on.exit(unlink(log_dir, recursive = TRUE), add = TRUE)
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", path = tempdir(), port = 1, resident = TRUE)),
+    log_dir = log_dir)
+  local_mocked_bindings(r_bg = function(...) list(is_alive = function() TRUE), .package = "callr")
+  ProcessManager$new(config)$start_app(config$config$apps[[1]])
+  # Retire the fake process so its scheduled readiness check does nothing
+  config$remove_app_process("app")
+  expect_true(dir.exists(log_dir))
+})
+
 test_that("port assignments reach the server log", {
   path <- tempfile(fileext = ".json")
   log_dir <- tempfile("tss-logs")
