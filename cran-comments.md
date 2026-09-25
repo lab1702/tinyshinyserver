@@ -46,8 +46,8 @@ documented in NEWS.md and README.md.
   Checked with `R CMD check --as-cran` on the source tarball, including the
   PDF manual, with remote incoming checks disabled and OpenMP thread limit set
   to one.
-* R-hub (commit 6033be6, run
-  https://github.com/lab1702/tinyshinyserver/actions/runs/36076979816):
+* R-hub (commit 2d78c23, run
+  https://github.com/lab1702/tinyshinyserver/actions/runs/36097057817):
   linux (R-devel), windows (R-devel), macos-arm64 (R-devel), gcc16, and
   ubuntu-gcc12.
 
@@ -57,10 +57,9 @@ Local: 0 errors | 0 warnings | 0 notes.
 
 R-hub: 0 errors | 0 warnings | 0 notes on all five platforms.
 
-Test results: 1541 passes locally, and 1479 or 1480 on R-hub at commit
-6033be6 (before later tests were added), with 0 failures,
-0 warnings, and 2 intentional skips on CRAN (the invalid-device-path write test
-and a test that launches a real Shiny app). One test's expectation count
+Test results: 1542 passes locally and 1541 on each R-hub platform, with
+0 failures, 0 warnings, and 2 intentional skips on CRAN (the
+invalid-device-path write test and a test that launches a real Shiny app). One test's expectation count
 depends on timing.
 
 ## Downstream dependencies
