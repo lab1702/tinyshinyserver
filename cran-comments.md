@@ -68,7 +68,9 @@ documented in NEWS.md and README.md.
 
 Local: 0 errors | 0 warnings | 0 notes.
 
-R-hub: 0 errors | 0 warnings | 0 notes on all five platforms.
+R-hub at commit 2d78c23: 0 errors | 0 warnings | 0 notes on all five platforms.
+Later commits, including the configuration reload feature, have been checked
+only locally.
 
 Test results: 1652 passes locally at commit d0cf0bb, and 1541 on each R-hub
 platform at commit 2d78c23, before the configuration reload tests were added. All runs had

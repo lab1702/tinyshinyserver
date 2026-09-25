@@ -46,6 +46,8 @@ vignettes/*.pdf
 # Quarto generated files
 *_files/
 *.html
+# Keep the package's page templates tracked
+!inst/templates/*.html
 
 # R Environment Variables
 .Renviron
