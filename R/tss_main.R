@@ -30,7 +30,9 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
 
       # Initialize other components
       process_manager <<- create_process_manager(config)
-      template_manager <<- create_template_manager(title = config$config$title)
+      template_manager <<- create_template_manager(
+        base_url = config$config$base_path, title = config$config$title
+      )
       connection_manager <<- create_connection_manager(config, process_manager)
       proxy_server <<- NULL
       management_server <<- NULL
@@ -156,8 +158,8 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       proxy_host <- config$get_proxy_host()
       proxy_port <- config$config$proxy_port %||% 3838
 
-      logger::log_info("Starting proxy server on http://{proxy_host}:{proxy_port}",
-        proxy_host = proxy_host, proxy_port = proxy_port
+      logger::log_info("Starting proxy server on http://{proxy_host}:{proxy_port}{base_path}/",
+        proxy_host = proxy_host, proxy_port = proxy_port, base_path = config$config$base_path
       )
 
       proxy_server <<- httpuv::startServer(
@@ -283,6 +285,7 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
         setup_logging(config$config$log_dir)
       }
       template_manager$field("server_title", config$config$title)
+      template_manager$field("base_url", config$config$base_path %||% "")
       config$log_port_assignments()
 
       start_all_apps()

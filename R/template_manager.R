@@ -14,7 +14,7 @@ TemplateManager <- setRefClass("TemplateManager",
     initialize = function(template_directory = "templates", base_url_path = "",
                           title = DEFAULT_SERVER_TITLE) {
       template_dir <<- template_directory
-      base_url <<- base_url_path
+      base_url <<- base_url_path %||% ""
       server_title <<- title %||% DEFAULT_SERVER_TITLE
     },
     title_html = function() {

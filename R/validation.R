@@ -110,6 +110,47 @@ validate_ws_message <- function(message, max_size = 1048576) {
   return(list(valid = TRUE, sanitized = message))
 }
 
+# First path segments the proxy routes itself; a base path starting with one
+# would make prefixed and unprefixed requests indistinguishable
+RESERVED_BASE_PATH_SEGMENTS <- c("proxy", "api", "templates", "health")
+
+validate_base_path <- function(base_path, max_length = 100) {
+  "Validate the public URL prefix and normalize it to \"\" or \"/a/b\" without a trailing slash"
+
+  if (!is.character(base_path) || length(base_path) != 1 || is.na(base_path)) {
+    return(list(valid = FALSE, error = "base_path must be a string"))
+  }
+  if (base_path %in% c("", "/")) {
+    return(list(valid = TRUE, sanitized = ""))
+  }
+  if (!startsWith(base_path, "/")) {
+    return(list(valid = FALSE, error = "base_path must start with /"))
+  }
+
+  base_path <- sub("/$", "", base_path)
+  if (nchar(base_path) > max_length) {
+    return(list(valid = FALSE, error = paste("base_path must be at most", max_length, "characters")))
+  }
+
+  # The path is written into page scripts and cookie paths, so allow only
+  # unreserved URL characters
+  segments <- strsplit(substring(base_path, 2), "/", fixed = TRUE)[[1]]
+  if (length(segments) == 0 || any(!grepl("^[A-Za-z0-9._~-]+$", segments)) ||
+    any(segments %in% c(".", ".."))) {
+    return(list(valid = FALSE, error = paste(
+      "base_path segments may contain only letters, digits, and . _ ~ -,",
+      "and may not be empty, . or .."
+    )))
+  }
+  if (tolower(segments[1]) %in% RESERVED_BASE_PATH_SEGMENTS) {
+    return(list(valid = FALSE, error = paste0(
+      "base_path may not start with /", segments[1], ", which the server already uses"
+    )))
+  }
+
+  list(valid = TRUE, sanitized = base_path)
+}
+
 validate_app_name <- function(app_name, max_length = 50) {
   "Validate application names"
 

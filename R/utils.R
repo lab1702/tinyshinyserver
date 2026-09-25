@@ -287,6 +287,25 @@ create_error_response <- function(message, status = 500) {
   ))
 }
 
+create_redirect_response <- function(location, query_string = NULL) {
+  "Create a permanent redirect that keeps the method, body, and query string"
+
+  query <- query_string %||% ""
+  if (query != "" && !startsWith(query, "?")) query <- paste0("?", query)
+  list(status = 308L, headers = list(Location = paste0(location, query)), body = "")
+}
+
+# A reverse proxy serving the apps under base_path may pass the prefix through
+# or strip it, so requests are accepted either way. validate_base_path() keeps
+# the prefix from overlapping the server's own routes.
+strip_base_path <- function(path, base_path) {
+  if (is.null(path) || !nzchar(base_path %||% "")) return(path)
+  if (startsWith(path, paste0(base_path, "/"))) {
+    return(substring(path, nchar(base_path) + 1L))
+  }
+  path
+}
+
 create_503_response <- function(message, retry_after_seconds = 3) {
   "Create a 503 Service Unavailable response with Retry-After header"
 

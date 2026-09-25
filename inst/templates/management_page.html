@@ -5,8 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="color-scheme" content="light dark">
     <title>Management - {{title}}</title>
-    <script src="{{base_url}}/templates/scripts/theme.js"></script>
-    <link rel="stylesheet" href="{{base_url}}/templates/styles/main.css">
+    <!-- Relative URLs keep the page working behind a reverse proxy that strips a path prefix -->
+    <script src="templates/scripts/theme.js"></script>
+    <link rel="stylesheet" href="templates/styles/main.css">
 </head>
 <body>
     <header class="topbar">
@@ -148,7 +149,7 @@
         }
 
         function updateSystemStatus() {
-            fetch("/api/status")
+            fetch("api/status")
                 .then(response => {
                     if (!response.ok) {
                         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -194,7 +195,7 @@
         }
 
         function updateApps() {
-            fetch("/api/apps")
+            fetch("api/apps")
                 .then(response => {
                     if (!response.ok) {
                         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -257,7 +258,7 @@
         }
 
         function updateConnections() {
-            fetch("/api/connections")
+            fetch("api/connections")
                 .then(response => {
                     if (!response.ok) {
                         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -310,7 +311,7 @@
             button.disabled = true;
             button.textContent = "Restarting...";
 
-            fetch("/api/apps/" + encodeURIComponent(appName) + "/restart", {
+            fetch("api/apps/" + encodeURIComponent(appName) + "/restart", {
                 method: "POST",
                 headers: { "X-TinyShinyServer-Request": "management" }
             })
@@ -354,7 +355,7 @@
                 label.textContent = "Reload Config & Restart All";
             };
 
-            fetch("/api/reload", {
+            fetch("api/reload", {
                 method: "POST",
                 headers: { "X-TinyShinyServer-Request": "management" }
             })
@@ -364,7 +365,7 @@
                     showNotice(data.message || "Reloading configuration", "success");
                     // The server is busy restarting apps; check back shortly for the outcome
                     setTimeout(() => {
-                        fetch("/api/status")
+                        fetch("api/status")
                             .then(response => response.json())
                             .then(status => {
                                 const result = status.last_reload;
@@ -427,7 +428,7 @@
                 refreshInterval = setInterval(refreshAll, 5000);
             };
 
-            fetch("/api/shutdown", {
+            fetch("api/shutdown", {
                 method: "POST",
                 headers: { "X-TinyShinyServer-Request": "management" }
             })

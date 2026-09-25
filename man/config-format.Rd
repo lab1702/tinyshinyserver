@@ -28,6 +28,7 @@ The configuration file must be valid JSON with the following structure:
   "health_check_interval": 10,
   "max_request_size_mb": 100,
   "title": "Tiny Shiny Server",
+  "base_path": "",
   "log_dir": "./logs"
 }
 }
@@ -56,6 +57,7 @@ not allow comments.
   \item{\code{health_check_interval}}{Seconds between health checks; a positive finite number (default: 10).}
   \item{\code{max_request_size_mb}}{Largest HTTP request body, in megabytes, that the proxy accepts; a positive finite number (default: 100). Larger bodies, and bodies sent with chunked transfer encoding, are rejected with HTTP 413 before they are read. Apps that raise \code{shiny.maxRequestSize} above this need a larger value.}
   \item{\code{title}}{Name shown in the browser tab and top bar of the landing and management pages; a non-empty string of up to 100 characters (default: \code{"Tiny Shiny Server"}).}
+  \item{\code{base_path}}{Public URL prefix when a reverse proxy serves the landing page and apps under a path such as \code{"/shiny"} (default: \code{""}, the site root). It must start with \code{/}; a trailing \code{/} is removed. Path segments may contain only ASCII letters, digits, and \code{. _ ~ -}, and the first segment may not be \code{proxy}, \code{api}, \code{templates}, or \code{health}. The proxy accepts requests with or without the prefix, so the reverse proxy may either pass it through or strip it. Links, redirects, and cookie paths use the prefix. See the README section \sQuote{Serving under a URL prefix}.}
 }
 }
 

@@ -38,6 +38,8 @@
 
 * The management dashboard has a **Reload Config & Restart All** button, also available as `POST /api/reload`. It reads the configuration file again, stops every app, and starts the resident apps under the new configuration, so apps can be added, removed, or changed without restarting the server. An invalid file, a `log_dir` where the server log cannot be written, or a change to `proxy_host`, `proxy_port`, or `management_port`, is rejected before any app stops. If an app cannot be stopped, the previous configuration stays in effect. The dashboard reports the reload's outcome, which `/api/status` also returns as `last_reload`. The landing page picks up added and removed apps.
 
+* The new `base_path` configuration option serves the landing page and apps under a URL prefix, such as `https://example.com/shiny/`, behind a reverse proxy. The proxy accepts requests with or without the prefix, so the reverse proxy may pass it through or strip it, and landing page links, redirects, and app cookie paths include it. The management dashboard now uses relative URLs, so it also works under a prefix that the reverse proxy strips.
+
 * The new `title` configuration option sets the name shown in the browser tab and top bar of the landing and management pages (default: "Tiny Shiny Server").
 
 ## Apps and logging

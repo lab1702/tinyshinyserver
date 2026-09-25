@@ -30,7 +30,7 @@ ConnectionManager <- setRefClass("ConnectionManager",
       }
 
       backend_path <- "/websocket/"
-      client_path <- client_ws$request$PATH_INFO
+      client_path <- strip_base_path(client_ws$request$PATH_INFO, config$config$base_path)
       prefix <- paste0("/proxy/", app_name)
       if (!is.null(client_path) && startsWith(client_path, paste0(prefix, "/"))) {
         backend_path <- substring(client_path, nchar(prefix) + 1L)

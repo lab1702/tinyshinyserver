@@ -44,6 +44,8 @@
   </main>
 
   <script>
+    // Public URL prefix from the base_path setting, such as "/shiny"
+    const baseUrl = "{{base_url}}";
     let refreshInterval;
     let isConnected = false; // Start as disconnected until we verify connection
 
@@ -62,7 +64,7 @@
 
     function setCardEnabled(linkElement, cardElement, enabled, title, action) {
       if (enabled) {
-        linkElement.href = "/proxy/" + cardElement.dataset.app + "/";
+        linkElement.href = baseUrl + "/proxy/" + cardElement.dataset.app + "/";
         linkElement.removeAttribute("aria-disabled");
       } else {
         linkElement.removeAttribute("href");
@@ -80,7 +82,7 @@
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 second timeout
 
-      fetch("/api/apps", {
+      fetch(baseUrl + "/api/apps", {
         method: "GET",
         cache: "no-cache",
         headers: {

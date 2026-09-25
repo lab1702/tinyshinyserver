@@ -26,9 +26,15 @@ handle_http_request <- function(req, config, template_manager, connection_manage
     return(create_error_response("Invalid Host header", 403))
   }
 
+  # The landing page's links are absolute, but send /base to /base/ anyway
+  base_path <- config$config$base_path %||% ""
+  if (nzchar(base_path) && identical(req$PATH_INFO, base_path)) {
+    return(create_redirect_response(paste0(base_path, "/"), req$QUERY_STRING))
+  }
+
   # Validate request inputs
   validation_result <- validate_request_inputs(
-    req$PATH_INFO,
+    strip_base_path(req$PATH_INFO, base_path),
     req$REQUEST_METHOD,
     req$QUERY_STRING
   )
@@ -202,9 +208,7 @@ handle_proxy_request <- function(path, method, query_string, req, config, proces
 
   # Canonicalize the mount URL before starting an app or forwarding a body.
   if (identical(path, paste0("/proxy/", app_name))) {
-    query <- query_string %||% ""
-    if (query != "" && !startsWith(query, "?")) query <- paste0("?", query)
-    return(list(status = 308L, headers = list(Location = paste0(path, "/", query)), body = ""))
+    return(create_redirect_response(paste0(config$config$base_path, path, "/"), query_string))
   }
 
   # Start app on demand if it's non-resident and not running
@@ -337,7 +341,9 @@ forward_request <- function(method, target_url, req, app_name, config) {
         curl::handle_setopt(handle, postfields = body)
       }
       promises::then(fetch_backend_async(target_url, handle), function(response) {
-        response_headers <- proxy_response_headers(response$headers, target_url, app_name, method)
+        response_headers <- proxy_response_headers(
+          response$headers, target_url, app_name, method, config$config$base_path %||% ""
+        )
         if (is.null(response_headers[["content-type"]])) response_headers[["content-type"]] <- "text/html"
         # httpuv sends raw bodies unchanged. Scanning or converting the bytes
         # would briefly multiply a large download's memory use.
@@ -355,7 +361,7 @@ forward_request <- function(method, target_url, req, app_name, config) {
 # Preserve end-to-end headers, including repeated Set-Cookie fields. Transfer
 # framing belongs to httpuv; libcurl already removes chunk framing, but content
 # decoding is disabled so Content-Encoding still describes the returned bytes.
-proxy_response_headers <- function(raw_headers, target_url, app_name, method) {
+proxy_response_headers <- function(raw_headers, target_url, app_name, method, base_path = "") {
   headers <- curl::parse_headers_list(raw_headers)
   connection <- as.character(unlist(headers[names(headers) == "connection"], use.names = FALSE))
   nominated <- tolower(trimws(unlist(strsplit(connection, ",", fixed = TRUE))))
@@ -363,7 +369,8 @@ proxy_response_headers <- function(raw_headers, target_url, app_name, method) {
     "upgrade", "proxy-authenticate", "proxy-authorization", nominated)
   if (method != "HEAD") excluded <- c(excluded, "content-length")
   headers <- headers[!names(headers) %in% excluded]
-  prefix <- paste0("/proxy/", app_name)
+  # Redirects and cookie paths must name the app's public URL
+  prefix <- paste0(base_path, "/proxy/", app_name)
   authority <- sub("^(https?://[^/?#]+).*", "\\1", target_url)
   for (i in seq_along(headers)) {
     value <- headers[[i]]
@@ -511,7 +518,7 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
   session_id <- generate_session_id(ws$request)
 
   # Determine which app this WebSocket is for
-  request_path_validation <- validate_path(ws$request$PATH_INFO)
+  request_path_validation <- validate_path(strip_base_path(ws$request$PATH_INFO, config$config$base_path))
   if (!request_path_validation$valid) {
     logger::log_error("Invalid WebSocket path: {error}", error = request_path_validation$error)
     ws$close()

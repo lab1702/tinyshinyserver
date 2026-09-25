@@ -176,7 +176,7 @@ test_that("reload stops everything, applies the file, and starts resident apps",
   write_reload_config(path, list(
     list(name = "resident", path = "/tmp", resident = TRUE),
     list(name = "ondemand", path = "/tmp")
-  ), title = "Reloaded", starting_port = 4001)
+  ), title = "Reloaded", starting_port = 4001, base_path = "/apps/")
   result <- server$reload()
 
   expect_true(result$valid)
@@ -189,6 +189,8 @@ test_that("reload stops everything, applies the file, and starts resident apps",
   expect_equal(vapply(config$config$apps, function(app) app$name, ""), c("resident", "ondemand"))
   expect_equal(vapply(config$config$apps, function(app) app$port, 0), c(4001, 4002))
   expect_equal(server$template_manager$server_title, "Reloaded")
+  expect_equal(config$config$base_path, "/apps")
+  expect_equal(server$template_manager$base_url, "/apps")
 })
 
 test_that("reload leaves apps running when the file is rejected", {

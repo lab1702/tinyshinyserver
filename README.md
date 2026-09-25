@@ -154,6 +154,7 @@ The proxy applies these limits:
 | `health_check_interval` | Seconds between health checks; a positive finite number | 10 |
 | `max_request_size_mb` | Largest HTTP request body, in megabytes, that the proxy accepts; larger or chunked bodies get HTTP 413 | 100 |
 | `title` | Name shown in the browser tab and top bar of the landing and management pages; up to 100 characters | `"Tiny Shiny Server"` |
+| `base_path` | Public URL prefix, such as `"/shiny"`, when a reverse proxy serves the apps under a path; see [Serving under a URL prefix](#serving-under-a-url-prefix) | `""` (site root) |
 
 ## Network access and authentication
 
@@ -201,6 +202,35 @@ A reverse proxy must meet these requirements:
 - **On the same machine** (`proxy_host` is a loopback address): the proxy rejects requests whose `Host` header is not `localhost`, `127.0.0.1`, or `[::1]`, so the reverse proxy must forward the upstream address as the host, as `header_up Host {upstream_hostport}` does above. It must also set `X-Forwarded-Host` to the public host, which Caddy does by default, because app WebSocket connections are accepted only when the browser's `Origin` matches that host.
 - **On another machine** (`proxy_host` is `"0.0.0.0"` or `"::"`): the reverse proxy must preserve the public `Host` header, because `X-Forwarded-Host` is trusted only from the same machine. For nginx, use `proxy_set_header Host $http_host;`, not `$host`, which drops a non-default port and makes the WebSocket `Origin` check fail.
 - **Management site**: include it only if remote administration is needed. The management server always rejects requests whose `Host` header is not `localhost`, `127.0.0.1`, or `[::1]`, so its reverse proxy must also forward the upstream address as the host. Keep CORS disabled on its reverse proxy; see [Management API](#management-api) for the required request header.
+
+### Serving under a URL prefix
+
+To serve the apps under a path on an existing site, such as `https://example.com/shiny/`, set `base_path` to that path:
+
+```json
+"base_path": "/shiny"
+```
+
+The landing page is then at `/shiny/` and each app at `/shiny/proxy/{app_name}/`. Links, redirects, and cookie paths all use the prefix. The proxy accepts requests with or without the prefix, so the reverse proxy may pass the path through unchanged or strip the prefix; both of these Caddy blocks work:
+
+```caddyfile
+example.com {
+    redir /shiny /shiny/ 308
+
+    # Pass the path through; use handle_path instead to strip the prefix
+    handle /shiny/* {
+        reverse_proxy 127.0.0.1:3838 {
+            header_up Host {upstream_hostport}
+        }
+    }
+}
+```
+
+With nginx, `location /shiny/ { proxy_pass http://127.0.0.1:3838; }` passes the path through and `proxy_pass http://127.0.0.1:3838/;` strips it. nginx also needs the `Host`, `X-Forwarded-Host`, `Upgrade`, and `Connection` headers set for WebSockets. The requirements in the previous section still apply.
+
+The first path segment may not be `proxy`, `api`, `templates`, or `health`, which the proxy already uses. When `base_path` is set, open the apps through URLs that include it: app cookies are scoped to the prefixed path, so an app opened at `http://localhost:3838/proxy/{app_name}/` does not receive them.
+
+The management dashboard uses relative URLs and needs no setting. It can be served under its own prefix, such as `/shiny-admin/`, by a reverse proxy that strips that prefix; open it with the trailing slash.
 
 ## Monitoring and management
 

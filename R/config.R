@@ -114,6 +114,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       new_config$starting_port <- new_config$starting_port %||% 3001
       new_config$title <- trimws(new_config$title %||% DEFAULT_SERVER_TITLE)
       new_config$max_request_size_mb <- new_config$max_request_size_mb %||% 100
+      new_config$base_path <- new_config$base_path %||% ""
 
       # Set default values for optional app fields
       for (i in seq_along(new_config$apps)) {
@@ -312,13 +313,24 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         }
       }
 
+      if ("base_path" %in% names(config)) {
+        base_path_validation <- validate_base_path(config$base_path)
+        if (!base_path_validation$valid) {
+          return(list(valid = FALSE, error = base_path_validation$error))
+        }
+      }
+
       # Validate log_dir
       if (!is.character(config$log_dir) || length(config$log_dir) != 1 ||
         is.na(config$log_dir) || !nzchar(trimws(config$log_dir))) {
         return(list(valid = FALSE, error = "log_dir must be a non-empty string"))
       }
 
-      return(list(valid = TRUE, sanitized = config))
+      sanitized <- config
+      if ("base_path" %in% names(config)) {
+        sanitized$base_path <- validate_base_path(config$base_path)$sanitized
+      }
+      return(list(valid = TRUE, sanitized = sanitized))
     },
     get_app_config = function(app_name) {
       "Get configuration for a specific app by name"
