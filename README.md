@@ -215,7 +215,7 @@ App status is **running**, **dormant** (an on-demand app that is not running), *
 
 The management dashboard lists active WebSocket connections with their client IP addresses, user agents, connection times, and last activity. Running, stopped, and crashed apps can be restarted; dormant apps start when accessed. Restarting an app disconnects its users.
 
-**Reload Config & Restart All** reads the configuration file again, stops every app, and disconnects all users. It then assigns app ports from the new configuration and starts the resident apps; on-demand apps start when next opened. The file is checked first, so an invalid file, or a change to `proxy_host`, `proxy_port`, or `management_port`, is reported without stopping anything; those three settings take effect only when the server restarts.
+**Reload Config & Restart All** reads the configuration file again, stops every app, and disconnects all users. It then assigns app ports from the new configuration and starts the resident apps; on-demand apps start when next opened. The file is checked first, so an invalid file, a `log_dir` where the server log cannot be written, or a change to `proxy_host`, `proxy_port`, or `management_port`, is reported without stopping anything; those three settings take effect only when the server restarts. If an app cannot be stopped, the previous configuration stays in effect and its stopped resident apps start again.
 
 ### Proxy endpoints
 

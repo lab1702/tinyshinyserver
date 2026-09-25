@@ -60,6 +60,29 @@ const { chromium } = require('playwright');
     connections = {};
     await page.evaluate(() => updateConnections());
     await page.waitForFunction(() => document.getElementById('connectionsContainer').textContent === 'No active connections');
+    // The landing page reloads when a configuration reload changes the set of apps.
+    const card = name => `<a class="app-card-link"><div class="app-card" data-app="${name}">` +
+      `<span class="status-badge" id="status-${name}"></span><span id="connections-${name}"></span>` +
+      `<span class="app-open"></span></div></a>`;
+    const landing = fs.readFileSync(path.join(templates, 'landing_page.html'), 'utf8')
+      .replaceAll('{{base_url}}', '').replaceAll('{{title}}', 'Apps').replaceAll('{{session_info}}', '');
+    let landingCards = ['gone', 'live'];
+    let landingLoads = 0;
+    const landingPage = await browser.newPage();
+    await landingPage.route('**/*', route => {
+      if (new URL(route.request().url()).pathname !== '/landing') return serve(route);
+      landingLoads++;
+      const body = landing.replace('{{app_cards}}', landingCards.map(card).join(''));
+      landingCards = Object.keys(apps);
+      return route.fulfill({ contentType: 'text/html', body });
+    });
+    await landingPage.goto('http://tss.test/landing');
+    await landingPage.waitForFunction(() => document.getElementById('status-dormant')?.textContent === 'stopped');
+    assert.equal(landingLoads, 2);
+    assert.equal(await landingPage.locator('[data-app="gone"]').count(), 0);
+    await landingPage.evaluate(() => updateAppStatus());
+    await landingPage.waitForFunction(() => document.getElementById('status-live').textContent === 'running');
+    assert.equal(landingLoads, 2);
     // The theme follows the system until toggled; toggling back to the system theme clears the override.
     const context = await browser.newContext({ colorScheme: 'dark' });
     const themed = await context.newPage();
@@ -79,7 +102,7 @@ const { chromium } = require('playwright');
     await themed.emulateMedia({ colorScheme: 'dark' });
     await themed.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
     await context.close();
-    console.log('PASS: hostile headers and app paths render literally; ordinary metadata, empty-state, and theme toggling work.');
+    console.log('PASS: hostile headers and app paths render literally; ordinary metadata, empty-state, landing app-set reload, and theme toggling work.');
   } finally {
     await browser.close();
   }

@@ -72,6 +72,10 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
 
       for (app_config in config$config$apps) {
         if (app_config$resident) {
+          if (is_process_alive(config$get_app_process(app_config$name))) {
+            logger::log_info("Resident app already running: {app_name}", app_name = app_config$name)
+            next
+          }
           success <- process_manager$start_app(app_config)
           if (!success) {
             logger::log_error("Failed to start resident app: {app_name}", app_name = app_config$name)
@@ -244,11 +248,16 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
         connection_manager$close_client_connection(session_id)
       }
       process_manager$stop_all_apps()
+      config$reset_app_state()
+
+      # An app that did not stop still holds its port, so keep the ports it was given
       surviving <- names(config$get_all_app_processes())
       if (length(surviving) > 0) {
-        logger::log_warn("Could not stop apps before reload: {apps}", apps = paste(surviving, collapse = ", "))
+        error <- paste("Could not stop apps:", paste(surviving, collapse = ", "))
+        logger::log_error("Configuration reload failed, keeping the previous configuration: {error}", error = error)
+        start_all_apps()
+        return(invisible(list(valid = FALSE, error = error)))
       }
-      config$reset_app_state()
 
       # Assign ports only now, so the stopped apps' ports can be reused
       old_config <- config$config

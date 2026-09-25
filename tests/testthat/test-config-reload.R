@@ -81,6 +81,28 @@ test_that("read_reload_config rejects listener changes", {
     "proxy_host, management_port changed; restart the server to apply")
 })
 
+test_that("read_reload_config creates a new log_dir and rejects one it cannot write", {
+  path <- tempfile(fileext = ".json")
+  blocker <- tempfile()
+  new_logs <- tempfile()
+  on.exit(unlink(c(path, blocker, new_logs), recursive = TRUE), add = TRUE)
+  apps <- list(list(name = "one", path = "/tmp"))
+  write_reload_config(path, apps)
+  local_mocked_bindings(is_port_in_use = function(...) FALSE)
+  config <- create_server_config(path)
+
+  write_reload_config(path, apps, log_dir = new_logs)
+  expect_true(config$read_reload_config()$valid)
+  expect_true(dir.exists(new_logs))
+
+  # A directory cannot be created below a regular file
+  writeLines("", blocker)
+  write_reload_config(path, apps, log_dir = file.path(blocker, "logs"))
+  check <- config$read_reload_config()
+  expect_false(check$valid)
+  expect_match(check$error, "Cannot write the server log")
+})
+
 test_that("reload endpoint rejects a bad file without requesting a reload", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
@@ -170,6 +192,30 @@ test_that("reload restarts the previous configuration when ports cannot be assig
   expect_equal(test$server$config$config$apps[[1]]$name, "app")
   expect_equal(test$server$config$config$apps[[1]]$port, 3001)
   expect_equal(test$calls$started, "app")
+})
+
+test_that("reload keeps the previous configuration when an app does not stop", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  write_reload_config(path, list(
+    list(name = "stuck", path = "/tmp", resident = TRUE),
+    list(name = "other", path = "/tmp", resident = TRUE)
+  ))
+  test <- reload_test_server(path)
+  config <- test$server$config
+  # The mocked stop_all_apps leaves this process registered, as a failed stop does
+  config$add_app_process("stuck", list(is_alive = function() TRUE))
+
+  write_reload_config(path, list(list(name = "new", path = "/tmp", resident = TRUE)), starting_port = 4001)
+  result <- test$server$reload()
+
+  expect_false(result$valid)
+  expect_equal(result$error, "Could not stop apps: stuck")
+  expect_equal(test$calls$stopped, 1)
+  expect_equal(vapply(config$config$apps, function(app) app$name, ""), c("stuck", "other"))
+  expect_equal(vapply(config$config$apps, function(app) app$port, 0), c(3001, 3002))
+  # The surviving app is not started a second time
+  expect_equal(test$calls$started, "other")
 })
 
 test_that("the event loop runs a requested reload", {

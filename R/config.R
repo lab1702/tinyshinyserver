@@ -148,6 +148,14 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         )))
       }
 
+      # Logging to an unwritable file would fail every later log call
+      if (!identical(new_config$log_dir, config$log_dir)) {
+        log_dir_error <- check_log_dir(new_config$log_dir)
+        if (!is.null(log_dir_error)) {
+          return(list(valid = FALSE, error = log_dir_error))
+        }
+      }
+
       list(valid = TRUE, config = new_config)
     },
     reset_app_state = function() {

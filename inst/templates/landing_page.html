@@ -106,6 +106,15 @@
             setConnectionStatus(true);
           }
 
+          // A configuration reload can add or remove apps; the server renders the new cards
+          const cardNames = Array.from(document.querySelectorAll(".app-card"), card => card.dataset.app).sort();
+          const appNames = Object.values(data).map(app => app.name).sort();
+          if (JSON.stringify(cardNames) !== JSON.stringify(appNames)) {
+            clearInterval(refreshInterval);
+            location.reload();
+            return;
+          }
+
           Object.values(data).forEach(app => {
             const statusElement = document.getElementById("status-" + app.name);
             const connectionsElement = document.getElementById("connections-" + app.name);

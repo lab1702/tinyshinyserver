@@ -83,6 +83,24 @@ setup_logging <- function(log_dir, log_level = "INFO") {
   logger::log_info("Logging system initialized with file output to {log_file}", log_file = log_file)
 }
 
+check_log_dir <- function(log_dir) {
+  "Create a log directory and check that the server log can be written there"
+
+  log_file <- file.path(log_dir, "server.log")
+  writable <- tryCatch(
+    suppressWarnings({
+      if (!dir.exists(log_dir)) {
+        dir.create(log_dir, recursive = TRUE)
+      }
+      close(file(log_file, open = "a"))
+      TRUE
+    }),
+    error = function(e) FALSE
+  )
+
+  if (writable) NULL else paste("Cannot write the server log to", log_file)
+}
+
 # Memory and resource management
 format_bytes <- function(bytes) {
   "Format byte counts into human-readable strings"
