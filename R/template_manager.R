@@ -203,7 +203,8 @@ TemplateManager <- setRefClass("TemplateManager",
       # Check if file exists first - for non-existent files, the ".." check above
       # is sufficient. normalizePath with mustWork=FALSE behaves inconsistently
       # on Windows for non-existent files, so we check existence first.
-      if (!file.exists(full_path)) {
+      # Directories are not served.
+      if (!file.exists(full_path) || dir.exists(full_path)) {
         return(list(
           status = 404,
           headers = list("Content-Type" = "text/plain"),

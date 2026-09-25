@@ -392,6 +392,19 @@ test_that("serve_static_file returns 404 for missing files", {
   expect_match(result$body, "File not found")
 })
 
+test_that("serve_static_file returns 404 for directories", {
+  temp_dir <- create_test_template_dir()
+  on.exit(cleanup_test_template_dir(temp_dir))
+
+  tm <- TemplateManager$new(temp_dir)
+
+  for (path in c("", "styles", "styles/")) {
+    result <- tm$serve_static_file(path)
+    expect_equal(result$status, 404)
+    expect_match(result$body, "File not found")
+  }
+})
+
 test_that("serve_static_file prevents directory traversal", {
   temp_dir <- create_test_template_dir()
   on.exit(cleanup_test_template_dir(temp_dir))
