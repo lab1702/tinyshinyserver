@@ -38,6 +38,11 @@ documented in NEWS.md and README.md.
   and restarts all apps without restarting the server. Like the other
   management actions, it requires the custom request header that blocks
   cross-origin browser requests.
+* A new `base_path` option serves the landing page and apps under a URL
+  prefix on an existing site behind a reverse proxy.
+* The management dashboard shows the server's and each running app's uptime
+  and memory use. `/api/status` returns them in place of the `server_uptime`
+  and `memory_usage` fields, which were always "N/A".
 * The landing page and management dashboard have a new design that follows
   the system light or dark theme and has a theme toggle. A new `title`
   option sets the name shown on both pages.
@@ -70,14 +75,14 @@ documented in NEWS.md and README.md.
 Local: 0 errors | 0 warnings | 0 notes.
 
 R-hub at commit 2d78c23: 0 errors | 0 warnings | 0 notes on all five platforms.
-Later commits, including the configuration reload feature, have been checked
-only locally.
+Later commits, including the configuration reload and `base_path` features,
+have been checked only locally.
 
-Test results: 1660 passes locally, and 1541 on each R-hub platform at commit
-2d78c23, before the configuration reload tests were added. All runs had
-0 failures, 0 warnings, and 2 intentional skips on CRAN (the
-invalid-device-path write test and a test that launches a real Shiny app). One test's expectation count
-depends on timing.
+Test results: 1743 passes locally, with 3 intentional skips on CRAN (the
+invalid-device-path write test and two tests that start real R
+processes). Each R-hub platform at commit 2d78c23, before the configuration
+reload tests were added, had 1541 passes and 2 of those skips. All runs had
+0 failures and 0 warnings. One test's expectation count depends on timing.
 
 ## Downstream dependencies
 

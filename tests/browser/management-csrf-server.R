@@ -15,7 +15,7 @@ main <- function() {
     apps = list(list(name = "app", path = "/test/app"))), auto_unbox = TRUE), config_file)
   config <- create_server_config(config_file)
   restarts <- 0
-  pm <- list(get_app_status = function(name) list(status = "running"),
+  pm <- list(config = config, get_app_status = function(name) list(status = "running"),
     get_all_app_status = function() list(app = list(name = "app", status = "running", resident = TRUE,
       path = "/test/app", port = 3001, connections = 0)),
     restart_app = function(name) { restarts <<- restarts + 1; list(success = TRUE, message = "Restart scheduled") })

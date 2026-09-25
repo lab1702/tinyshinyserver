@@ -230,7 +230,7 @@ With nginx, `location /shiny/ { proxy_pass http://127.0.0.1:3838; }` passes the 
 
 The first path segment may not be `proxy`, `api`, `templates`, or `health`, which the proxy already uses. When `base_path` is set, open the apps through URLs that include it: app cookies are scoped to the prefixed path, so an app opened at `http://localhost:3838/proxy/{app_name}/` does not receive them.
 
-The management dashboard uses relative URLs and needs no setting. It can be served under its own prefix, such as `/shiny-admin/`, by a reverse proxy that strips that prefix; open it with the trailing slash.
+The management dashboard uses relative URLs and needs no setting; a reverse proxy may also serve it under a prefix that it strips, opened with the trailing slash. Serve it on a different host from the apps, such as `manage.example.com`, never under a path on the apps' site: scripts in app pages on that site could then send the management API's required request header and restart apps or shut down the server.
 
 ## Monitoring and management
 
