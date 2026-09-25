@@ -188,6 +188,10 @@ handle_management_status_api <- function(config) {
         server_uptime = "N/A", # Could be enhanced with actual uptime tracking
         memory_usage = "N/A" # Could be enhanced with memory monitoring
       )
+      # Requested reloads run after their response, so report the outcome here
+      if (length(config$last_reload) > 0) {
+        status$last_reload <- config$last_reload
+      }
 
       return(create_json_response(status))
     },
@@ -273,6 +277,7 @@ handle_config_reload <- function(config) {
   logger::log_info("Configuration reload requested via management API")
 
   # Stopping apps blocks, so the event loop reloads after this response is sent
+  config$field("last_reload", list())
   config$reload_requested <- TRUE
   create_json_response(list(
     success = TRUE,

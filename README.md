@@ -215,7 +215,7 @@ App status is **running**, **dormant** (an on-demand app that is not running), *
 
 The management dashboard lists active WebSocket connections with their client IP addresses, user agents, connection times, and last activity. Running, stopped, and crashed apps can be restarted; dormant apps start when accessed. Restarting an app disconnects its users.
 
-**Reload Config & Restart All** reads the configuration file again, stops every app, and disconnects all users. It then assigns app ports from the new configuration and starts the resident apps; on-demand apps start when next opened. The file is checked first, so an invalid file, a `log_dir` where the server log cannot be written, or a change to `proxy_host`, `proxy_port`, or `management_port`, is reported without stopping anything; those three settings take effect only when the server restarts. If an app cannot be stopped, the previous configuration stays in effect and its stopped resident apps start again.
+**Reload Config & Restart All** reads the configuration file again, stops every app, and disconnects all users. It then assigns app ports from the new configuration and starts the resident apps; on-demand apps start when next opened. The file is checked first, so an invalid file, a `log_dir` where the server log cannot be written, or a change to `proxy_host`, `proxy_port`, or `management_port`, is reported without stopping anything; those three settings take effect only when the server restarts. If an app cannot be stopped, the previous configuration stays in effect and its stopped resident apps start again. The dashboard reports whether the reload succeeded once it finishes.
 
 ### Proxy endpoints
 
@@ -232,7 +232,7 @@ These endpoints are served on the management port (default: 3839). POST requests
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/status` | GET | System overview (apps, connections) |
+| `/api/status` | GET | System overview (apps, connections) and the outcome of the latest configuration reload |
 | `/api/apps` | GET | Detailed application status |
 | `/api/connections` | GET | Active connection details |
 | `/api/apps/{name}/restart` | POST | Restart the named application |

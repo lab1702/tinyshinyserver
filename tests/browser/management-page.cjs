@@ -23,6 +23,7 @@ const { chromium } = require('playwright');
     live: { name: 'live', status: 'running', resident: true, port: 3001, connections: 1, path: '/apps/live', pid: 4242 },
     dormant: { name: 'dormant', status: 'stopped', resident: false, port: 3002, connections: 0, path: markupPath, pid: {} }
   };
+  let lastReload = {};
   const browser = await chromium.launch({ headless: true, executablePath: process.env.TSS_TEST_BROWSER || undefined });
   try {
     const serve = route => {
@@ -34,7 +35,8 @@ const { chromium } = require('playwright');
           body: fs.readFileSync(file, 'utf8') });
       }
       const data = pathname === '/api/connections' ? connections
-        : pathname === '/api/status' ? { total_apps: 1, running_apps: 1, total_connections: 2 }
+        : pathname === '/api/status' ? { total_apps: 1, running_apps: 1, total_connections: 2, ...lastReload }
+        : pathname === '/api/reload' ? { success: true, message: 'Reloading configuration and restarting all apps' }
         : pathname === '/api/apps' ? apps : null;
       return route.fulfill({ status: data === null ? 404 : 200, contentType: 'application/json', body: JSON.stringify(data) });
     };
@@ -57,6 +59,12 @@ const { chromium } = require('playwright');
     const paths = await page.locator('#appsContainer .app-detail').filter({ hasText: 'Path:' }).allTextContents();
     assert.deepEqual(paths, ['Path: /apps/live', 'Path: ' + markupPath]);
     assert.equal(await page.locator('#appsContainer b').count(), 0);
+    // A reload that fails after it was accepted is reported once it has run.
+    lastReload = { last_reload: { success: false, message: 'Could not stop apps: live' } };
+    page.once('dialog', dialog => dialog.accept());
+    await page.locator('.reload-btn').click();
+    await page.waitForFunction(() => document.getElementById('notice').textContent === 'Reload failed: Could not stop apps: live');
+    await page.waitForFunction(() => !document.querySelector('.reload-btn').disabled);
     connections = {};
     await page.evaluate(() => updateConnections());
     await page.waitForFunction(() => document.getElementById('connectionsContainer').textContent === 'No active connections');

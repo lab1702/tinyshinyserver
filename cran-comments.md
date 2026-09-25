@@ -33,6 +33,11 @@ documented in NEWS.md and README.md.
   close the browser session.
 * Proxied HTTP requests are no longer cut off after 30 seconds, and query
   strings may be up to 8,192 characters.
+* The management dashboard has a "Reload Config & Restart All" button, also
+  available as `POST /api/reload`, that reads the configuration file again
+  and restarts all apps without restarting the server. Like the other
+  management actions, it requires the custom request header that blocks
+  cross-origin browser requests.
 * The landing page and management dashboard have a new design that follows
   the system light or dark theme and has a theme toggle. A new `title`
   option sets the name shown on both pages.
@@ -64,7 +69,8 @@ Local: 0 errors | 0 warnings | 0 notes.
 
 R-hub: 0 errors | 0 warnings | 0 notes on all five platforms.
 
-Test results: 1542 passes locally and 1541 on each R-hub platform, with
+Test results: 1623 passes locally, and 1541 on each R-hub platform at commit
+2d78c23, before the configuration reload tests were added. All runs had
 0 failures, 0 warnings, and 2 intentional skips on CRAN (the
 invalid-device-path write test and a test that launches a real Shiny app). One test's expectation count
 depends on timing.

@@ -26,6 +26,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     management_server = "ANY",
     shutdown_requested = "logical", # Set by the management API; read by the event loop
     reload_requested = "logical", # Set by the management API; read by the event loop
+    last_reload = "list", # Outcome of the latest reload; empty while one is pending
 
     # Constants
     MAX_PENDING_MESSAGES = "numeric",
@@ -64,6 +65,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       management_server <<- NULL
       shutdown_requested <<- FALSE
       reload_requested <<- FALSE
+      last_reload <<- list()
 
       # Initialize empty config (to be loaded via load_config)
       config <<- list()

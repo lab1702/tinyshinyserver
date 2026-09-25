@@ -330,8 +330,21 @@
             .then(data => {
                 if (data.success) {
                     showNotice(data.message || "Reloading configuration", "success");
-                    // The server is busy restarting apps; check back shortly
-                    setTimeout(() => { restore(); refreshAll(); }, 2000);
+                    // The server is busy restarting apps; check back shortly for the outcome
+                    setTimeout(() => {
+                        fetch("/api/status")
+                            .then(response => response.json())
+                            .then(status => {
+                                const result = status.last_reload;
+                                if (result && result.success) {
+                                    showNotice(result.message, "success");
+                                } else if (result) {
+                                    showNotice("Reload failed: " + result.message, "error");
+                                }
+                            })
+                            .catch(error => console.error("Error checking reload result:", error))
+                            .finally(() => { restore(); refreshAll(); });
+                    }, 2000);
                 } else {
                     showNotice("Reload rejected: " + (data.message || data.error), "error");
                     restore();

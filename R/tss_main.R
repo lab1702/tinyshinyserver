@@ -212,6 +212,7 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
           if (isTRUE(config$reload_requested)) {
             config$field("reload_requested", FALSE)
             tryCatch(reload(), error = function(e) {
+              config$field("last_reload", list(success = FALSE, message = conditionMessage(e)))
               logger::log_error("Configuration reload failed: {error}", error = conditionMessage(e))
             })
           }
@@ -237,6 +238,7 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
 
       reload_check <- config$read_reload_config()
       if (!reload_check$valid) {
+        config$field("last_reload", list(success = FALSE, message = reload_check$error))
         logger::log_error("Configuration reload rejected: {error}", error = reload_check$error)
         return(invisible(reload_check))
       }
@@ -255,6 +257,7 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       if (length(surviving) > 0) {
         error <- paste("Could not stop apps:", paste(surviving, collapse = ", "))
         logger::log_error("Configuration reload failed, keeping the previous configuration: {error}", error = error)
+        config$field("last_reload", list(success = FALSE, message = error))
         start_all_apps()
         return(invisible(list(valid = FALSE, error = error)))
       }
@@ -284,6 +287,10 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
 
       start_all_apps()
       if (result$valid) logger::log_info("Configuration reloaded")
+      config$field("last_reload", list(
+        success = result$valid,
+        message = if (result$valid) "Configuration reloaded" else result$error
+      ))
       invisible(result)
     },
     shutdown = function() {

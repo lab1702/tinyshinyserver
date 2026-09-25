@@ -130,6 +130,35 @@ test_that("reload endpoint rejects a bad file without requesting a reload", {
   expect_equal(route_management_request("/api/reload", "POST", list(), config, list(), list())$status, 403)
 })
 
+test_that("the status API reports the latest reload outcome", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  write_reload_config(path, list(list(name = "app", path = "/tmp", resident = TRUE)))
+  test <- reload_test_server(path)
+  config <- test$server$config
+  req <- list(HTTP_X_TINYSHINYSERVER_REQUEST = "management")
+  status <- function() {
+    jsonlite::fromJSON(route_management_request("/api/status", "GET", list(), config, list(), list())$body)
+  }
+  expect_null(status()$last_reload)
+
+  test$server$reload()
+  expect_equal(status()$last_reload, list(success = TRUE, message = "Configuration reloaded"))
+
+  # A requested reload clears the previous outcome until it runs
+  route_management_request("/api/reload", "POST", req, config, list(), list())
+  expect_null(status()$last_reload)
+
+  config$add_app_process("app", list(is_alive = function() TRUE))
+  test$server$reload()
+  expect_equal(status()$last_reload, list(success = FALSE, message = "Could not stop apps: app"))
+
+  write_reload_config(path, list(list(name = "app", path = "/tmp")), proxy_port = 4000)
+  test$server$reload()
+  expect_false(status()$last_reload$success)
+  expect_match(status()$last_reload$message, "proxy_port changed")
+})
+
 test_that("reload stops everything, applies the file, and starts resident apps", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
@@ -238,5 +267,6 @@ test_that("the event loop runs a requested reload", {
 
   expect_equal(reloads, 1)
   expect_false(server$config$reload_requested)
+  expect_equal(server$config$last_reload, list(success = FALSE, message = "reload failure is logged, not fatal"))
   expect_true(server$is_shutting_down)
 })
