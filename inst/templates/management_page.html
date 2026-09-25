@@ -3,133 +3,97 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Shiny Server Management</title>
+    <meta name="color-scheme" content="light dark">
+    <title>Tiny Shiny Server Management</title>
+    <script src="{{base_url}}/templates/scripts/theme.js"></script>
     <link rel="stylesheet" href="{{base_url}}/templates/styles/main.css">
-    <style>
-        .header-content {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-        .header-actions {
-            display: flex;
-            gap: 8px;
-        }
-        .app-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 6px;
-        }
-        .app-name {
-            font-size: 16px;
-            font-weight: bold;
-            color: var(--text-color);
-        }
-        .app-details {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-            gap: 6px;
-            margin-bottom: 6px;
-            font-size: 12px;
-        }
-        .app-detail {
-            color: var(--muted-text);
-        }
-        .management-header {
-            background: var(--card-bg);
-            border: 1px solid var(--border-color);
-            padding: 12px 16px;
-            border-radius: 8px;
-            margin-bottom: 12px;
-            transition: all 0.3s;
-        }
-        .management-header h1 {
-            font-size: 1.8rem;
-            margin-bottom: 4px;
-        }
-        .management-header p {
-            font-size: 0.9rem;
-            margin: 0;
-        }
-        .app-info {
-            color: var(--muted-text);
-            font-style: italic;
-            font-size: 13px;
-            padding: 8px;
-            background: var(--surface-color);
-            border: 1px solid var(--border-color);
-            border-radius: 4px;
-            text-align: center;
-            margin-top: 6px;
-        }
-    </style>
 </head>
 <body>
-    <div class="container">
-        <div class="connection-status" id="connectionStatus">
-            <span class="status-indicator" id="statusIndicator"></span>
-            <span class="status-text" id="statusText">Connected</span>
-        </div>
-        
-        <div class="management-header">
-            <div class="header-content">
-                <div>
-                    <h1>Shiny Server Management</h1>
-                    <p>Monitor and manage your Shiny applications</p>
+    <header class="topbar">
+        <div class="container topbar-inner">
+            <div class="brand">
+                <span class="brand-mark" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.4 7.6L22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/></svg>
+                </span>
+                <span class="brand-name">Tiny Shiny Server</span>
+                <span class="brand-tag">Management</span>
+            </div>
+            <div class="topbar-actions">
+                <div class="connection-status" id="connectionStatus" role="status" title="Connected">
+                    <span class="status-indicator" id="statusIndicator"></span>
+                    <span class="status-text" id="statusText">Connected</span>
                 </div>
-                <div class="header-actions">
-                    <button class="shutdown-btn" onclick="shutdownServer()">
-                        Shutdown Server
-                    </button>
-                </div>
+                <button class="theme-toggle" type="button" data-theme-toggle aria-label="Toggle theme">
+                    <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+                    <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+                </button>
             </div>
         </div>
+    </header>
 
-        <div class="section">
-            <h2>System Overview</h2>
-            <div class="status-grid" id="systemStatus">
-                <div class="loading">Loading system status...</div>
+    <main class="container page">
+        <div class="page-header">
+            <div>
+                <h1>Server management</h1>
+                <p>Monitor and manage your Shiny applications.</p>
             </div>
+            <button class="shutdown-btn" type="button" onclick="shutdownServer()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v10"/><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/></svg>
+                <span>Shutdown Server</span>
+            </button>
         </div>
 
-        <div class="section">
-            <h2>Active Connections</h2>
-            <div id="connectionsContainer">
-                <div class="loading">Loading connections...</div>
-            </div>
-            <div class="auto-refresh">Auto-refreshing every 5 seconds</div>
+        <div class="notice" id="notice" role="status" hidden></div>
+
+        <div class="status-grid" id="systemStatus">
+            <div class="loading">Loading system status...</div>
         </div>
 
-        <div class="section">
-            <h2>Applications</h2>
-            <div id="appsContainer">
+        <section class="section">
+            <div class="section-header">
+                <h2>Applications</h2>
+            </div>
+            <div class="manage-apps" id="appsContainer">
                 <div class="loading">Loading applications...</div>
             </div>
-        </div>
-    </div>
+        </section>
+
+        <section class="section">
+            <div class="section-header">
+                <h2>Active connections</h2>
+                <span class="auto-refresh">Auto-refreshing every 5 seconds</span>
+            </div>
+            <div class="panel table-wrap" id="connectionsContainer">
+                <div class="loading">Loading connections...</div>
+            </div>
+        </section>
+    </main>
 
     <script>
         let refreshInterval;
         let isConnected = true;
+        let noticeTimer;
 
         function setConnectionStatus(connected) {
+            const status = document.getElementById("connectionStatus");
             const indicator = document.getElementById("statusIndicator");
             const statusText = document.getElementById("statusText");
+            const label = connected ? "Connected" : "Connection lost";
 
-            if (connected) {
-                indicator.className = "status-indicator connected";
-                statusText.className = "status-text connected";
-                statusText.textContent = "Connected";
-                isConnected = true;
-            } else {
-                indicator.className = "status-indicator disconnected";
-                statusText.className = "status-text disconnected";
-                statusText.textContent = "Connection Lost";
-                isConnected = false;
-            }
+            indicator.className = "status-indicator " + (connected ? "connected" : "disconnected");
+            statusText.className = "status-text " + (connected ? "connected" : "disconnected");
+            statusText.textContent = label;
+            status.title = label;
+            isConnected = connected;
+        }
+
+        function showNotice(message, kind) {
+            const notice = document.getElementById("notice");
+            notice.textContent = message;
+            notice.className = "notice notice-" + (kind || "info");
+            notice.hidden = false;
+            clearTimeout(noticeTimer);
+            noticeTimer = setTimeout(() => { notice.hidden = true; }, 6000);
         }
 
         function formatDuration(seconds) {
@@ -146,6 +110,13 @@
             }
         }
 
+        function element(tag, className, text) {
+            const node = document.createElement(tag);
+            if (className) node.className = className;
+            if (text !== undefined) node.textContent = text == null ? "" : String(text);
+            return node;
+        }
+
         function updateSystemStatus() {
             fetch("/api/status")
                 .then(response => {
@@ -159,20 +130,16 @@
                         setConnectionStatus(true);
                     }
 
-                    const container = document.getElementById("systemStatus");
-                    container.innerHTML =
-                        "<div class=\"status-card\">" +
-                            "<h3>Total Apps</h3>" +
-                            "<div class=\"value\">" + data.total_apps + "</div>" +
-                        "</div>" +
-                        "<div class=\"status-card\">" +
-                            "<h3>Running Apps</h3>" +
-                            "<div class=\"value\">" + data.running_apps + "</div>" +
-                        "</div>" +
-                        "<div class=\"status-card\">" +
-                            "<h3>Active Connections</h3>" +
-                            "<div class=\"value\">" + data.total_connections + "</div>" +
-                        "</div>";
+                    const cards = [
+                        ["Total apps", data.total_apps],
+                        ["Running apps", data.running_apps],
+                        ["Active connections", data.total_connections]
+                    ].map(([label, value]) => {
+                        const card = element("div", "status-card");
+                        card.append(element("h3", null, label), element("div", "value", value));
+                        return card;
+                    });
+                    document.getElementById("systemStatus").replaceChildren(...cards);
                 })
                 .catch(error => {
                     console.error("Error fetching system status:", error);
@@ -180,9 +147,14 @@
                 });
         }
 
-        function escapeHtml(value) {
-            return String(value == null ? "" : value).replace(/[&<>"']/g,
-                c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[c]);
+        function detail(key, label, value, wide) {
+            // Text reads "Label: value" for assistive technology and copy/paste
+            const node = element("div", "app-detail" + (wide ? " wide" : ""));
+            node.dataset.detail = key;
+            const labelNode = element("span", "detail-label", label);
+            labelNode.append(element("span", "visually-hidden", ":"));
+            node.append(labelNode, " ", element("span", "detail-value", value));
+            return node;
         }
 
         function updateApps() {
@@ -198,43 +170,47 @@
                         setConnectionStatus(true);
                     }
 
-                    const container = document.getElementById("appsContainer");
-                    container.innerHTML = "";
+                    const cards = Object.values(data).map(app => {
+                        const card = element("div", "app-card");
 
-                    Object.values(data).forEach(app => {
-                        const appDiv = document.createElement("div");
-                        appDiv.className = "app-card";
-                        
-                        // Build the basic app info HTML
-                        let appHTML = 
-                            "<div class=\"app-header\">" +
-                                "<div class=\"app-name\">" + escapeHtml(app.name) + "</div>" +
-                                "<span class=\"status-badge status-" + escapeHtml(app.status) + "\">" + escapeHtml(app.status) + "</span>" +
-                            "</div>" +
-                            "<div class=\"app-details\">" +
-                                "<div class=\"app-detail\"><strong>Port:</strong> " + escapeHtml(app.port) + "</div>" +
-                                "<div class=\"app-detail\"><strong>Connections:</strong> " + escapeHtml(app.connections) + "</div>" +
-                                "<div class=\"app-detail\"><strong>Path:</strong> " + escapeHtml(app.path) + "</div>" +
-                                "<div class=\"app-detail\"><strong>PID:</strong> " + (typeof app.pid === "number" ? app.pid : "N/A") + "</div>";
-                        
-                        // Add resident status if available
+                        const header = element("div", "app-header");
+                        header.append(
+                            element("div", "app-name", app.name),
+                            element("span", "status-badge status-" + app.status, app.status)
+                        );
+
+                        const details = element("div", "app-details");
                         if (app.resident !== undefined) {
-                            appHTML += "<div class=\"app-detail\"><strong>Type:</strong> " + (app.resident ? "Resident" : "On-Demand") + "</div>";
+                            details.append(detail("type", "Type", app.resident ? "Resident" : "On-demand"));
                         }
-                        
-                        appHTML += "</div>";
-                        
-                        // Only show restart button for apps that are not dormant
-                        // Dormant apps (non-resident, stopped) should start automatically on demand
+                        details.append(
+                            detail("port", "Port", app.port),
+                            detail("pid", "PID", typeof app.pid === "number" ? app.pid : "N/A"),
+                            detail("connections", "Connections", app.connections),
+                            detail("path", "Path", app.path, true)
+                        );
+
+                        const actions = element("div", "app-actions");
                         if (app.status !== "dormant") {
-                            appHTML += "<button class=\"restart-btn\" onclick=\"restartApp('" + app.name + "')\">Restart Application</button>";
+                            const button = element("button", "restart-btn", "Restart");
+                            button.type = "button";
+                            button.addEventListener("click", () => restartApp(button, app.name));
+                            actions.append(button);
                         } else {
-                            appHTML += "<div class=\"app-info\">This app will start automatically when accessed</div>";
+                            // Dormant (on-demand, stopped) apps start automatically when opened
+                            actions.append(element("div", "app-info", "Starts automatically when opened"));
                         }
-                        
-                        appDiv.innerHTML = appHTML;
-                        container.appendChild(appDiv);
+
+                        card.append(header, details, actions);
+                        return card;
                     });
+
+                    const container = document.getElementById("appsContainer");
+                    if (cards.length === 0) {
+                        container.replaceChildren(element("div", "empty-state panel", "No applications configured"));
+                    } else {
+                        container.replaceChildren(...cards);
+                    }
                 })
                 .catch(error => {
                     console.error("Error fetching apps:", error);
@@ -258,7 +234,7 @@
                     const container = document.getElementById("connectionsContainer");
 
                     if (Object.keys(data).length === 0) {
-                        container.innerHTML = "<p>No active connections</p>";
+                        container.replaceChildren(element("p", "empty-state", "No active connections"));
                         return;
                     }
 
@@ -278,7 +254,10 @@
                             .forEach((value, index) => {
                                 const cell = row.insertCell();
                                 cell.textContent = value == null ? "" : String(value);
-                                if (index === 2) cell.className = "user-agent";
+                                if (index === 2) {
+                                    cell.className = "user-agent";
+                                    cell.title = cell.textContent;
+                                }
                             });
                     });
                     container.replaceChildren(table);
@@ -289,32 +268,43 @@
                 });
         }
 
-        function restartApp(appName) {
-            const button = event.target;
+        function restartApp(button, appName) {
             button.disabled = true;
             button.textContent = "Restarting...";
 
-            fetch("/api/apps/" + appName + "/restart", {
+            fetch("/api/apps/" + encodeURIComponent(appName) + "/restart", {
                 method: "POST",
                 headers: { "X-TinyShinyServer-Request": "management" }
             })
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    alert(data.message || "Restart scheduled for app " + appName);
+                    showNotice(data.message || "Restart scheduled for " + appName, "success");
                 } else {
-                    alert("Failed to restart " + appName + ": " + data.message);
+                    showNotice("Failed to restart " + appName + ": " + data.message, "error");
                 }
                 button.disabled = false;
-                button.textContent = "Restart Application";
+                button.textContent = "Restart";
                 updateApps();
             })
             .catch(error => {
                 console.error("Error restarting app:", error);
-                alert("Error restarting " + appName + ": " + error.message);
+                showNotice("Error restarting " + appName + ": " + error.message, "error");
                 button.disabled = false;
-                button.textContent = "Restart Application";
+                button.textContent = "Restart";
             });
+        }
+
+        function showShutdownScreen() {
+            const screen = element("main", "shutdown-screen");
+            const content = element("div");
+            content.append(
+                element("h1", null, "Server Shutdown"),
+                element("p", null, "The Shiny server has been shut down."),
+                element("p", null, "To use it again, restart the server from the command line.")
+            );
+            screen.append(content);
+            document.body.replaceChildren(screen);
         }
 
         function shutdownServer() {
@@ -329,12 +319,19 @@
             }
 
             const button = document.querySelector(".shutdown-btn");
+            const label = button.querySelector("span");
             button.disabled = true;
-            button.textContent = "Shutting down...";
+            label.textContent = "Shutting down...";
 
             if (refreshInterval) {
                 clearInterval(refreshInterval);
             }
+
+            const restore = () => {
+                button.disabled = false;
+                label.textContent = "Shutdown Server";
+                refreshInterval = setInterval(refreshAll, 5000);
+            };
 
             fetch("/api/shutdown", {
                 method: "POST",
@@ -343,25 +340,16 @@
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    alert("Server shutdown initiated successfully. The page will become unresponsive as the server stops.");
-                    document.body.innerHTML =
-                        "<div style=\"display: flex; justify-content: center; align-items: center; height: 100vh; text-align: center; background: var(--surface-color); color: var(--text-color);\">" +
-                            "<div>" +
-                                "<h1 style=\"color: var(--error-text); margin-bottom: 20px;\">Server Shutdown</h1>" +
-                                "<p style=\"font-size: 18px; margin-bottom: 10px;\">The Shiny server has been shut down successfully.</p>" +
-                                "<p style=\"color: var(--muted-text);\">To restart the server, run the startup script from the command line.</p>" +
-                            "</div>" +
-                        "</div>";
+                    showShutdownScreen();
                 } else {
-                    alert("Failed to shutdown server: " + data.message);
-                    button.disabled = false;
-                    button.textContent = "Shutdown Server";
+                    showNotice("Failed to shutdown server: " + data.message, "error");
+                    restore();
                 }
             })
             .catch(error => {
                 console.error("Error shutting down server:", error);
-                button.disabled = false;
-                button.textContent = "Shutdown Server";
+                showNotice("Error shutting down server: " + error.message, "error");
+                restore();
             });
         }
 

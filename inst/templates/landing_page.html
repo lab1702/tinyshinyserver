@@ -1,62 +1,95 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>Tiny Shiny Server</title>
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Tiny Shiny Server</title>
+  <script src="{{base_url}}/templates/scripts/theme.js"></script>
   <link rel="stylesheet" href="{{base_url}}/templates/styles/main.css">
 </head>
 <body>
-  <div class="container">
-    <div class="connection-status" id="connectionStatus">
-      <span class="status-indicator" id="statusIndicator"></span>
-      <span class="status-text" id="statusText">Connecting...</span>
+  <header class="topbar">
+    <div class="container topbar-inner">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.4 7.6L22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/></svg>
+        </span>
+        <span class="brand-name">Tiny Shiny Server</span>
+      </div>
+      <div class="topbar-actions">
+        <div class="connection-status" id="connectionStatus" role="status" title="Connecting...">
+          <span class="status-indicator" id="statusIndicator"></span>
+          <span class="status-text" id="statusText">Connecting...</span>
+        </div>
+        <button class="theme-toggle" type="button" data-theme-toggle aria-label="Toggle theme">
+          <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        </button>
+      </div>
     </div>
+  </header>
 
-    <div class="header">
-      <h1>Tiny Shiny Server</h1>
+  <main class="container page">
+    <div class="page-header">
+      <div>
+        <h1>Applications</h1>
+        <p>Choose an application to open it. On-demand apps start when opened.</p>
+      </div>
     </div>
 
     <div class="apps-grid">
       {{app_cards}}
     </div>
 
-    <div class="session-info">
-      <h4>Server Information</h4>
+    <section class="panel session-info">
+      <h4>Server information</h4>
       <pre>{{session_info}}</pre>
-    </div>
-  </div>
+    </section>
+  </main>
 
   <script>
     let refreshInterval;
     let isConnected = false; // Start as disconnected until we verify connection
 
     function setConnectionStatus(connected) {
+      const status = document.getElementById("connectionStatus");
       const indicator = document.getElementById("statusIndicator");
       const statusText = document.getElementById("statusText");
+      const label = connected ? "Connected" : "Connection lost";
 
-      if (connected) {
-        indicator.className = "status-indicator connected";
-        statusText.className = "status-text connected";
-        statusText.textContent = "Connected";
-        isConnected = true;
+      indicator.className = "status-indicator " + (connected ? "connected" : "disconnected");
+      statusText.className = "status-text " + (connected ? "connected" : "disconnected");
+      statusText.textContent = label;
+      status.title = label;
+      isConnected = connected;
+    }
+
+    function setCardEnabled(linkElement, cardElement, enabled, title, action) {
+      if (enabled) {
+        linkElement.href = "/proxy/" + cardElement.dataset.app + "/";
+        linkElement.removeAttribute("aria-disabled");
       } else {
-        indicator.className = "status-indicator disconnected";
-        statusText.className = "status-text disconnected";
-        statusText.textContent = "Connection Lost";
-        isConnected = false;
+        linkElement.removeAttribute("href");
+        linkElement.setAttribute("aria-disabled", "true");
       }
+      linkElement.classList.toggle("is-disabled", !enabled);
+      cardElement.classList.toggle("app-disabled", !enabled);
+      linkElement.title = title;
+      const actionElement = cardElement.querySelector(".app-open");
+      if (actionElement) actionElement.textContent = action;
     }
 
     function updateAppStatus() {
       // Create abort controller for timeout
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 second timeout
-      
+
       fetch("/api/apps", {
-        method: 'GET',
-        cache: 'no-cache',
+        method: "GET",
+        cache: "no-cache",
         headers: {
-          'Cache-Control': 'no-cache'
+          "Cache-Control": "no-cache"
         },
         signal: controller.signal
       })
@@ -67,10 +100,8 @@
           return response.json();
         })
         .then(data => {
-          // Clear timeout since request succeeded
           clearTimeout(timeoutId);
-          
-          // Update connection status to connected if we were disconnected
+
           if (!isConnected) {
             setConnectionStatus(true);
           }
@@ -79,7 +110,7 @@
             const statusElement = document.getElementById("status-" + app.name);
             const connectionsElement = document.getElementById("connections-" + app.name);
             const cardElement = document.querySelector(`[data-app="${app.name}"]`);
-            const linkElement = cardElement ? cardElement.closest('a') : null;
+            const linkElement = cardElement ? cardElement.closest("a") : null;
 
             if (statusElement) {
               statusElement.textContent = app.status;
@@ -87,73 +118,41 @@
             }
 
             if (connectionsElement) {
-              const connectionText = app.connections === 1 ? "1 connection" : app.connections + " connections";
-              connectionsElement.textContent = connectionText;
+              connectionsElement.textContent = app.connections === 1 ? "1 connection" : app.connections + " connections";
             }
-            
-            // Enable/disable link based on app status
+
             if (linkElement && cardElement) {
-              if (app.status === "running" || app.status === "dormant") {
-                // App is running or dormant (can be started on-demand) - make it clickable
-                linkElement.href = "/proxy/" + app.name + "/";
-                linkElement.style.pointerEvents = "auto";
-                linkElement.style.cursor = "pointer";
-                cardElement.classList.remove("app-disabled");
-                
-                if (app.status === "running") {
-                  linkElement.title = "Click to open " + app.name;
-                } else {
-                  linkElement.title = "Click to start and open " + app.name + " (on-demand app)";
-                }
+              if (app.status === "running") {
+                setCardEnabled(linkElement, cardElement, true, "Open " + app.name, "Open app");
+              } else if (app.status === "dormant") {
+                setCardEnabled(linkElement, cardElement, true, "Start and open " + app.name + " (on-demand app)", "Start app");
+              } else if (app.status === "stopped") {
+                setCardEnabled(linkElement, cardElement, false, "App is stopped - use the management interface to start it", "Unavailable");
+              } else if (app.status === "crashed") {
+                setCardEnabled(linkElement, cardElement, false, "App has crashed - use the management interface to restart it", "Unavailable");
               } else {
-                // App is stopped or crashed - disable clicking
-                linkElement.removeAttribute("href");
-                linkElement.style.pointerEvents = "none";
-                linkElement.style.cursor = "not-allowed";
-                cardElement.classList.add("app-disabled");
-                
-                // Set appropriate tooltip based on status
-                if (app.status === "stopped") {
-                  linkElement.title = "App is stopped - use management interface to start it";
-                } else if (app.status === "crashed") {
-                  linkElement.title = "App has crashed - use management interface to restart it";
-                } else {
-                  linkElement.title = "App is not available (" + app.status + ")";
-                }
+                setCardEnabled(linkElement, cardElement, false, "App is not available (" + app.status + ")", "Unavailable");
               }
             }
           });
         })
         .catch(error => {
-          // Clear timeout
           clearTimeout(timeoutId);
-          
           console.error("Error fetching app status:", error);
-
-          // Update connection status to disconnected
           setConnectionStatus(false);
 
-          // Update all status badges to show error state and disable all app tiles
+          // Show the server as down and disable all app tiles
           document.querySelectorAll(".app-card").forEach(card => {
-            const linkElement = card.closest('a');
-            const statusBadge = card.querySelector('.status-badge');
-            
-            // Update status badge
+            const linkElement = card.closest("a");
+            const statusBadge = card.querySelector(".status-badge");
+
             if (statusBadge) {
               statusBadge.textContent = "server down";
               statusBadge.className = "status-badge status-stopped";
             }
-            
-            // Disable the app tile
             if (linkElement) {
-              linkElement.removeAttribute("href");
-              linkElement.style.pointerEvents = "none";
-              linkElement.style.cursor = "not-allowed";
-              linkElement.title = "Server is down - apps are not accessible";
+              setCardEnabled(linkElement, card, false, "Server is down - apps are not accessible", "Unavailable");
             }
-            
-            // Add disabled styling
-            card.classList.add("app-disabled");
           });
         });
     }

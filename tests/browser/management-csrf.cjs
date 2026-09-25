@@ -50,8 +50,8 @@ const { chromium } = require('playwright');
     // Real management UI buttons, including their automatic request headers.
     page.on('dialog', dialog => dialog.accept());
     await page.goto(urls.management);
-    await page.getByRole('button', {name: 'Restart Application'}).click();
-    await page.waitForFunction(() => document.querySelector('.restart-btn')?.textContent === 'Restart Application');
+    await page.getByRole('button', {name: 'Restart', exact: true}).click();
+    await page.waitForFunction(() => document.querySelector('.restart-btn')?.textContent === 'Restart');
     assert.equal((await state()).restarts, 1);
     await page.locator('.shutdown-btn').click();
     await page.waitForFunction(() => document.body.textContent.includes('Server Shutdown'));

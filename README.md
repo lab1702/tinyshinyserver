@@ -192,7 +192,7 @@ Include the management site only if remote administration is needed. The managem
 
 ## Monitoring and management
 
-Both web pages refresh status every 5 seconds and follow your system's light or dark theme.
+Both web pages refresh status every 5 seconds. They follow your system's light or dark theme by default; the theme button in the top bar switches between them, and the browser remembers that choice until you switch back to match the system.
 
 | Page | Default URL | Capabilities |
 |------|-------------|--------------|

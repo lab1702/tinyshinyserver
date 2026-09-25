@@ -20,6 +20,12 @@
 
 * Client IP addresses shown in the management dashboard and logs are taken from `X-Forwarded-For` or `X-Real-IP` only when the request comes from a reverse proxy on the same machine, and then from the entry that proxy added.
 
+## Web pages
+
+* The landing page and management dashboard have a new, more professional design. They follow the system light or dark theme by default and have a theme toggle; an explicit choice is remembered in the browser until it is switched back to match the system. Error and status pages use the same theme.
+
+* Management dashboard actions report their results in an inline notice instead of browser alert dialogs.
+
 ## Apps and logging
 
 * App processes now write their stdout and stderr directly to the per-app log files. Output from child processes and native code (for example pandoc) is now logged and can no longer fill an unread pipe and hang the app.

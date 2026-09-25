@@ -86,16 +86,22 @@ TemplateManager <- setRefClass("TemplateManager",
         # HTML escape app name for security
         safe_name <- html_escape(app_config$name)
 
+        initial <- toupper(substr(safe_name, 1, 1))
+
         card_html <- sprintf('
-    <a class="app-card-link" style="pointer-events: none; cursor: not-allowed;" title="Loading...">
+    <a class="app-card-link is-disabled" aria-disabled="true" title="Loading...">
       <div class="app-card app-disabled" data-app="%1$s">
-        <h3>%1$s</h3>
+        <div class="app-card-head">
+          <span class="app-avatar" aria-hidden="true">%2$s</span>
+          <h3>%1$s</h3>
+        </div>
         <div class="app-status">
           <span class="status-badge" id="status-%1$s">Loading...</span>
           <span class="connections-count" id="connections-%1$s">0 connections</span>
         </div>
+        <span class="app-open" aria-hidden="true">Loading...</span>
       </div>
-    </a>', safe_name)
+    </a>', safe_name, initial)
 
         cards_html <- paste0(cards_html, card_html)
       }
@@ -110,21 +116,23 @@ TemplateManager <- setRefClass("TemplateManager",
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Error %d</title>
+  <title>Error %1$d</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="%s/templates/styles/main.css">
+  <meta name="color-scheme" content="light dark">
+  <script src="%2$s/templates/scripts/theme.js"></script>
+  <link rel="stylesheet" href="%2$s/templates/styles/main.css">
 </head>
 <body>
   <div class="container">
     <div class="header">
-      <h1>Error %d</h1>
-      <p>%s</p>
+      <h1>Error %1$d</h1>
+      <p>%3$s</p>
     </div>
-    %s
+    %4$s
   </div>
 </body>
 </html>',
-        error_code, base_url, error_code, html_escape(error_message),
+        error_code, base_url, html_escape(error_message),
         if (!is.null(details)) paste0('<div class="info"><p>', html_escape(details), "</p></div>") else ""
       )
 
@@ -138,21 +146,23 @@ TemplateManager <- setRefClass("TemplateManager",
 <!DOCTYPE html>
 <html>
 <head>
-  <title>%s</title>
+  <title>%1$s</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="%s/templates/styles/main.css">
+  <meta name="color-scheme" content="light dark">
+  <script src="%2$s/templates/scripts/theme.js"></script>
+  <link rel="stylesheet" href="%2$s/templates/styles/main.css">
 </head>
 <body>
   <div class="container">
     <div class="header">
-      <h1>%s</h1>
-      <p>%s</p>
+      <h1>%1$s</h1>
+      <p>%3$s</p>
     </div>
-    %s
+    %4$s
   </div>
 </body>
 </html>',
-        html_escape(title), base_url, html_escape(title), html_escape(message),
+        html_escape(title), base_url, html_escape(message),
         if (!is.null(details)) paste0('<div class="info"><p>', html_escape(details), "</p></div>") else ""
       )
 

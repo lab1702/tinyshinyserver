@@ -5,7 +5,8 @@ const path = require('node:path');
 const { chromium } = require('playwright');
 
 (async () => {
-  const template = process.argv[2] || path.join(__dirname, '../../inst/templates/management_page.html');
+  const templates = path.join(__dirname, '../../inst/templates');
+  const template = process.argv[2] || path.join(templates, 'management_page.html');
   const html = fs.readFileSync(template, 'utf8').replaceAll('{{base_url}}', '');
   const normalAgent = 'Mozilla/5.0 <literal> & café "quoted"';
   const injectedAgent = '<img src=x onerror="window.__agentInjected=1">';
@@ -24,15 +25,21 @@ const { chromium } = require('playwright');
   };
   const browser = await chromium.launch({ headless: true, executablePath: process.env.TSS_TEST_BROWSER || undefined });
   try {
-    const page = await browser.newPage();
-    await page.route('**/*', route => {
+    const serve = route => {
       const pathname = new URL(route.request().url()).pathname;
       if (pathname === '/') return route.fulfill({ contentType: 'text/html', body: html });
+      if (pathname.startsWith('/templates/')) {
+        const file = path.join(templates, pathname.slice('/templates/'.length));
+        return route.fulfill({ contentType: file.endsWith('.css') ? 'text/css' : 'application/javascript',
+          body: fs.readFileSync(file, 'utf8') });
+      }
       const data = pathname === '/api/connections' ? connections
         : pathname === '/api/status' ? { total_apps: 1, running_apps: 1, total_connections: 2 }
         : pathname === '/api/apps' ? apps : null;
       return route.fulfill({ status: data === null ? 404 : 200, contentType: 'application/json', body: JSON.stringify(data) });
-    });
+    };
+    const page = await browser.newPage();
+    await page.route('**/*', serve);
     await page.goto('http://tss.test/');
     await page.waitForSelector('#connectionsContainer tbody tr');
     const rows = page.locator('#connectionsContainer tbody tr');
@@ -53,7 +60,26 @@ const { chromium } = require('playwright');
     connections = {};
     await page.evaluate(() => updateConnections());
     await page.waitForFunction(() => document.getElementById('connectionsContainer').textContent === 'No active connections');
-    console.log('PASS: hostile headers and app paths render literally; ordinary metadata and empty-state rendering work.');
+    // The theme follows the system until toggled; toggling back to the system theme clears the override.
+    const context = await browser.newContext({ colorScheme: 'dark' });
+    const themed = await context.newPage();
+    await themed.route('**/*', serve);
+    await themed.goto('http://tss.test/');
+    const theme = () => themed.evaluate(() => [document.documentElement.dataset.theme, localStorage.getItem('tss-theme')]);
+    assert.deepEqual(await theme(), ['dark', null]);
+    await themed.getByRole('button', { name: 'Switch to light theme' }).click();
+    assert.deepEqual(await theme(), ['light', 'light']);
+    await themed.reload();
+    assert.deepEqual(await theme(), ['light', 'light']);
+    await themed.emulateMedia({ colorScheme: 'light' });
+    await themed.getByRole('button', { name: 'Switch to dark theme' }).click();
+    assert.deepEqual(await theme(), ['dark', 'dark']);
+    await themed.getByRole('button', { name: 'Switch to light theme' }).click();
+    assert.deepEqual(await theme(), ['light', null]);
+    await themed.emulateMedia({ colorScheme: 'dark' });
+    await themed.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
+    await context.close();
+    console.log('PASS: hostile headers and app paths render literally; ordinary metadata, empty-state, and theme toggling work.');
   } finally {
     await browser.close();
   }
