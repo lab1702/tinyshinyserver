@@ -12,8 +12,9 @@ documented in NEWS.md and README.md.
 
 * The management server, and the proxy when bound to a loopback address,
   reject requests whose `Host` header is not a loopback name (DNS-rebinding
-  protection). App WebSocket connections must come from a page on the same
-  host, and management pages cannot be framed.
+  protection; app processes' own loopback ports are not covered). App
+  WebSocket connections must come from a page on the same host, and
+  management pages cannot be framed.
 * The public `/api/apps` endpoint no longer exposes app paths, ports, or
   process IDs.
 * App processes write stdout and stderr directly to their log files instead

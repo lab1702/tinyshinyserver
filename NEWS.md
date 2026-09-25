@@ -10,7 +10,7 @@
 
 ## Security
 
-* The proxy and management server reject DNS-rebinding requests through the `Host` header checks above, so websites cannot read or drive local apps or the management API.
+* The proxy and management server reject DNS-rebinding requests through the `Host` header checks above, so websites cannot read or drive local apps through the proxy or use the management API. App processes still listen on their own loopback ports without these checks; see the README's security notes.
 
 * The proxy rejects app WebSocket connections whose browser `Origin` does not match the request host, so other websites can no longer open app sessions with a visitor's cookies or reverse-proxy credentials.
 

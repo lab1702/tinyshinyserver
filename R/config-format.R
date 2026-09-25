@@ -72,7 +72,9 @@
 #' proxy on the same machine must therefore forward the upstream address as the
 #' host and set \code{X-Forwarded-Host} to the public host. App WebSocket
 #' connections are accepted only when the browser \code{Origin} matches the
-#' request host.
+#' request host. App processes listen on their own loopback ports without these
+#' checks, so a DNS-rebinding page in a browser on the server machine can still
+#' reach a running app directly on its port.
 #'
 #' @section Port Assignment:
 #' Apps are automatically assigned ports starting from \code{starting_port}, skipping
