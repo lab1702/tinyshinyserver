@@ -29,6 +29,8 @@ documented in NEWS.md and README.md.
 * `start_tss()` configures logging only in the package's own logger
   namespace, leaving the caller's logger settings unchanged. Port assignments
   are written to `server.log`.
+* The package now requires R >= 4.1.0, as its `promises` and `quarto`
+  dependencies already do.
 * Removed the unused `future` dependency; `tools` and `utils` are now declared
   imports. Added `ps`, already required by `callr`.
 
@@ -39,16 +41,21 @@ documented in NEWS.md and README.md.
   Checked with `R CMD check --as-cran` on the source tarball, including the
   PDF manual, with remote incoming checks disabled and OpenMP thread limit set
   to one.
-* R-hub: pending. Run the R-hub workflow on the release commit and record the
-  platforms, results, and run link here before submitting.
+* R-hub (commit 6033be6, run
+  https://github.com/lab1702/tinyshinyserver/actions/runs/36076979816):
+  linux (R-devel), windows (R-devel), macos-arm64 (R-devel), gcc16, and
+  ubuntu-gcc12.
 
 ## R CMD check results
 
 Local: 0 errors | 0 warnings | 0 notes.
 
-Local test results: 1474 passes, 0 failures, 0 warnings, 2 intentional skips
-on CRAN (the invalid-device-path write test and a test that launches a real
-Shiny app).
+R-hub: 0 errors | 0 warnings | 0 notes on all five platforms.
+
+Test results: 1480 passes locally and 1479 or 1480 on R-hub, with 0 failures,
+0 warnings, and 2 intentional skips on CRAN (the invalid-device-path write test
+and a test that launches a real Shiny app). One test's expectation count
+depends on timing.
 
 ## Downstream dependencies
 
