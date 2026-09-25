@@ -23,31 +23,32 @@ resource cleanup.
   \item Host multiple Shiny applications behind a single proxy
   \item Resident (always-running) and on-demand application modes
   \item WebSocket support with session affinity
-  \item Real-time management interface and monitoring
-  \item Automatic health checks and application restart
+  \item Web dashboard for monitoring, restarting apps, and shutting down
+  \item Automatic restart of failed resident apps
   \item Cross-platform support (Windows, Linux, macOS)
-  \item Support for R Markdown and Quarto dashboards
+  \item Support for interactive R Markdown documents and Quarto dashboards
 }
 }
 
 \section{Getting started}{
 
-See \code{\link{example-config}} for copying and running the included apps
-and their prerequisites. Use \code{\link{start_tss}} to launch the server and
+See \code{\link{example-config}} to copy and run the included apps and to
+learn what they require. Use \code{\link{start_tss}} to launch the server and
 \code{\link{config-format}} to configure your own apps.
 }
 
 \section{Package resources}{
 
-The package includes:
+The installed package includes:
 \itemize{
-  \item Example Shiny applications in \code{inst/examples/}
-  \item HTML templates and CSS in \code{inst/templates/}
-  \item Sample configuration file \code{inst/examples/config.json}
+  \item Example apps and an example configuration file,
+    \file{config.json}, in the \file{examples} directory
+  \item HTML templates and styles for the web pages in the \file{templates}
+    directory
 }
 
 Use \code{system.file("examples", package = "tinyshinyserver")} to locate
-the example files after installation.
+the example files.
 }
 
 \seealso{

@@ -1,7 +1,8 @@
 ## Submission
 
-Update to version 0.3.0. Version 0.2.1 was submitted on 2026-09-24; the CRAN
-package index checked on 2026-09-24 (UTC) still lists 0.2.0.
+This is an update to version 0.3.0. Version 0.2.1 was submitted on
+2026-09-24, but the CRAN package index still listed 0.2.0 when checked on
+2026-09-24 (UTC).
 
 ## Changes in this release
 
@@ -36,7 +37,7 @@ documented in NEWS.md and README.md.
 * The package now requires R >= 4.1.0, as its `promises` and `quarto`
   dependencies already do.
 * Removed the unused `future` dependency; `tools` and `utils` are now declared
-  imports. Added `ps`, already required by `callr`.
+  imports. Added `ps`, which `callr` already requires.
 
 ## Test environments
 

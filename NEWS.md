@@ -4,7 +4,7 @@
 
 * **Reverse proxies must now send a loopback `Host` header.** When `proxy_host` is a loopback address, the proxy rejects requests whose `Host` header is not `localhost`, `127.0.0.1`, or `[::1]`; the management server always does. A reverse proxy on the same machine must forward the upstream address as the host (for Caddy, `header_up Host {upstream_hostport}`) and set `X-Forwarded-Host` to the public host (Caddy does by default). A reverse proxy on another machine, with `proxy_host` set to `"0.0.0.0"` or `"::"`, must preserve the public `Host` header. See the updated Caddy example in the README.
 
-* **The proxy now rejects HTTP request bodies larger than 100 MB** with HTTP 413 before reading them, as do chunked request bodies. Previously the whole body was read into memory before being forwarded, so one very large upload could exhaust the server's memory and stop every app. Apps that accept larger uploads through `shiny.maxRequestSize` need the new `max_request_size_mb` option raised to match. The management server, whose requests carry no body, rejects bodies larger than 64 KB.
+* **The proxy now rejects HTTP request bodies larger than 100 MB, and all chunked request bodies,** with HTTP 413 before reading them. Previously the whole body was read into memory before being forwarded, so one very large upload could exhaust the server's memory and stop every app. Apps that accept larger uploads through `shiny.maxRequestSize` need the new `max_request_size_mb` option raised to match. The management server, whose requests need no body, rejects bodies larger than 64 KB.
 
 * The proxy's public `/api/apps` endpoint now returns only each app's name, status, mode, and connection count. App paths, ports, and process IDs are available only from the loopback management API.
 
@@ -12,7 +12,7 @@
 
 ## Security
 
-* The proxy and management server reject DNS-rebinding requests through the `Host` header checks above, so websites cannot read or drive local apps through the proxy or use the management API. App processes still listen on their own loopback ports without these checks; see the README's security notes.
+* The proxy and management server reject DNS-rebinding requests through the `Host` header checks above, so websites cannot read or control local apps through the proxy or use the management API. App processes still listen on their own loopback ports without these checks; see "Network access and authentication" in the README.
 
 * The proxy rejects app WebSocket connections whose browser `Origin` does not match the request host, so other websites can no longer open app sessions with a visitor's cookies or reverse-proxy credentials.
 
@@ -24,15 +24,15 @@
 
 ## Web pages
 
-* The landing page and management dashboard have a new, more professional design. They follow the system light or dark theme by default and have a theme toggle; an explicit choice is remembered in the browser until it is switched back to match the system. Error and status pages use the same theme.
+* The landing page and management dashboard have a new design. They follow the system light or dark theme by default and have a theme toggle; an explicit choice is remembered in the browser until it is switched back to match the system. Error and status pages use the same theme.
 
 * Management dashboard actions report their results in an inline notice instead of browser alert dialogs.
 
-* New `title` configuration option sets the name shown in the browser tab and top bar of the landing and management pages (default: "Tiny Shiny Server").
+* The new `title` configuration option sets the name shown in the browser tab and top bar of the landing and management pages (default: "Tiny Shiny Server").
 
 ## Apps and logging
 
-* App processes now write their stdout and stderr directly to the per-app log files. Output from child processes and native code (for example pandoc) is now logged and can no longer fill an unread pipe and hang the app.
+* App processes now write their stdout and stderr directly to the per-app log files. Output from child processes and native code (for example, Pandoc) is now logged and can no longer fill an unread pipe and hang the app.
 
 * Starting an app keeps the previous run's logs as `{app_name}_output.prev.log` and `{app_name}_error.prev.log`, so a crash traceback survives the automatic restart.
 
@@ -40,7 +40,7 @@
 
 * WebSocket messages for a client session that is no longer tracked no longer open an orphaned backend session.
 
-* App WebSocket messages larger than 32 MB, such as large htmlwidget outputs, no longer disconnect the browser session.
+* WebSocket messages larger than 32 MB from an app to the browser, such as large htmlwidget outputs, no longer disconnect the browser session.
 
 * Proxied HTTP requests are no longer cut off after 30 seconds. Once the app accepts the connection, a request fails only if the app sends no data for 10 minutes, so slow downloads and documents rendered on request complete.
 
@@ -126,7 +126,7 @@
 
 # tinyshinyserver 0.1.0
 
-* Initial CRAN submission
+* Initial CRAN submission.
 * Core features:
   - Multi-application Shiny proxy server
   - WebSocket support with session affinity

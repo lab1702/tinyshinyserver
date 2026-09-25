@@ -38,10 +38,10 @@ Rscript -e "devtools::install('.')"
 ### Prerequisites
 
 - **R** (≥ 4.1.0)
-- **Pandoc** (for R Markdown apps)
-- **Quarto CLI** (optional, for Quarto dashboards)
+- **Pandoc** (only for R Markdown apps)
+- **Quarto CLI** (only for Quarto apps)
 
-Required R dependencies are installed with the package. The bundled reports and Quarto dashboard also need the example packages installed below; Pandoc and the Quarto CLI must be available separately.
+Required R packages are installed with tinyshinyserver. The example R Markdown report and Quarto dashboard also need the packages installed in the quick start below. Pandoc and the Quarto CLI are not R packages and must be installed separately.
 
 ## Quick start
 
@@ -56,7 +56,7 @@ file.copy(examples_path, ".", recursive = TRUE)
 start_tss(config = "examples/config.json")
 ```
 
-The example configuration includes a Quarto app that starts immediately. Install the Quarto CLI before using the full configuration, or use the sales-only configuration below to try a standard Shiny app.
+The example configuration includes a resident Quarto dashboard, which starts with the server and needs the Quarto CLI. Install the Quarto CLI before using the full configuration, or use the [sales-only configuration](#configuration) below to try a standard Shiny app.
 
 With the default ports, open:
 
@@ -109,7 +109,7 @@ The package includes four example applications:
 | **sales** | Single-file Shiny | Simple dashboard with sample data |
 | **inventory** | Multi-file Shiny | Interactive tables (ui.R + server.R) |
 | **reports** | R Markdown | Flexdashboard with `runtime: shiny` |
-| **dashboard** | Quarto | Modern dashboard with `server: shiny` |
+| **dashboard** | Quarto | Dashboard with `server: shiny` |
 
 The bundled [example configuration](inst/examples/config.json) keeps `sales` and `dashboard` resident; `inventory` and `reports` start on demand. In the source repository, the apps are under `inst/examples/`; the quick start copies them to `examples/`.
 
@@ -122,32 +122,38 @@ Apps receive ports in configuration order, starting from `starting_port`. Alloca
 | Resident (`"resident": true`) | At server startup; restarted after a process failure | At server shutdown or restart | Immediate access matters |
 | On-demand (`"resident": false`, default) | On the first HTTP request or WebSocket connection | When unused, as described below | Saving resources matters more than startup delay |
 
-On-demand apps stop 30 seconds after their last WebSocket connection closes, provided no new connection opens and no HTTP requests remain; the grace period lets a reloaded or newly opened page reconnect without restarting the app. If requests are in flight, shutdown waits for them to finish before the grace period applies. Visits that never open a WebSocket session allow 30 seconds without HTTP activity before shutdown. Failed on-demand apps start again on the next request.
+On-demand apps stop 30 seconds after their last WebSocket connection closes, provided no new connection opens and no HTTP requests remain; the grace period lets a reloaded or newly opened page reconnect without restarting the app. If requests are in flight, shutdown waits for them to finish before the grace period applies. If a visit never opens a WebSocket session, the app stops after 30 seconds without HTTP activity. A failed on-demand app starts again on the next request.
 
-`appstart_timeout` controls how long a request waits for startup readiness (default: 2 seconds, measured from app startup). If the app is still starting, the proxy returns HTTP 503. Increase this value for slow-starting apps; fractional seconds are supported.
+`appstart_timeout` controls how long a request waits for a starting app to become ready (default: 2 seconds, measured from app startup). If the app is still starting after that, the proxy returns HTTP 503. Increase this value for slow-starting apps; fractional seconds are supported.
 
 The proxy forwards traffic to an app only when the app's own process is listening on the app's port. If another program holds that port, for example a second server instance with the same `starting_port`, the proxy returns HTTP 503 and logs a warning instead of sending the other program your users' requests.
 
-Once the app accepts a connection, a proxied HTTP request fails with HTTP 502 only if the app sends no data for 10 minutes; there is no limit on total transfer time. If a running app does not accept connections, the proxy returns HTTP 503. Requests with query strings longer than 8,192 characters are rejected with HTTP 400, request bodies larger than `max_request_size_mb` (default: 100 MB) or sent with chunked transfer encoding are rejected with HTTP 413 before they are read, and browser WebSocket messages larger than 1 MB close the session. That check runs only after the whole message has been received, so it does not limit the memory a single very large message uses; expose the proxy port only to trusted or authenticated clients. Messages from an app to the browser may be up to 2 GB.
+The proxy applies these limits:
+
+- If a running app does not accept connections, the proxy returns HTTP 503. Once the app accepts a connection, a proxied HTTP request fails with HTTP 502 only if the app sends no data for 10 minutes; there is no limit on total transfer time.
+- Requests with query strings longer than 8,192 characters are rejected with HTTP 400.
+- Request bodies larger than `max_request_size_mb` (default: 100 MB), or sent with chunked transfer encoding, are rejected with HTTP 413 before they are read.
+- A WebSocket message from the browser larger than 1 MB closes the session. This check runs only after the whole message has been received, so it does not limit the memory that a single very large message uses; expose the proxy port only to trusted or authenticated clients.
+- WebSocket messages from an app to the browser may be up to 2 GB.
 
 ### Configuration options
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `apps` | Array of Shiny applications to host | Required |
+| `apps` | Array of apps to host | Required |
 | `apps[].name` | Unique URL identifier: 1–50 ASCII letters, digits, underscores, or hyphens | Required |
 | `apps[].path` | App directory; relative to the R working directory, or absolute | Required |
-| `apps[].resident` | Keep app running continuously (true) or start on-demand (false) | false |
-| `apps[].appstart_timeout` | Seconds from app startup to wait for readiness before returning HTTP 503; positive, finite number (fractional seconds supported) | 2 |
-| `starting_port` | Starting port for auto-assignment | Required |
+| `apps[].resident` | Keep the app running continuously (`true`) or start it on demand (`false`) | `false` |
+| `apps[].appstart_timeout` | Seconds, measured from app startup, that a request waits for the app to become ready before HTTP 503; a positive finite number (fractional seconds supported) | 2 |
+| `starting_port` | First port to try when assigning app ports | Required |
 | `log_dir` | Directory for log files | Required |
 | `proxy_port` | Port for the proxy server | 3838 |
-| `proxy_host` | Host interface for proxy server (localhost, 127.0.0.1, 0.0.0.0, ::1, ::) | "127.0.0.1" |
-| `management_port` | Port for the management interface | 3839 |
-| `restart_delay` | Non-negative finite seconds to wait before restarting failed apps | 5 |
-| `health_check_interval` | Positive finite seconds between health checks | 10 |
+| `proxy_host` | Network interface for the proxy server (`localhost`, `127.0.0.1`, `0.0.0.0`, `::1`, or `::`) | `"127.0.0.1"` |
+| `management_port` | Port for the management dashboard and API | 3839 |
+| `restart_delay` | Seconds to wait before restarting a failed resident app; a non-negative finite number | 5 |
+| `health_check_interval` | Seconds between health checks; a positive finite number | 10 |
 | `max_request_size_mb` | Largest HTTP request body, in megabytes, that the proxy accepts; larger or chunked bodies get HTTP 413 | 100 |
-| `title` | Name shown in the browser tab and top bar of the landing and management pages; up to 100 characters | "Tiny Shiny Server" |
+| `title` | Name shown in the browser tab and top bar of the landing and management pages; up to 100 characters | `"Tiny Shiny Server"` |
 
 ## Network access and authentication
 
@@ -162,7 +168,7 @@ Once the app accepts a connection, a proxied HTTP request fails with HTTP 502 on
 
 The server is intended for development and internal use. It does not provide built-in authentication or TLS. For external access, put an authenticated HTTPS reverse proxy in front of it and restrict direct access with firewall rules.
 
-The proxy checks the `Host` header against DNS rebinding only when `proxy_host` is a loopback address. With `"0.0.0.0"` or `"::"`, any website visited by someone who can reach the proxy port can point its own domain at this server and then read and drive the apps from that person's browser, so a firewall that admits a whole network does not keep the apps private from the web. In that setup, allow direct connections to the proxy port only from the reverse proxy.
+The proxy checks the `Host` header to block DNS rebinding only when `proxy_host` is a loopback address. With `"0.0.0.0"` or `"::"`, any website visited by someone who can reach the proxy port can point its own domain at this server and then read and control the apps through that person's browser. A firewall that admits a whole network therefore does not keep the apps private from the web. In that setup, allow direct connections to the proxy port only from the reverse proxy.
 
 The `Host` checks protect only the proxy and management ports. Each app process listens on `127.0.0.1` at its own port (assigned in order from `starting_port`) and does not check the `Host` header, so a website visited in a browser on the server machine can still use DNS rebinding to reach a running app directly on that port. Do not browse untrusted websites on the server machine while apps that handle sensitive data are running.
 
@@ -190,22 +196,24 @@ manage.myapp.example.com {
 }
 ```
 
-When `proxy_host` is a loopback address, the proxy rejects requests whose `Host` header is not `localhost`, `127.0.0.1`, or `[::1]` (protecting the proxy port from DNS rebinding), so a reverse proxy in front of it must forward the upstream address as the host, as `header_up Host {upstream_hostport}` does above. The proxy also accepts app WebSocket connections only from pages served by the same host: a browser `Origin` must match the request's `Host` header or, from a reverse proxy on the same machine, its `X-Forwarded-Host` header, which Caddy sets by default. A reverse proxy on another machine (with `proxy_host` set to `"0.0.0.0"` or `"::"`) must instead preserve the public `Host` header (for nginx, `proxy_set_header Host $http_host;`, since `$host` drops a non-default port and WebSocket `Origin` checks would then fail), because `X-Forwarded-Host` is trusted only from the same machine.
+A reverse proxy must meet these requirements:
 
-Include the management site only if remote administration is needed. The management server rejects requests whose `Host` header is not `localhost`, `127.0.0.1`, or `[::1]` (protecting it from DNS rebinding), so its reverse proxy must forward the upstream address as the host, as `header_up Host {upstream_hostport}` does above. Keep cross-origin CORS access disabled on its reverse proxy; see [Management API](#management-api) for the required request header.
+- **On the same machine** (`proxy_host` is a loopback address): the proxy rejects requests whose `Host` header is not `localhost`, `127.0.0.1`, or `[::1]`, so the reverse proxy must forward the upstream address as the host, as `header_up Host {upstream_hostport}` does above. It must also set `X-Forwarded-Host` to the public host, which Caddy does by default, because app WebSocket connections are accepted only when the browser's `Origin` matches that host.
+- **On another machine** (`proxy_host` is `"0.0.0.0"` or `"::"`): the reverse proxy must preserve the public `Host` header, because `X-Forwarded-Host` is trusted only from the same machine. For nginx, use `proxy_set_header Host $http_host;`, not `$host`, which drops a non-default port and makes the WebSocket `Origin` check fail.
+- **Management site**: include it only if remote administration is needed. The management server always rejects requests whose `Host` header is not `localhost`, `127.0.0.1`, or `[::1]`, so its reverse proxy must also forward the upstream address as the host. Keep CORS disabled on its reverse proxy; see [Management API](#management-api) for the required request header.
 
 ## Monitoring and management
 
-Both web pages refresh status every 5 seconds. They follow your system's light or dark theme by default; the theme button in the top bar switches between them, and the browser remembers that choice until you switch back to match the system.
+The landing page and management dashboard refresh their status every 5 seconds. They follow your system's light or dark theme by default. The theme button in the top bar switches between light and dark, and the browser remembers that choice until you switch back to match the system.
 
 | Page | Default URL | Capabilities |
 |------|-------------|--------------|
 | Landing page | http://localhost:3838 | App links, status, connection counts, and R environment details |
 | Management dashboard | http://localhost:3839 | App modes, process IDs, ports, paths, connection details, restarts, and server shutdown |
 
-App status is **running**, **dormant** (an unused on-demand app), **stopped**, or **crashed**. Running and dormant apps can be opened from the landing page; opening a dormant app starts it. Stopped or crashed tiles are disabled, and all tiles are disabled when the server is unreachable.
+App status is **running**, **dormant** (an on-demand app that is not running), **stopped**, or **crashed**. Running and dormant apps can be opened from the landing page; opening a dormant app starts it. Tiles for stopped or crashed apps are disabled, and all tiles are disabled when the server is unreachable.
 
-The management dashboard shows active WebSocket connections, including client IP addresses, user agents, connection times, and last activity. Restart controls are available for running, stopped, and crashed apps. Dormant apps start on access. Restarting an app disconnects its users.
+The management dashboard lists active WebSocket connections with their client IP addresses, user agents, connection times, and last activity. Running, stopped, and crashed apps can be restarted; dormant apps start when accessed. Restarting an app disconnects its users.
 
 ### Proxy endpoints
 
@@ -218,17 +226,18 @@ These read-only endpoints are served on the proxy port:
 
 ### Management API
 
-These endpoints are served on the management port (default: 3839). POST requests require the `X-TinyShinyServer-Request: management` header to prevent cross-origin browser requests. The dashboard sends this header automatically. Cross-origin CORS access must remain disabled on any reverse proxy:
+These endpoints are served on the management port (default: 3839). POST requests require the `X-TinyShinyServer-Request: management` header, which blocks cross-origin browser requests. The dashboard sends this header automatically. CORS must remain disabled on any reverse proxy in front of the management server.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/status` | GET | System overview (apps, connections) |
 | `/api/apps` | GET | Detailed application status |
 | `/api/connections` | GET | Active connection details |
-| `/api/apps/{name}/restart` | POST | Restart specific application |
+| `/api/apps/{name}/restart` | POST | Restart the named application |
 | `/api/shutdown` | POST | Graceful server shutdown |
 
-**Example usage:**
+For example:
+
 ```bash
 # Get system status
 curl http://localhost:3839/api/status
@@ -236,7 +245,7 @@ curl http://localhost:3839/api/status
 # Restart the sales app
 curl -X POST -H "X-TinyShinyServer-Request: management" http://localhost:3839/api/apps/sales/restart
 
-# Shutdown server
+# Shut down the server
 curl -X POST -H "X-TinyShinyServer-Request: management" http://localhost:3839/api/shutdown
 ```
 
@@ -251,7 +260,7 @@ Point each app's `path` at a directory containing one of these entry points:
 | R Markdown | A `.Rmd` document | `runtime: shiny` and Pandoc |
 | Quarto | A `.qmd` document | `server: shiny` and the Quarto CLI |
 
-Detection prefers standard Shiny files, then R Markdown, then Quarto. For document apps, the first matching file returned by `list.files()` is used; keep one entry document per directory to make the choice explicit.
+Detection prefers standard Shiny files, then R Markdown, then Quarto. File extensions are case-sensitive. For document apps, the first matching file in alphabetical order is used; keep one entry document per directory to make the choice explicit.
 
 To add an app, create its directory, add an entry with `name` and `path` to the configuration, and restart the server.
 
@@ -269,14 +278,14 @@ Run one command at a time, with tinyshinyserver stopped or a different port sele
 
 ## Memory management
 
-The server includes automatic memory management features:
+The server limits its own memory use:
 
-- **Connection Cleanup**: Removes stale connections after 30 minutes of inactivity
-- **Queue Limits**: Limits pending message queues to 100 messages per connection
-- **Process Cleanup**: Removes dead process objects from memory
-- **Log Files**: App output is written directly to log files, and one previous run's logs are kept per app
+- **Connection cleanup**: Connections inactive for 30 minutes are closed and removed.
+- **Queue limits**: Messages waiting for an app's WebSocket to open are limited to 100 per connection; when the queue is full, the oldest messages are dropped.
+- **Process cleanup**: Objects for exited app processes are removed.
+- **Log files**: App output is written directly to log files instead of being held in memory. One previous run's logs are kept per app.
 
-Cleanup runs automatically every 5 minutes and logs activity for monitoring.
+Cleanup runs every 5 minutes and is recorded in the server log.
 
 ## Logging
 
@@ -284,17 +293,19 @@ Cleanup runs automatically every 5 minutes and logs activity for monitoring.
 
 With `"log_dir": "./logs"`, the server writes:
 
-- `logs/server.log` - Main server logs
-- `logs/{app_name}_output.log` - Per-app stdout logs
-- `logs/{app_name}_error.log` - Per-app stderr logs
+- `logs/server.log`: main server log
+- `logs/{app_name}_output.log`: each app's standard output
+- `logs/{app_name}_error.log`: each app's standard error
 
 When an app starts, its logs from the previous run are kept as `{app_name}_output.prev.log` and `{app_name}_error.prev.log`.
 
 ### Log levels
 
-- `INFO` - Normal operations
-- `WARN` - Warning conditions (e.g., queue limits reached)
-- `ERROR` - Error conditions requiring attention
+The server log records messages at these levels:
+
+- `INFO`: normal operations
+- `WARN`: warning conditions, such as a full message queue
+- `ERROR`: errors that need attention
 
 ## Architecture
 
@@ -302,7 +313,7 @@ The R process running `start_tss()` serves the proxy and management interfaces. 
 
 Periodic checks detect exited app processes and restart resident apps. These checks do not assess whether a running app is responsive or producing correct results.
 
-Source code lives in `R/`, generated help pages in `man/`, example apps in `inst/examples/`, and shared styles in `inst/templates/`.
+In the source repository, the code is in `R/`, generated help pages are in `man/`, example apps are in `inst/examples/`, and web page templates and styles are in `inst/templates/`.
 
 ## Troubleshooting
 
@@ -311,29 +322,29 @@ Source code lives in `R/`, generated help pages in `man/`, example apps in `inst
 <details>
 <summary><strong>Apps won't start</strong></summary>
 
-- Check that the app directory exists and contains valid Shiny code
-- Check the startup logs for port conflicts and assigned app ports
-- Check app-specific error logs in `logs/{app_name}_error.log`; after a crash and automatic restart, the crash output is in `logs/{app_name}_error.prev.log`
-- Use `?start_tss` for configuration help
+- Check that the app directory exists and contains a supported [entry point](#application-structure)
+- Check `server.log` for port conflicts and the assigned app ports
+- Check the app's error log, `logs/{app_name}_error.log`; after a crash and automatic restart, the crash output is in `logs/{app_name}_error.prev.log`
+- See `help("config-format")` for configuration help
 </details>
 
 <details>
 <summary><strong>WebSocket connection failures</strong></summary>
 
-- Ensure backend app is running and healthy
-- Check for firewall issues blocking WebSocket connections
-- If using a reverse proxy, confirm it forwards WebSocket upgrades
-- If using a reverse proxy on the same machine, confirm it forwards the upstream address as `Host` and sets `X-Forwarded-Host` to the public host; a reverse proxy on another machine must preserve the public `Host`. Other hosts and cross-origin WebSocket connections are rejected
-- Monitor logs for WebSocket connection messages
+- Check the app's status on the management dashboard
+- Check that no firewall is blocking WebSocket connections
+- If you use a reverse proxy, confirm that it forwards WebSocket upgrades
+- If you use a reverse proxy on the same machine, confirm that it forwards the upstream address as `Host` and sets `X-Forwarded-Host` to the public host; a reverse proxy on another machine must preserve the public `Host`. Requests for other hosts and cross-origin WebSocket connections are rejected
+- Check `server.log` for WebSocket connection messages
 </details>
 
 <details>
 <summary><strong>Management interface not accessible</strong></summary>
 
-- Verify server is running: check R console output
-- Access via http://localhost:3839 (not external IP); requests whose `Host` header is not `localhost`, `127.0.0.1`, or `[::1]` receive HTTP 403
-- Ensure no firewall is blocking localhost connections
-- Check logs for management server startup messages
+- Check the R console to confirm that the server is running
+- Open http://localhost:3839 on the server machine, not through its external IP address; requests whose `Host` header is not `localhost`, `127.0.0.1`, or `[::1]` receive HTTP 403
+- Check that no firewall is blocking localhost connections
+- Check `server.log` for management server startup messages
 </details>
 
 ### Inspecting logs
