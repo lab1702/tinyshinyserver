@@ -338,16 +338,13 @@ forward_request <- function(method, target_url, req, app_name, config) {
       }
       promises::then(fetch_backend_async(target_url, handle), function(response) {
         response_headers <- proxy_response_headers(response$headers, target_url, app_name, method)
-        content_type <- response_headers[["content-type"]] %||% "text/html"
-        content <- response$content
-        is_binary <- grepl("image/|font/|application/octet-stream|application/pdf",
-          content_type, ignore.case = TRUE
-        ) || any(content == 0) || !is.null(response_headers[["content-encoding"]])
-        if (is.null(response_headers[["content-type"]])) response_headers[["content-type"]] <- content_type
+        if (is.null(response_headers[["content-type"]])) response_headers[["content-type"]] <- "text/html"
+        # httpuv sends raw bodies unchanged. Scanning or converting the bytes
+        # would briefly multiply a large download's memory use.
         list(
           status = response$status_code,
           headers = response_headers,
-          body = if (is_binary) content else rawToChar(content)
+          body = response$content
         )
       })
     })

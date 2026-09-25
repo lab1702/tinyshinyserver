@@ -50,6 +50,8 @@
 
 * Proxied HTTP requests are no longer cut off after 30 seconds. Once the app accepts the connection, a request fails only if the app sends no data for 10 minutes, so slow downloads and documents rendered on request complete.
 
+* Proxied responses are passed to the browser as the app's bytes. The proxy previously scanned responses with other content types, such as CSV, JSON, and ZIP downloads, for zero bytes and converted text to a string, briefly using about 11 times the response size in memory; text responses over 2 GB failed.
+
 * Proxied HTTP requests now close their connection to the app when they finish. The connections previously stayed open until R ran garbage collection, so bursts of requests left many idle sockets open in both the server and the app.
 
 * Configuration validation now rejects an empty `log_dir`, which put the logs in the filesystem root, an app `resident` value of `null`, which stopped the server at startup, and app names that differ only in letter case, which shared log files on Windows and macOS.

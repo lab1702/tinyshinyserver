@@ -76,18 +76,18 @@ test_that("proxy cookies belong only to the current browser request", {
     await_response(forward_request(method, paste0(backend$url, path), list(HTTP_COOKIE = cookie), "app", config))
   }
   expect_equal(request("/set")$status, 200)
-  expect_equal(request("/echo")$body, "NONE")
-  expect_equal(request("/echo", "session=bob")$body, "session=bob")
-  expect_equal(request("/echo", "session=carol", "POST")$body, "session=carol")
-  expect_equal(request("/echo", method = "POST")$body, "NONE")
+  expect_equal(rawToChar(request("/echo")$body), "NONE")
+  expect_equal(rawToChar(request("/echo", "session=bob")$body), "session=bob")
+  expect_equal(rawToChar(request("/echo", "session=carol", "POST")$body), "session=carol")
+  expect_equal(rawToChar(request("/echo", method = "POST")$body), "NONE")
   responses <- await_response(promises::promise_all(
     alice = forward_request("GET", paste0(backend$url, "/echo"), list(HTTP_COOKIE = "session=alice"), "app", config),
     bob = forward_request("GET", paste0(backend$url, "/echo"), list(HTTP_COOKIE = "session=bob"), "app", config),
     guest = forward_request("GET", paste0(backend$url, "/echo"), list(), "app", config)
   ))
-  expect_equal(responses$alice$body, "session=alice")
-  expect_equal(responses$bob$body, "session=bob")
-  expect_equal(responses$guest$body, "NONE")
+  expect_equal(rawToChar(responses$alice$body), "session=alice")
+  expect_equal(rawToChar(responses$bob$body), "session=bob")
+  expect_equal(rawToChar(responses$guest$body), "NONE")
 })
 
 test_that("async proxy preserves methods, binary uploads, content types and HEAD", {
@@ -191,9 +191,23 @@ test_that("startup polling yields and sends a queued POST only once", {
   response <- await_response(result)
   expect_true(unrelated_ran)
   expect_equal(response$status, 200)
-  expect_equal(response$body, "started")
+  expect_equal(rawToChar(response$body), "started")
   expect_equal(posts, 1)
   expect_null(config$get_app_startup_state("app"))
+})
+
+test_that("proxied text responses pass through as the app's bytes", {
+  csv <- enc2utf8("name,city
+José,Zürich
+")
+  backend <- start_test_http_server(function(req) {
+    list(status = 200L, headers = list("Content-Type" = "text/csv; charset=utf-8"), body = charToRaw(csv))
+  })
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  response <- await_response(forward_request("GET", backend$url, list(), "app", proxy_test_config(backend$port)))
+  expect_equal(response$status, 200)
+  expect_identical(response$body, charToRaw(csv))
+  expect_identical(response$headers[["content-type"]], "text/csv; charset=utf-8")
 })
 
 test_that("proxied requests close their backend connections when they finish", {
@@ -307,7 +321,7 @@ test_that("query-string colons do not change the backend readiness port", {
   config <- proxy_test_config(backend$port)
   result <- await_response(handle_proxy_request("/proxy/app/", "GET", "time=12:34", list(), config))
   expect_equal(result$status, 200)
-  expect_equal(result$body, "?time=12:34")
+  expect_equal(rawToChar(result$body), "?time=12:34")
 })
 
 test_that("a real backend WebSocket close reaches the browser", {
