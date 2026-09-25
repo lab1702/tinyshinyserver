@@ -94,6 +94,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       config$restart_delay <<- config$restart_delay %||% 5
       config$health_check_interval <<- config$health_check_interval %||% 10
       config$starting_port <<- config$starting_port %||% 3001
+      config$title <<- trimws(config$title %||% DEFAULT_SERVER_TITLE)
 
       # Set default values for optional app fields
       for (i in seq_along(config$apps)) {
@@ -226,6 +227,15 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         allowed_hosts <- c("localhost", "127.0.0.1", "0.0.0.0", "::1", "::")
         if (!config$proxy_host %in% allowed_hosts) {
           return(list(valid = FALSE, error = paste("proxy_host must be one of:", paste(allowed_hosts, collapse = ", "))))
+        }
+      }
+
+      # The title is shown on the landing and management pages
+      if ("title" %in% names(config)) {
+        title <- config$title
+        if (!is.character(title) || length(title) != 1 || is.na(title) ||
+          !nzchar(trimws(title)) || nchar(trimws(title)) > 100) {
+          return(list(valid = FALSE, error = "title must be a non-empty string of at most 100 characters"))
         }
       }
 

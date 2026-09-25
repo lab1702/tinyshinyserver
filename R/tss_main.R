@@ -30,7 +30,7 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
 
       # Initialize other components
       process_manager <<- create_process_manager(config)
-      template_manager <<- create_template_manager()
+      template_manager <<- create_template_manager(title = config$config$title)
       connection_manager <<- create_connection_manager(config, process_manager)
       proxy_server <<- NULL
       management_server <<- NULL

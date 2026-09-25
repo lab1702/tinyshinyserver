@@ -146,6 +146,7 @@ Once the app accepts a connection, a proxied HTTP request fails with HTTP 502 on
 | `management_port` | Port for the management interface | 3839 |
 | `restart_delay` | Non-negative finite seconds to wait before restarting failed apps | 5 |
 | `health_check_interval` | Positive finite seconds between health checks | 10 |
+| `title` | Name shown in the browser tab and top bar of the landing and management pages; up to 100 characters | "Tiny Shiny Server" |
 
 ## Network access and authentication
 

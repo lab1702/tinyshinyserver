@@ -487,3 +487,27 @@ test_that("factory works with package templates", {
   # This may be empty in test environment, which is fine
   expect_true(is.character(templates))
 })
+
+test_that("landing and management pages show the configured title escaped", {
+  templates <- system.file("templates", package = "tinyshinyserver")
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app1", path = "/path")))
+
+  default_tm <- TemplateManager$new(templates)
+  expect_match(default_tm$generate_landing_page(config), "<title>Tiny Shiny Server</title>", fixed = TRUE)
+  # Configs built in code may have no title
+  untitled_tm <- create_template_manager(templates, title = NULL)
+  expect_match(untitled_tm$generate_management_page(), "<title>Management - Tiny Shiny Server</title>", fixed = TRUE)
+
+  tm <- TemplateManager$new(templates, title = "R&D <Apps> {{app_cards}}")
+  expected <- "R&amp;D &lt;Apps&gt; &#123;&#123;app_cards}}"
+  landing <- tm$generate_landing_page(config)
+  expect_match(landing, paste0("<title>", expected, "</title>"), fixed = TRUE)
+  expect_match(landing, paste0('<span class="brand-name">', expected, "</span>"), fixed = TRUE)
+  expect_no_match(landing, "Tiny Shiny Server", fixed = TRUE)
+
+  management <- tm$generate_management_page()
+  expect_match(management, paste0("<title>Management - ", expected, "</title>"), fixed = TRUE)
+  expect_match(management, paste0('<span class="brand-name">', expected, "</span>"), fixed = TRUE)
+  expect_no_match(management, "{{title}}", fixed = TRUE)
+})

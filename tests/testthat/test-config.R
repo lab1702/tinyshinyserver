@@ -718,6 +718,7 @@ test_that("load_config sets default values for optional fields", {
       expect_equal(loaded$management_port, 3839)
       expect_equal(loaded$restart_delay, 5)
       expect_equal(loaded$health_check_interval, 10)
+      expect_equal(loaded$title, "Tiny Shiny Server")
     }
   )
 })
@@ -1035,4 +1036,31 @@ test_that("long appstart_timeout extends startup state lifetime", {
   assign("app", list(state = "starting", started_at = Sys.time() - 65),
     envir = config$app_startup_state)
   expect_equal(config$get_app_startup_state("app")$state, "timeout")
+})
+
+test_that("title must be a non-empty string of at most 100 characters", {
+  config <- ShinyServerConfig$new()
+  base_config <- list(apps = list(list(name = "app1", path = "/path")),
+    log_dir = "/var/log", starting_port = 3001)
+
+  expect_true(config$validate_config(c(base_config, list(title = "Acme Analytics")))$valid)
+  expect_true(config$validate_config(c(base_config, list(title = strrep("x", 100))))$valid)
+  for (bad in list(123, TRUE, "", "   ", c("a", "b"), NA_character_, strrep("x", 101))) {
+    result <- config$validate_config(c(base_config, list(title = bad)))
+    expect_false(result$valid)
+    expect_match(result$error, "title must be a non-empty string")
+  }
+})
+
+test_that("load_config trims the configured title", {
+  config <- ShinyServerConfig$new()
+  tmp_config <- tempfile(fileext = ".json")
+  on.exit(unlink(tmp_config), add = TRUE)
+  writeLines(jsonlite::toJSON(list(apps = list(list(name = "app1", path = "/tmp/app1")),
+    log_dir = "/tmp/logs", starting_port = 5001, title = "  Acme Analytics  "),
+  auto_unbox = TRUE), tmp_config)
+
+  with_mocked_bindings(is_port_in_use = function(host, port) FALSE, {
+    expect_equal(config$load_config(tmp_config)$title, "Acme Analytics")
+  })
 })

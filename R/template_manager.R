@@ -1,16 +1,25 @@
 # Template Manager Module
 # Handles HTML template loading and rendering
 
+DEFAULT_SERVER_TITLE <- "Tiny Shiny Server"
+
 # Template Manager Class
 TemplateManager <- setRefClass("TemplateManager",
   fields = list(
     template_dir = "character",
-    base_url = "character"
+    base_url = "character",
+    server_title = "character"
   ),
   methods = list(
-    initialize = function(template_directory = "templates", base_url_path = "") {
+    initialize = function(template_directory = "templates", base_url_path = "",
+                          title = DEFAULT_SERVER_TITLE) {
       template_dir <<- template_directory
       base_url <<- base_url_path
+      server_title <<- title %||% DEFAULT_SERVER_TITLE
+    },
+    title_html = function() {
+      "The server title, escaped for HTML and immune to later template substitution"
+      gsub("{", "&#123;", html_escape(server_title), fixed = TRUE)
     },
     load_template = function(template_name) {
       "Load a template file and return its content"
@@ -63,13 +72,14 @@ TemplateManager <- setRefClass("TemplateManager",
       # Render template
       return(render_template("landing_page", list(
         session_info = session_info_text,
-        app_cards = app_cards
+        app_cards = app_cards,
+        title = title_html()
       )))
     },
     generate_management_page = function() {
       "Generate the management page HTML"
 
-      return(render_template("management_page", list()))
+      return(render_template("management_page", list(title = title_html())))
     },
     generate_app_cards = function(apps) {
       "Generate HTML for app cards"
@@ -277,7 +287,8 @@ TemplateManager <- setRefClass("TemplateManager",
 )
 
 # Create template manager factory function
-create_template_manager <- function(template_directory = NULL, base_url = "") {
+create_template_manager <- function(template_directory = NULL, base_url = "",
+                                    title = DEFAULT_SERVER_TITLE) {
   # If no template_directory specified, use package resources
   if (is.null(template_directory)) {
     template_directory <- system.file("templates", package = "tinyshinyserver")
@@ -286,5 +297,5 @@ create_template_manager <- function(template_directory = NULL, base_url = "") {
       template_directory <- "templates"
     }
   }
-  return(TemplateManager$new(template_directory, base_url))
+  return(TemplateManager$new(template_directory, base_url, title))
 }

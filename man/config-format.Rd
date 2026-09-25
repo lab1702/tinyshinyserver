@@ -53,6 +53,7 @@ not allow comments.
   \item{\code{management_port}}{Port for the management interface (default: 3839).}
   \item{\code{restart_delay}}{Non-negative finite seconds to wait before restarting failed apps (default: 5).}
   \item{\code{health_check_interval}}{Positive finite seconds between health checks (default: 10).}
+  \item{\code{title}}{Name shown in the browser tab and top bar of the landing and management pages; a non-empty string of up to 100 characters (default: "Tiny Shiny Server").}
 }
 }
 
