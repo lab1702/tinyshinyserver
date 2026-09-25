@@ -23,7 +23,7 @@ Imports:
     promises,
     digest,
     httpuv,
-    websocket,
+    websocket (>= 1.1.0),
     logger,
     openssl,
     rmarkdown,

@@ -149,6 +149,27 @@ test_that("partial startup failure stops servers, apps and future monitoring", {
   })
 })
 
+test_that("started servers limit request bodies from their headers", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  writeLines(jsonlite::toJSON(list(apps = list(list(name = "app", path = "/tmp")),
+    log_dir = tempdir(), starting_port = 3001, max_request_size_mb = 2), auto_unbox = TRUE), path)
+  local_mocked_bindings(is_port_in_use = function(...) FALSE, setup_logging = function(...) NULL,
+    create_process_manager = function(config) list())
+  server <- TinyShinyServer$new(path)
+  apps <- list()
+  local_mocked_bindings(startServer = function(host, port, app, ...) {
+    apps[[as.character(port)]] <<- app
+    list(port = port)
+  }, .package = "httpuv")
+  server$start_servers()
+  status <- function(app, size) app$onHeaders(list(CONTENT_LENGTH = format(size, scientific = FALSE)))$status
+  expect_null(status(apps[["3838"]], 2 * 1024^2))
+  expect_equal(status(apps[["3838"]], 2 * 1024^2 + 1), 413)
+  expect_null(status(apps[["3839"]], 65536))
+  expect_equal(status(apps[["3839"]], 65537), 413)
+})
+
 test_that("response headers preserve duplicates and remove transfer framing", {
   headers <- charToRaw(paste0("HTTP/1.1 200 OK\r\n",
     "Content-Disposition: attachment; filename=report.csv\r\n",

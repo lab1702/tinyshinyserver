@@ -56,7 +56,7 @@ Local: 0 errors | 0 warnings | 0 notes.
 
 R-hub: 0 errors | 0 warnings | 0 notes on all five platforms.
 
-Test results: 1537 passes locally, and 1479 or 1480 on R-hub at commit
+Test results: 1541 passes locally, and 1479 or 1480 on R-hub at commit
 6033be6 (before later tests were added), with 0 failures,
 0 warnings, and 2 intentional skips on CRAN (the invalid-device-path write test
 and a test that launches a real Shiny app). One test's expectation count
