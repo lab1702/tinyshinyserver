@@ -68,6 +68,8 @@
 
 * If `server.log` can no longer be written while the server runs, messages still go to the console. Previously the write error stopped health checks and interrupted shutdown, leaving the proxy, management server, and apps running. If `log_dir` is removed, starting an app creates it again, so apps can still start and `server.log` resumes. A `log_dir` where `server.log` cannot be written at startup is reported as such.
 
+* A resident app whose process cannot be started, for example because its log files cannot be opened, is now reported and retried by health checks. It previously stopped the server at startup, and during a reload kept the remaining resident apps from starting and reported the reload as failed.
+
 * A shutdown through the management API now stops only that server. It previously wrote `shutdown.flag` to `log_dir`, which also stopped any other server sharing that directory, and left the file behind.
 
 * App processes are now supervised, so they stop instead of holding their ports if the R session running the server is killed or crashes.

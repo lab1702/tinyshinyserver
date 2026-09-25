@@ -78,7 +78,14 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
             logger::log_info("Resident app already running: {app_name}", app_name = app_config$name)
             next
           }
-          success <- process_manager$start_app(app_config)
+          # An app that cannot start, for example because its log files cannot
+          # be opened, must not keep the remaining apps from starting; health
+          # checks retry it
+          success <- tryCatch(process_manager$start_app(app_config), error = function(e) {
+            logger::log_error("Error starting app {app_name}: {error}",
+              app_name = app_config$name, error = conditionMessage(e))
+            FALSE
+          })
           if (!success) {
             logger::log_error("Failed to start resident app: {app_name}", app_name = app_config$name)
           }

@@ -211,6 +211,27 @@ test_that("reload finishes when the new log_dir stops being writable after its c
   expect_true(test$server$config$last_reload$success)
 })
 
+test_that("an app that fails to start does not stop the other resident apps or the reload", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  write_reload_config(path, list(list(name = "old", path = "/tmp", resident = TRUE)))
+  test <- reload_test_server(path)
+  start_app <- test$server$process_manager$start_app
+  test$server$field("process_manager", utils::modifyList(test$server$process_manager, list(
+    start_app = function(app) if (app$name == "broken") stop("cannot start processx process") else start_app(app)
+  )))
+
+  write_reload_config(path, list(
+    list(name = "broken", path = "/tmp", resident = TRUE),
+    list(name = "working", path = "/tmp", resident = TRUE)
+  ), title = "Reloaded")
+  result <- test$server$reload()
+
+  expect_true(result$valid)
+  expect_equal(test$calls$started, "working")
+  expect_equal(test$server$template_manager$server_title, "Reloaded")
+})
+
 test_that("reload leaves apps running when the file is rejected", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
