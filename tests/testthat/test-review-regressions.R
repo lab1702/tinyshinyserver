@@ -777,6 +777,26 @@ test_that("setup_logging leaves the caller's logger configuration alone", {
   expect_true(any(grepl("Logging system initialized", readLines(file.path(log_dir, "server.log")))))
 })
 
+test_that("an unwritable server log does not stop logging or shutdown", {
+  log_dir <- tempfile("tss-logging")
+  on.exit({
+    logger::log_appender(logger::appender_console, namespace = "tinyshinyserver")
+    unlink(log_dir, recursive = TRUE)
+  }, add = TRUE)
+  setup_logging(log_dir, "INFO")
+  unlink(log_dir, recursive = TRUE)
+  expect_no_error(logger::log_info("After the log directory is removed", namespace = "tinyshinyserver"))
+
+  config <- ShinyServerConfig$new()
+  config$config <- list(log_dir = log_dir)
+  local_mocked_bindings(create_server_config = function(...) config, setup_logging = function(...) NULL)
+  server <- TinyShinyServer$new()
+  stopped <- FALSE
+  server$field("process_manager", list(stop_all_apps = function() stopped <<- TRUE))
+  expect_no_error(server$shutdown())
+  expect_true(stopped)
+})
+
 test_that("port assignments reach the server log", {
   path <- tempfile(fileext = ".json")
   log_dir <- tempfile("tss-logs")

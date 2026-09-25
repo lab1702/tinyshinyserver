@@ -66,6 +66,8 @@
 
 * Port assignments are now written to `server.log`, not only to the console.
 
+* If `server.log` can no longer be written while the server runs, for example because `log_dir` was removed, messages still go to the console. Previously the write error stopped health checks and interrupted shutdown, leaving the proxy, management server, and apps running.
+
 * A shutdown through the management API now stops only that server. It previously wrote `shutdown.flag` to `log_dir`, which also stopped any other server sharing that directory, and left the file behind.
 
 * App processes are now supervised, so they stop instead of holding their ports if the R session running the server is killed or crashes.

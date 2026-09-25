@@ -77,10 +77,21 @@ setup_logging <- function(log_dir, log_level = "INFO") {
   log_file <- file.path(log_dir, "server.log")
 
   # Use tee appender to log to both console and file
-  logger::log_appender(logger::appender_tee(log_file), namespace = "tinyshinyserver")
+  logger::log_appender(safe_tee_appender(log_file), namespace = "tinyshinyserver")
 
   # Log initialization message
   logger::log_info("Logging system initialized with file output to {log_file}", log_file = log_file)
+}
+
+# appender_tee writes the console line first. A log file that can no longer
+# be written, for example after log_dir is removed, must not raise an error:
+# every error handler and shutdown() log, so the servers and apps would be
+# left running.
+safe_tee_appender <- function(log_file) {
+  tee <- logger::appender_tee(log_file)
+  function(lines) {
+    tryCatch(suppressWarnings(tee(lines)), error = function(e) invisible(NULL))
+  }
 }
 
 check_log_dir <- function(log_dir) {
