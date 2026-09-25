@@ -208,8 +208,8 @@ The landing page and management dashboard refresh their status every 5 seconds. 
 
 | Page | Default URL | Capabilities |
 |------|-------------|--------------|
-| Landing page | http://localhost:3838 | App links, status, connection counts, and R environment details |
-| Management dashboard | http://localhost:3839 | App modes, process IDs, ports, paths, connection details, restarts, configuration reloads, and server shutdown |
+| Landing page | http://localhost:3838 | App links, status, and connection counts |
+| Management dashboard | http://localhost:3839 | App modes, process IDs, ports, paths, connection details, R version and operating system, restarts, configuration reloads, and server shutdown |
 
 App status is **running**, **dormant** (an on-demand app that is not running), **stopped**, or **crashed**. Running and dormant apps can be opened from the landing page; opening a dormant app starts it. Tiles for stopped or crashed apps are disabled, and all tiles are disabled when the server is unreachable.
 
