@@ -78,7 +78,7 @@
 
 * The package now requires R 4.1.0 or later, as its `promises` and `quarto` dependencies already do.
 
-* Removed the unused `future` dependency. `tools` and `utils` are now declared imports. Added `ps`, already required by `callr`, to identify the process listening on an app's port.
+* Removed the unused `future` dependency. `tools` and `utils` are now declared imports, as is `glue`, which `logger` needs to format the package's log messages. Added `ps`, already required by `callr`, to identify the process listening on an app's port.
 
 # tinyshinyserver 0.2.1
 

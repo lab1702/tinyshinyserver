@@ -22,6 +22,7 @@ Imports:
     curl,
     promises,
     digest,
+    glue,
     httpuv,
     websocket (>= 1.1.0),
     logger,

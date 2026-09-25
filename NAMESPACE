@@ -2,6 +2,7 @@
 
 export(start_tss)
 importFrom(callr,r_bg)
+importFrom(glue,glue)
 importFrom(httpuv,
   service,
   startServer,
