@@ -78,7 +78,7 @@ R-hub at commit 2d78c23: 0 errors | 0 warnings | 0 notes on all five platforms.
 Later commits, including the configuration reload and `base_path` features,
 have been checked only locally.
 
-Test results: 1747 passes locally, with 3 intentional skips on CRAN (the
+Test results: 1751 passes locally, with 3 intentional skips on CRAN (the
 invalid-device-path write test and two tests that start real R
 processes). Each R-hub platform at commit 2d78c23, before the configuration
 reload tests were added, had 1541 passes and 2 of those skips. All runs had

@@ -193,6 +193,24 @@ test_that("reload stops everything, applies the file, and starts resident apps",
   expect_equal(server$template_manager$base_url, "/apps")
 })
 
+test_that("reload finishes when the new log_dir stops being writable after its check", {
+  path <- tempfile(fileext = ".json")
+  new_logs <- tempfile("tss-new-logs")
+  on.exit(unlink(c(path, new_logs), recursive = TRUE), add = TRUE)
+  write_reload_config(path, list(list(name = "old", path = "/tmp", resident = TRUE)))
+  test <- reload_test_server(path)
+  local_mocked_bindings(setup_logging = function(...) stop("Cannot write the server log"))
+
+  write_reload_config(path, list(list(name = "resident", path = "/tmp", resident = TRUE)),
+    title = "Reloaded", log_dir = new_logs)
+  result <- test$server$reload()
+
+  expect_true(result$valid)
+  expect_equal(test$calls$started, "resident")
+  expect_equal(test$server$template_manager$server_title, "Reloaded")
+  expect_true(test$server$config$last_reload$success)
+})
+
 test_that("reload leaves apps running when the file is rejected", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)

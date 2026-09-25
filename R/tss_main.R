@@ -282,7 +282,12 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       )
 
       if (!identical(config$config$log_dir, old_config$log_dir)) {
-        setup_logging(config$config$log_dir)
+        # The new log_dir was checked before any app stopped. If it has
+        # become unwritable since, keep the previous server log rather than
+        # leave the reload half applied.
+        tryCatch(setup_logging(config$config$log_dir), error = function(e) {
+          logger::log_warn("Keeping the previous server log: {error}", error = conditionMessage(e))
+        })
       }
       template_manager$field("server_title", config$config$title)
       template_manager$field("base_url", config$config$base_path %||% "")
