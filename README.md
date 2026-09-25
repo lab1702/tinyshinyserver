@@ -173,6 +173,10 @@ The proxy checks the `Host` header to block DNS rebinding only when `proxy_host`
 
 The `Host` checks protect only the proxy and management ports. Each app process listens on `127.0.0.1` at its own port (assigned in order from `starting_port`) and does not check the `Host` header, so a website visited in a browser on the server machine can still use DNS rebinding to reach a running app directly on that port. Do not browse untrusted websites on the server machine while apps that handle sensitive data are running.
 
+The management server has no authentication of its own. Anyone who can connect to its port on `127.0.0.1`, including every other user account on the server machine, can see client IP addresses and user agents, restart apps, reload the configuration, and shut down the server. Run the server only on a machine whose local accounts may be given that control.
+
+All apps are served from the same origin, so they are not isolated from each other. A script in one app's page can send requests to another app with that app's cookies, read its pages, and open its WebSocket sessions. Serve together only apps that trust each other; run apps that do not in separate servers under different host names.
+
 ### Caddy example
 
 Keep `proxy_host` set to `"127.0.0.1"` when running Caddy on the same machine. Replace the domains, usernames, and hash placeholders below. Generate each password hash with `caddy hash-password`; Caddy's [`basic_auth` directive](https://caddyserver.com/docs/caddyfile/directives/basic_auth) requires hashed passwords.
