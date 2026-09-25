@@ -224,7 +224,10 @@ handle_app_restart <- function(path, process_manager) {
     {
       # Check app status first - don't restart dormant apps
       app_status <- process_manager$get_app_status(app_name)
-      if (!is.null(app_status) && app_status$status == "dormant") {
+      if (is.null(app_status)) {
+        return(create_json_response(list(success = FALSE, message = "App not found"), status = 404))
+      }
+      if (app_status$status == "dormant") {
         return(create_json_response(list(
           success = FALSE,
           message = "Cannot restart dormant app. Dormant apps start automatically when accessed."

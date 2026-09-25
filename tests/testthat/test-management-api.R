@@ -376,8 +376,21 @@ test_that("handle_app_restart handles short path gracefully", {
   result <- handle_app_restart("/api/apps/restart", pm)
 
   # The function will try to extract app name from path_parts[3] which is "restart"
-  # Then it validates and attempts restart - returns 500 since "restart" isn't a real app
-  expect_true(result$status %in% c(400, 500))
+  # Then it validates it and returns 404 since "restart" isn't a configured app
+  expect_equal(result$status, 404)
+})
+
+test_that("handle_app_restart returns 404 for an unknown app", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app1", path = "/path", port = 3001, resident = TRUE)))
+  pm <- ProcessManager$new(config)
+
+  result <- handle_app_restart("/api/apps/typo/restart", pm)
+
+  expect_equal(result$status, 404)
+  body <- jsonlite::fromJSON(result$body)
+  expect_false(body$success)
+  expect_match(body$message, "not found")
 })
 
 test_that("handle_app_restart does not restart dormant apps", {
