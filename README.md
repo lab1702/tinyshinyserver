@@ -141,7 +141,7 @@ The proxy applies these limits:
 | Option | Description | Default |
 |--------|-------------|---------|
 | `apps` | Array of apps to host | Required |
-| `apps[].name` | Unique URL identifier: 1–50 ASCII letters, digits, underscores, or hyphens | Required |
+| `apps[].name` | Unique URL identifier: 1–50 ASCII letters, digits, underscores, or hyphens; names must differ by more than letter case | Required |
 | `apps[].path` | App directory; relative to the R working directory, or absolute | Required |
 | `apps[].resident` | Keep the app running continuously (`true`) or start it on demand (`false`) | `false` |
 | `apps[].appstart_timeout` | Seconds, measured from app startup, that a request waits for the app to become ready before HTTP 503; a positive finite number (fractional seconds supported) | 2 |

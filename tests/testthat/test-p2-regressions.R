@@ -5,6 +5,11 @@ test_that("duplicate names fail configuration validation before any app starts",
   result <- config$validate_config(data)
   expect_false(result$valid)
   expect_match(result$error, "Duplicate app name: app", fixed = TRUE)
+  # Names differing only in case would share log files on Windows and macOS
+  data$apps[[2]]$name <- "App"
+  result <- config$validate_config(data)
+  expect_false(result$valid)
+  expect_match(result$error, "Duplicate app name: App", fixed = TRUE)
   data$apps[[2]]$name <- "other"
   expect_true(config$validate_config(data)$valid)
 })

@@ -50,7 +50,7 @@
 
 * Proxied HTTP requests now close their connection to the app when they finish. The connections previously stayed open until R ran garbage collection, so bursts of requests left many idle sockets open in both the server and the app.
 
-* Configuration validation now rejects an empty `log_dir`, which put the logs in the filesystem root, and an app `resident` value of `null`, which stopped the server at startup.
+* Configuration validation now rejects an empty `log_dir`, which put the logs in the filesystem root, an app `resident` value of `null`, which stopped the server at startup, and app names that differ only in letter case, which shared log files on Windows and macOS.
 
 * Query strings may now be up to 8,192 characters (previously 2,048), so Shiny URL bookmarks with many inputs load.
 

@@ -273,8 +273,12 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
           return(list(valid = FALSE, error = paste("App", i, "name too long")))
         }
 
-        if (app$name %in% app_names) {
-          return(list(valid = FALSE, error = paste("Duplicate app name:", app$name)))
+        # Names that differ only in case would share log files on
+        # case-insensitive file systems (Windows, macOS)
+        if (tolower(app$name) %in% tolower(app_names)) {
+          return(list(valid = FALSE, error = paste(
+            "Duplicate app name:", app$name, "(names must differ by more than letter case)"
+          )))
         }
         app_names <- c(app_names, app$name)
 

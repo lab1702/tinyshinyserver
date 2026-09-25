@@ -63,7 +63,7 @@ not allow comments.
 
 Each application in the \code{apps} array can have:
 \describe{
-  \item{\code{name}}{Unique identifier used in URLs and log file names: 1--50 ASCII letters, digits, underscores, or hyphens. Required.}
+  \item{\code{name}}{Unique identifier used in URLs and log file names: 1--50 ASCII letters, digits, underscores, or hyphens. Names must differ by more than letter case. Required.}
   \item{\code{path}}{Path to the app directory, either absolute or relative to the R working directory. Required.}
   \item{\code{resident}}{Boolean. If \code{true}, the app starts with the server and is restarted if its process fails. If \code{false} (the default), the app starts on demand and stops 30 seconds after its last WebSocket connection closes.}
   \item{\code{appstart_timeout}}{Seconds, measured from app startup, that a request waits for the app to become ready before the proxy returns HTTP 503; a positive finite number (default: 2). Fractional seconds are supported.}
