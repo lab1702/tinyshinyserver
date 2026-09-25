@@ -29,15 +29,22 @@ documented in NEWS.md and README.md.
 * The proxy forwards requests and WebSocket sessions only when the app's own
   process is listening on the app's port, so another program holding that
   port never receives users' cookies or credentials.
+* WebSocket messages larger than 32 MB from an app to the browser no longer
+  close the browser session.
 * Proxied HTTP requests are no longer cut off after 30 seconds, and query
   strings may be up to 8,192 characters.
+* The landing page and management dashboard have a new design that follows
+  the system light or dark theme and has a theme toggle. A new `title`
+  option sets the name shown on both pages.
 * `start_tss()` configures logging only in the package's own logger
   namespace, leaving the caller's logger settings unchanged. Port assignments
   are written to `server.log`.
 * The package now requires R >= 4.1.0, as its `promises` and `quarto`
   dependencies already do.
 * Removed the unused `future` dependency; `tools` and `utils` are now declared
-  imports. Added `ps`, which `callr` already requires.
+  imports. Added `ps`, which `callr` already requires. The package now
+  requires `websocket` >= 1.1.0, the first version whose client accepts a
+  `maxMessageSize` argument.
 
 ## Test environments
 
