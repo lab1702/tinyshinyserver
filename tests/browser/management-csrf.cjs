@@ -36,17 +36,25 @@ const { chromium } = require('playwright');
         try { await fetch(url, {method: 'POST', headers: {'X-TinyShinyServer-Request': 'management'}}); return true; }
         catch { return false; }
       }, url), false);
-      // Sandboxed form submission supplies an opaque (null) origin.
-      const formResponse = page.waitForResponse(r => r.url() === url && r.request().method() === 'POST');
+      // Sandboxed form submission supplies an opaque (null) origin. Its request runs in
+      // another renderer process, which Playwright can attach to too late to report,
+      // so wait for the server's own record of it.
+      const posts = async () => (await state()).posts.filter(post => post.startsWith(route + ' '));
+      const before = (await posts()).length;
       await page.evaluate(url => {
         const frame = document.createElement('iframe');
         frame.sandbox = 'allow-forms allow-scripts';
         frame.srcdoc = '<form method="POST" action="' + url + '"></form><script>document.forms[0].submit()</script>';
         document.body.appendChild(frame);
       }, url);
-      assert.equal((await formResponse).status(), 403);
+      const formDeadline = Date.now() + 10000;
+      while ((await posts()).length === before && Date.now() < formDeadline) {
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      assert.equal((await posts())[before], route + ' 403');
     }
-    assert.deepEqual(await state(), {restarts: 0, reload: false, shutdown: false});
+    const {restarts, reload, shutdown} = await state();
+    assert.deepEqual({restarts, reload, shutdown}, {restarts: 0, reload: false, shutdown: false});
     // Real management UI buttons, including their automatic request headers.
     page.on('dialog', dialog => dialog.accept());
     await page.goto(urls.management);

@@ -20,11 +20,17 @@ main <- function() {
       path = "/test/app", port = 3001, connections = 0)),
     restart_app = function(name) { restarts <<- restarts + 1; list(success = TRUE, message = "Restart scheduled") })
   tm <- create_template_manager()
-  management <- serve(function(req) handle_management_request(req, config, pm, tm))
+  # Record POSTs as the server answered them; browser events can miss subframe requests
+  posts <- character()
+  management <- serve(function(req) {
+    response <- handle_management_request(req, config, pm, tm)
+    if (req$REQUEST_METHOD == "POST") posts <<- c(posts, paste(req$PATH_INFO, response$status))
+    response
+  })
   on.exit(httpuv::stopServer(management$server), add = TRUE)
   foreign <- serve(function(req) {
     if (req$PATH_INFO == "/state") return(create_json_response(list(restarts = restarts,
-      reload = isTRUE(config$reload_requested), shutdown = isTRUE(config$shutdown_requested))))
+      reload = isTRUE(config$reload_requested), shutdown = isTRUE(config$shutdown_requested), posts = I(posts))))
     create_html_response("<!doctype html><title>Foreign origin</title>")
   })
   on.exit(httpuv::stopServer(foreign$server), add = TRUE)
