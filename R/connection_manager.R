@@ -50,7 +50,12 @@ ConnectionManager <- setRefClass("ConnectionManager",
         value <- client_ws$request[[paste0("HTTP_", toupper(name))]]
         if (!is.null(value)) headers[[name]] <- value
       }
-      backend_ws <- websocket::WebSocket$new(backend_url, headers = headers)
+      # Apps may send large outputs (e.g. htmlwidget data) as one message;
+      # don't impose the websocket package's 32 MiB default on them.
+      backend_ws <- websocket::WebSocket$new(backend_url,
+        headers = headers,
+        maxMessageSize = .Machine$integer.max
+      )
 
       # Store connection info with ready state and timestamp
       config$add_backend_connection(session_id, list(

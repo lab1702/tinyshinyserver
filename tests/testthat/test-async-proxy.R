@@ -514,3 +514,57 @@ test_that("a launched Shiny app process owns its listening port", {
   expect_false(config$is_app_starting("app"))
   expect_true(config$app_backend_verified("app"))
 })
+
+test_that("app WebSocket messages larger than 32 MiB reach the browser", {
+  size <- 33 * 1024 * 1024
+  backend <- start_test_http_server(function(req) create_html_response("ok"), on_ws = function(ws) {
+    ws$onMessage(function(binary, message) ws$send(raw(size)))
+  })
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  config <- proxy_test_config(backend$port)
+  cm <- ConnectionManager$new(config)
+  proxy <- start_test_http_server(function(req) create_html_response("ok"),
+    on_ws = function(ws) handle_websocket_connection(ws, config, cm))
+  on.exit(httpuv::stopServer(proxy$server), add = TRUE)
+  client <- websocket::WebSocket$new(paste0(sub("^http", "ws", proxy$url), "/proxy/app/websocket/"),
+    maxMessageSize = .Machine$integer.max)
+  on.exit(client$close(), add = TRUE, after = FALSE)
+  result <- promises::promise(function(resolve, reject) {
+    client$onOpen(function(event) client$send("init"))
+    client$onMessage(function(event) resolve(length(event$data)))
+    client$onClose(function(event) reject(simpleError("Proxy closed the large message session")))
+    client$onError(function(event) reject(simpleError(event$message)))
+  })
+  expect_equal(await_response(result, timeout = 30), size)
+})
+
+test_that("request bodies are limited from their headers alone", {
+  expect_null(reject_large_request_body(list(), 10))
+  expect_null(reject_large_request_body(list(CONTENT_LENGTH = "10"), 10))
+  for (req in list(list(CONTENT_LENGTH = "11"), list(CONTENT_LENGTH = "x"),
+    list(HTTP_TRANSFER_ENCODING = "chunked"))) {
+    expect_equal(reject_large_request_body(req, 10)$status, 413)
+  }
+})
+
+test_that("an oversized request body is rejected before the app is called", {
+  called <- FALSE
+  server <- NULL
+  for (port in sample(20000:50000, 3)) {
+    server <- tryCatch(httpuv::startServer("127.0.0.1", port, list(
+      onHeaders = function(req) reject_large_request_body(req, 1024),
+      call = function(req) { called <<- TRUE; create_html_response("ok") }
+    ), quiet = TRUE), error = function(e) NULL)
+    if (!is.null(server)) break
+  }
+  if (is.null(server)) skip("Loopback sockets unavailable")
+  on.exit(httpuv::stopServer(server), add = TRUE)
+  post <- function(size) {
+    handle <- curl::new_handle(customrequest = "POST", postfields = raw(size))
+    await_response(fetch_backend_async(paste0("http://127.0.0.1:", port, "/"), handle))
+  }
+  expect_equal(post(2048)$status_code, 413)
+  expect_false(called)
+  expect_equal(post(512)$status_code, 200)
+  expect_true(called)
+})

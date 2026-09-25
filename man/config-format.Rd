@@ -53,6 +53,7 @@ not allow comments.
   \item{\code{management_port}}{Port for the management interface (default: 3839).}
   \item{\code{restart_delay}}{Non-negative finite seconds to wait before restarting failed apps (default: 5).}
   \item{\code{health_check_interval}}{Positive finite seconds between health checks (default: 10).}
+  \item{\code{max_request_size_mb}}{Largest HTTP request body, in megabytes, that the proxy accepts; a positive finite number (default: 100). Larger bodies, and bodies sent with chunked transfer encoding, are rejected with HTTP 413 before they are read. Apps that raise \code{shiny.maxRequestSize} above this need a larger value.}
   \item{\code{title}}{Name shown in the browser tab and top bar of the landing and management pages; a non-empty string of up to 100 characters (default: "Tiny Shiny Server").}
 }
 }

@@ -160,6 +160,9 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
         host = proxy_host,
         port = proxy_port,
         app = list(
+          onHeaders = function(req) {
+            reject_large_request_body(req, (config$config$max_request_size_mb %||% 100) * 1024^2)
+          },
           call = function(req) handle_http_request(req, config, template_manager, connection_manager, process_manager),
           onWSOpen = function(ws) handle_websocket_connection(ws, config, connection_manager, process_manager)
         )
@@ -176,6 +179,8 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
         host = "127.0.0.1",
         port = management_port,
         app = list(
+          # Management requests carry no body.
+          onHeaders = function(req) reject_large_request_body(req, 65536),
           call = function(req) handle_management_request(req, config, process_manager, template_manager)
         )
       )

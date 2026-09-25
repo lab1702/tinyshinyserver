@@ -4,6 +4,8 @@
 
 * **Reverse proxies must now send a loopback `Host` header.** When `proxy_host` is a loopback address, the proxy rejects requests whose `Host` header is not `localhost`, `127.0.0.1`, or `[::1]`; the management server always does. A reverse proxy on the same machine must forward the upstream address as the host (for Caddy, `header_up Host {upstream_hostport}`) and set `X-Forwarded-Host` to the public host (Caddy does by default). A reverse proxy on another machine, with `proxy_host` set to `"0.0.0.0"` or `"::"`, must preserve the public `Host` header. See the updated Caddy example in the README.
 
+* **The proxy now rejects HTTP request bodies larger than 100 MB** with HTTP 413 before reading them, as do chunked request bodies. Previously the whole body was held in memory, so one very large upload could exhaust the server's memory and stop every app. Apps that accept larger uploads through `shiny.maxRequestSize` need the new `max_request_size_mb` option raised to match. The management server, whose requests carry no body, rejects bodies larger than 64 KB.
+
 * The proxy's public `/api/apps` endpoint now returns only each app's name, status, mode, and connection count. App paths, ports, and process IDs are available only from the loopback management API.
 
 * On-demand apps now stop 30 seconds after their last WebSocket connection closes instead of immediately. Reloading or navigating within an on-demand app previously stopped it between pages, forcing a cold restart that could make the new page's requests fail with HTTP 503.
@@ -37,6 +39,8 @@
 * `start_tss()` now configures logging only for the package's own logger namespace, so the caller's `logger` threshold and appender are no longer changed for the rest of the R session.
 
 * WebSocket messages for a client session that is no longer tracked no longer open an orphaned backend session.
+
+* App WebSocket messages larger than 32 MB, such as large htmlwidget outputs, no longer disconnect the browser session.
 
 * Proxied HTTP requests are no longer cut off after 30 seconds. Once the app accepts the connection, a request fails only if the app sends no data for 10 minutes, so slow downloads and documents rendered on request complete.
 

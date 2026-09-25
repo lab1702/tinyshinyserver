@@ -128,7 +128,7 @@ On-demand apps stop 30 seconds after their last WebSocket connection closes, pro
 
 The proxy forwards traffic to an app only when the app's own process is listening on the app's port. If another program holds that port, for example a second server instance with the same `starting_port`, the proxy returns HTTP 503 and logs a warning instead of sending the other program your users' requests.
 
-Once the app accepts a connection, a proxied HTTP request fails with HTTP 502 only if the app sends no data for 10 minutes; there is no limit on total transfer time. If a running app does not accept connections, the proxy returns HTTP 503. Requests with query strings longer than 8,192 characters are rejected with HTTP 400, and browser WebSocket messages larger than 1 MB close the session.
+Once the app accepts a connection, a proxied HTTP request fails with HTTP 502 only if the app sends no data for 10 minutes; there is no limit on total transfer time. If a running app does not accept connections, the proxy returns HTTP 503. Requests with query strings longer than 8,192 characters are rejected with HTTP 400, request bodies larger than `max_request_size_mb` (default: 100 MB) or sent with chunked transfer encoding are rejected with HTTP 413 before they are read, and browser WebSocket messages larger than 1 MB close the session. Messages from an app to the browser may be up to 2 GB.
 
 ### Configuration options
 
@@ -146,6 +146,7 @@ Once the app accepts a connection, a proxied HTTP request fails with HTTP 502 on
 | `management_port` | Port for the management interface | 3839 |
 | `restart_delay` | Non-negative finite seconds to wait before restarting failed apps | 5 |
 | `health_check_interval` | Positive finite seconds between health checks | 10 |
+| `max_request_size_mb` | Largest HTTP request body, in megabytes, that the proxy accepts; larger or chunked bodies get HTTP 413 | 100 |
 | `title` | Name shown in the browser tab and top bar of the landing and management pages; up to 100 characters | "Tiny Shiny Server" |
 
 ## Network access and authentication

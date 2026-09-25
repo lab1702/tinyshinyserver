@@ -15,6 +15,9 @@ documented in NEWS.md and README.md.
   protection; app processes' own loopback ports are not covered). App
   WebSocket connections must come from a page on the same host, and
   management pages cannot be framed.
+* The proxy rejects request bodies larger than the new `max_request_size_mb`
+  option (default 100 MB), and chunked request bodies, with HTTP 413 before
+  reading them, instead of buffering them in memory.
 * The public `/api/apps` endpoint no longer exposes app paths, ports, or
   process IDs.
 * App processes write stdout and stderr directly to their log files instead

@@ -95,6 +95,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       config$health_check_interval <<- config$health_check_interval %||% 10
       config$starting_port <<- config$starting_port %||% 3001
       config$title <<- trimws(config$title %||% DEFAULT_SERVER_TITLE)
+      config$max_request_size_mb <<- config$max_request_size_mb %||% 100
 
       # Set default values for optional app fields
       for (i in seq_along(config$apps)) {
@@ -140,6 +141,13 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
           value < 0 || (positive && value == 0)) {
           bound <- if (positive) "positive" else "non-negative"
           return(list(valid = FALSE, error = paste(field, "must be a single", bound, "finite number of seconds")))
+        }
+      }
+
+      if ("max_request_size_mb" %in% names(config)) {
+        value <- config$max_request_size_mb
+        if (!is.numeric(value) || length(value) != 1 || !is.finite(value) || value <= 0) {
+          return(list(valid = FALSE, error = "max_request_size_mb must be a single positive finite number of megabytes"))
         }
       }
 

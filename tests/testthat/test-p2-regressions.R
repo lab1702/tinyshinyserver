@@ -82,7 +82,7 @@ test_that("backend closure disconnects its browser and ignores stale callbacks",
     onMessage = function(f) NULL, onOpen = function(f) NULL, onError = function(f) NULL,
     onClose = function(f) { callbacks$close <- f }, close = function() callbacks$close(list())
   )
-  local_mocked_bindings(WebSocket = list(new = function(url, headers = list()) backend), .package = "websocket")
+  local_mocked_bindings(WebSocket = list(new = function(url, headers = list(), ...) backend), .package = "websocket")
   local_mocked_bindings(process_owns_port = function(process, port) TRUE)
   config$add_app_process("app", test_backend_process())
   cm <- ConnectionManager$new(config)

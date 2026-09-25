@@ -719,6 +719,7 @@ test_that("load_config sets default values for optional fields", {
       expect_equal(loaded$restart_delay, 5)
       expect_equal(loaded$health_check_interval, 10)
       expect_equal(loaded$title, "Tiny Shiny Server")
+      expect_equal(loaded$max_request_size_mb, 100)
     }
   )
 })
@@ -990,6 +991,24 @@ test_that("scheduler settings reject invalid delays before startup", {
   expect_true(config$validate_config(base)$valid)
   base$health_check_interval <- 0
   expect_false(config$validate_config(base)$valid)
+})
+
+test_that("max_request_size_mb must be a positive finite number", {
+  config <- ShinyServerConfig$new()
+  base <- list(apps = list(list(name = "app", path = "/tmp/app")),
+    log_dir = "/tmp/logs", starting_port = 5001)
+  for (value in list(0, -1, Inf, NA_real_, "10", TRUE, NULL, numeric(), c(1, 2))) {
+    candidate <- base
+    candidate["max_request_size_mb"] <- list(value)
+    result <- config$validate_config(candidate)
+    expect_false(result$valid)
+    expect_match(result$error, "max_request_size_mb")
+  }
+  for (value in c(0.5, 5, 1000)) {
+    candidate <- base
+    candidate$max_request_size_mb <- value
+    expect_true(config$validate_config(candidate)$valid)
+  }
 })
 
 test_that("appstart_timeout validates positive finite seconds", {
