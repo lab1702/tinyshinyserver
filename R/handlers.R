@@ -1,9 +1,10 @@
 # HTTP and WebSocket Handlers Module
 # Handles all HTTP requests and WebSocket connections
 
-# httpuv buffers a request's whole body in memory before calling the app, so
-# reject oversized bodies from the headers alone, as Shiny's own server does.
-# Chunked bodies have no declared size and are rejected.
+# httpuv receives a request's whole body before calling the app, and the proxy
+# then reads it into memory to forward it, so reject oversized bodies from the
+# headers alone, as Shiny's own server does. Chunked bodies have no declared
+# size and are rejected.
 reject_large_request_body <- function(req, max_bytes) {
   size <- 0
   if (length(req$CONTENT_LENGTH) > 0) {

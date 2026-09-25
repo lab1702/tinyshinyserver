@@ -4,7 +4,7 @@
 
 * **Reverse proxies must now send a loopback `Host` header.** When `proxy_host` is a loopback address, the proxy rejects requests whose `Host` header is not `localhost`, `127.0.0.1`, or `[::1]`; the management server always does. A reverse proxy on the same machine must forward the upstream address as the host (for Caddy, `header_up Host {upstream_hostport}`) and set `X-Forwarded-Host` to the public host (Caddy does by default). A reverse proxy on another machine, with `proxy_host` set to `"0.0.0.0"` or `"::"`, must preserve the public `Host` header. See the updated Caddy example in the README.
 
-* **The proxy now rejects HTTP request bodies larger than 100 MB** with HTTP 413 before reading them, as do chunked request bodies. Previously the whole body was held in memory, so one very large upload could exhaust the server's memory and stop every app. Apps that accept larger uploads through `shiny.maxRequestSize` need the new `max_request_size_mb` option raised to match. The management server, whose requests carry no body, rejects bodies larger than 64 KB.
+* **The proxy now rejects HTTP request bodies larger than 100 MB** with HTTP 413 before reading them, as do chunked request bodies. Previously the whole body was read into memory before being forwarded, so one very large upload could exhaust the server's memory and stop every app. Apps that accept larger uploads through `shiny.maxRequestSize` need the new `max_request_size_mb` option raised to match. The management server, whose requests carry no body, rejects bodies larger than 64 KB.
 
 * The proxy's public `/api/apps` endpoint now returns only each app's name, status, mode, and connection count. App paths, ports, and process IDs are available only from the loopback management API.
 
