@@ -22,6 +22,8 @@
 
 * Client IP addresses shown in the management dashboard and logs are taken from `X-Forwarded-For` or `X-Real-IP` only when the request comes from a reverse proxy on the same machine, and then from the entry that proxy added.
 
+* HTTP 502 responses from the proxy no longer include the underlying connection error, which named the app's internal address and port. The error is written to `server.log`.
+
 ## Web pages
 
 * The landing page and management dashboard have a new design. They follow the system light or dark theme by default and have a theme toggle; an explicit choice is remembered in the browser until it is switched back to match the system. Error and status pages use the same theme.
@@ -68,7 +70,7 @@
 
 * If `server.log` can no longer be written while the server runs, messages still go to the console. Previously the write error stopped health checks and interrupted shutdown, leaving the proxy, management server, and apps running. If `log_dir` is removed, starting an app creates it again, so apps can still start and `server.log` resumes. A `log_dir` where `server.log` cannot be written at startup is reported as such.
 
-* A resident app whose process cannot be started, for example because its log files cannot be opened, is now reported and retried by health checks. It previously stopped the server at startup, and during a reload kept the remaining resident apps from starting and reported the reload as failed.
+* A resident app whose process cannot be started, for example because its log files cannot be opened, is now reported and retried by health checks. It previously stopped the server at startup, and during a reload kept the remaining resident apps from starting and reported the reload as failed. An on-demand app that cannot start now returns HTTP 502 and is logged in `server.log`, instead of HTTP 500 with the internal error text.
 
 * A shutdown through the management API now stops only that server. It previously wrote `shutdown.flag` to `log_dir`, which also stopped any other server sharing that directory, and left the file behind.
 

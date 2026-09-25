@@ -261,7 +261,8 @@ forward_request <- function(method, target_url, req, app_name, config) {
     logger::log_error("Proxy error for app {app_name}: {error}",
       app_name = app_name, error = conditionMessage(e)
     )
-    create_error_response(paste("Bad Gateway:", conditionMessage(e)), 502)
+    # curl errors name the app's internal address, so keep them in the log
+    create_error_response("Bad Gateway", 502)
   }
 
   tryCatch({

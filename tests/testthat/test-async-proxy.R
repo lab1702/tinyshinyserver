@@ -249,7 +249,8 @@ test_that("async transfer failures become 502 responses", {
   )
   result <- await_response(forward_request("GET", "http://127.0.0.1:3001/", list(), "app", config))
   expect_equal(result$status, 502)
-  expect_match(result$body, "transfer failed")
+  expect_match(result$body, "Bad Gateway")
+  expect_no_match(result$body, "transfer failed")
 })
 
 test_that("process manager readiness probes are asynchronous", {

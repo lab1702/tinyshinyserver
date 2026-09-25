@@ -472,6 +472,14 @@ test_that("start_app_on_demand returns TRUE if app is starting", {
   expect_true(result)
 })
 
+test_that("start_app_on_demand returns FALSE when the app process cannot start", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app1", path = tempdir(), port = 3001, resident = FALSE)))
+  pm <- ProcessManager$new(config)
+  assign("start_app", function(app_config) stop("cannot start processx process"), envir = pm)
+  expect_false(pm$start_app_on_demand("app1"))
+})
+
 test_that("start_app_on_demand attempts to start app if not running", {
   # Create a temp directory with an app.R file so start_app doesn't fail early
   temp_app_dir <- file.path(tempdir(), "test_app_on_demand")

@@ -254,8 +254,12 @@ ProcessManager <- setRefClass("ProcessManager",
 
       logger::log_info("Starting app {app_name} on demand", app_name = app_name)
 
-      # Start the app (now non-blocking)
-      success <- start_app(app_config)
+      # Start the app (now non-blocking). A start error, which may name
+      # internal paths, is logged here instead of reaching the client.
+      success <- tryCatch(start_app(app_config), error = function(e) {
+        logger::log_error("Error starting app {app_name}: {error}", app_name = app_name, error = conditionMessage(e))
+        FALSE
+      })
       if (success) {
         logger::log_info("Successfully initiated startup for app {app_name} on demand", app_name = app_name)
       } else {
