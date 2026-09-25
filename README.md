@@ -209,9 +209,11 @@ The landing page and management dashboard refresh their status every 5 seconds. 
 | Page | Default URL | Capabilities |
 |------|-------------|--------------|
 | Landing page | http://localhost:3838 | App links, status, and connection counts |
-| Management dashboard | http://localhost:3839 | App modes, process IDs, ports, paths, connection details, R version and operating system, restarts, configuration reloads, and server shutdown |
+| Management dashboard | http://localhost:3839 | Server uptime and memory use, app modes, process IDs, ports, paths, memory use and uptime, connection details, R version and operating system, restarts, configuration reloads, and server shutdown |
 
 App status is **running**, **dormant** (an on-demand app that is not running), **stopped**, or **crashed**. Running and dormant apps can be opened from the landing page; opening a dormant app starts it. Tiles for stopped or crashed apps are disabled, and all tiles are disabled when the server is unreachable.
+
+Memory figures are the resident memory (RSS) of the server's own R process and of each app's R process. Processes that an app starts itself, such as Pandoc or a database driver's helper, are not included. An app's uptime restarts from zero whenever its process starts again. Memory shows as N/A on platforms where the `ps` package cannot read it.
 
 The management dashboard lists active WebSocket connections with their client IP addresses, user agents, connection times, and last activity. Running, stopped, and crashed apps can be restarted; dormant apps start when accessed. Restarting an app disconnects its users.
 
@@ -232,8 +234,8 @@ These endpoints are served on the management port (default: 3839). POST requests
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/status` | GET | System overview (apps, connections) and the outcome of the latest configuration reload |
-| `/api/apps` | GET | Detailed application status |
+| `/api/status` | GET | System overview: app and connection counts, `uptime_seconds`, `server_memory_bytes`, `apps_memory_bytes` (total of running apps), and the outcome of the latest configuration reload |
+| `/api/apps` | GET | Detailed application status, including `memory_bytes` and `uptime_seconds` for running apps |
 | `/api/connections` | GET | Active connection details |
 | `/api/apps/{name}/restart` | POST | Restart the named application |
 | `/api/reload` | POST | Reload the configuration file and restart all applications |

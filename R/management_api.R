@@ -126,6 +126,11 @@ handle_management_apps_api <- function(process_manager) {
   tryCatch(
     {
       apps_status <- process_manager$get_all_app_status()
+      # Usage stays off the proxy's public /api/apps, which shares get_all_app_status()
+      for (app_name in names(apps_status)) {
+        usage <- process_usage(process_manager$config$get_app_process(app_name))
+        apps_status[[app_name]] <- c(apps_status[[app_name]], usage)
+      }
       return(create_json_response(apps_status))
     },
     error = function(e) {
@@ -173,11 +178,13 @@ handle_management_status_api <- function(config) {
     {
       total_connections <- length(config$get_all_ws_connections())
       running_apps <- 0
+      apps_memory <- 0
 
       for (app_name in names(config$get_all_app_processes())) {
         process <- config$get_app_process(app_name)
         if (!is.null(process) && is_process_alive(process)) {
           running_apps <- running_apps + 1
+          apps_memory <- apps_memory + (process_memory_bytes(process) %||% 0)
         }
       }
 
@@ -185,9 +192,13 @@ handle_management_status_api <- function(config) {
         total_apps = length(config$config$apps),
         running_apps = running_apps,
         total_connections = total_connections,
-        server_uptime = "N/A", # Could be enhanced with actual uptime tracking
-        memory_usage = "N/A" # Could be enhanced with memory monitoring
+        uptime_seconds = as.numeric(difftime(Sys.time(), config$started_at, units = "secs"))
       )
+      # Memory is left out where ps cannot read it
+      status$server_memory_bytes <- process_memory_bytes()
+      if (!is.null(status$server_memory_bytes)) {
+        status$apps_memory_bytes <- apps_memory
+      }
       # Requested reloads run after their response, so report the outcome here
       if (length(config$last_reload) > 0) {
         status$last_reload <- config$last_reload

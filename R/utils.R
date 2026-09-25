@@ -198,6 +198,37 @@ is_process_alive <- function(process) {
   )
 }
 
+process_ps_handle <- function(process) {
+  if (is.function(process$as_ps_handle)) process$as_ps_handle() else ps::ps_handle(process$get_pid())
+}
+
+# Resident memory in bytes of a process (by default this R session), or NULL
+# when it cannot be read. Only the process itself is measured: listing its
+# children would walk the whole process table on every dashboard refresh.
+process_memory_bytes <- function(process = NULL) {
+  if (!ps::ps_is_supported()) return(NULL)
+  tryCatch(
+    {
+      handle <- if (is.null(process)) ps::ps_handle() else process_ps_handle(process)
+      as.numeric(ps::ps_memory_info(handle)[["rss"]])
+    },
+    error = function(e) NULL
+  )
+}
+
+# Memory and uptime of a live app process for the management API. Values that
+# cannot be read are left out, because jsonlite writes NA as "NA" and NULL as {}.
+process_usage <- function(process) {
+  if (!is_process_alive(process)) return(list())
+  usage <- list()
+  usage$memory_bytes <- process_memory_bytes(process)
+  usage$uptime_seconds <- tryCatch(
+    as.numeric(difftime(Sys.time(), process$get_start_time(), units = "secs")),
+    error = function(e) NULL
+  )
+  usage
+}
+
 kill_process_safely <- function(process, force = FALSE) {
   "Safely terminate a process"
 
@@ -316,8 +347,7 @@ is_valid_url <- function(url) {
 process_owns_port <- function(process, port) {
   if (!ps::ps_is_supported()) return(TRUE)
   tryCatch({
-    handle <- if (is.function(process$as_ps_handle)) process$as_ps_handle() else ps::ps_handle(process$get_pid())
-    sockets <- ps::ps_connections(handle)
+    sockets <- ps::ps_connections(process_ps_handle(process))
     any(sockets$state %in% "CONN_LISTEN" & sockets$lport %in% port)
   }, error = function(e) FALSE)
 }

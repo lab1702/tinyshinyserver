@@ -351,6 +351,63 @@ test_that("handle_management_status_api counts running apps", {
   expect_equal(body$running_apps, 1)
 })
 
+test_that("handle_management_status_api reports uptime and memory", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list())
+  config$started_at <- Sys.time() - 90
+
+  body <- jsonlite::fromJSON(handle_management_status_api(config)$body)
+
+  expect_gte(body$uptime_seconds, 90)
+  expect_null(body$server_uptime)
+  expect_null(body$memory_usage)
+  skip_if_not(ps::ps_is_supported())
+  expect_gt(body$server_memory_bytes, 0)
+  expect_equal(body$apps_memory_bytes, 0)
+})
+
+test_that("handle_management_status_api omits memory ps cannot read", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list())
+  local_mocked_bindings(process_memory_bytes = function(process = NULL) NULL)
+
+  body <- jsonlite::fromJSON(handle_management_status_api(config)$body)
+
+  expect_false(any(c("server_memory_bytes", "apps_memory_bytes") %in% names(body)))
+})
+
+# ============================================================================
+# App resource usage
+# ============================================================================
+
+test_that("process_usage is empty for missing or exited processes", {
+  expect_equal(process_usage(NULL), list())
+  expect_equal(process_usage(list(is_alive = function() FALSE)), list())
+})
+
+test_that("app memory and uptime reach the management API but not the public one", {
+  skip_on_cran()
+  skip_if_not(ps::ps_is_supported())
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(
+    list(name = "app1", path = "/path1", port = 3001, resident = TRUE)
+  ))
+  process <- callr::r_bg(function() Sys.sleep(30))
+  on.exit(process$kill(), add = TRUE)
+  config$add_app_process("app1", process)
+  pm <- ProcessManager$new(config)
+
+  managed <- jsonlite::fromJSON(handle_management_apps_api(pm)$body)$app1
+  expect_gt(managed$memory_bytes, 0)
+  expect_gte(managed$uptime_seconds, 0)
+
+  status <- jsonlite::fromJSON(handle_management_status_api(config)$body)
+  expect_gt(status$apps_memory_bytes, 0)
+
+  public <- jsonlite::fromJSON(handle_apps_api(config, pm)$body)$app1
+  expect_false(any(c("memory_bytes", "uptime_seconds") %in% names(public)))
+})
+
 # ============================================================================
 # handle_app_restart() Tests
 # ============================================================================

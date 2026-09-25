@@ -32,6 +32,8 @@
 
 * Requests for a directory under `/templates/` return HTTP 404 instead of 500.
 
+* The management dashboard shows the server's uptime and memory use, and each running app's memory use and uptime. `/api/status` returns `uptime_seconds`, `server_memory_bytes`, and `apps_memory_bytes` in place of the `server_uptime` and `memory_usage` fields, which were always `"N/A"`; the management `/api/apps` returns `memory_bytes` and `uptime_seconds` for running apps. Memory is the resident memory of each R process and is left out where the `ps` package cannot read it.
+
 * The R version and operating system are now shown on the management dashboard instead of the public landing page.
 
 * The management dashboard has a **Reload Config & Restart All** button, also available as `POST /api/reload`. It reads the configuration file again, stops every app, and starts the resident apps under the new configuration, so apps can be added, removed, or changed without restarting the server. An invalid file, a `log_dir` where the server log cannot be written, or a change to `proxy_host`, `proxy_port`, or `management_port`, is rejected before any app stops. If an app cannot be stopped, the previous configuration stays in effect. The dashboard reports the reload's outcome, which `/api/status` also returns as `last_reload`. The landing page picks up added and removed apps.

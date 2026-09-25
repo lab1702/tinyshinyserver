@@ -592,6 +592,13 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
+.status-card .note {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---------- Management: app cards ---------- */
 
 .manage-apps {
