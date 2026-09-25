@@ -8,7 +8,7 @@ test_that("management mutation guard rejects simple browser requests before side
     restart_app = function(name) { restarts <<- restarts + 1; list(success = TRUE) })
   for (origin in c("http://127.0.0.1:9999", "http://localhost:3839", "https://evil.example", "null")) {
     for (header in list(NULL, "", "wrong", c("management", "wrong"))) {
-      for (path in c("/api/shutdown", "/api/apps/app/restart")) {
+      for (path in c("/api/shutdown", "/api/reload", "/api/apps/app/restart")) {
         req <- list(PATH_INFO = path, REQUEST_METHOD = "POST", HTTP_ORIGIN = origin,
           HTTP_X_TINYSHINYSERVER_REQUEST = header, CONTENT_TYPE = "application/x-www-form-urlencoded")
         expect_equal(handle_management_request(req, config, pm, NULL)$status, 403)
@@ -17,6 +17,7 @@ test_that("management mutation guard rejects simple browser requests before side
   }
   expect_equal(restarts, 0)
   expect_false(config$shutdown_requested)
+  expect_false(config$reload_requested)
   expect_equal(route_management_request("/api/shutdown", "POST", list(), config, pm, NULL)$status, 403)
 })
 

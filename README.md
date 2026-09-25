@@ -61,7 +61,7 @@ The example configuration includes a resident Quarto dashboard, which starts wit
 With the default ports, open:
 
 - Landing page (`http://localhost:3838`): app links and status
-- Management dashboard (`http://localhost:3839`): monitoring, restarts, and shutdown
+- Management dashboard (`http://localhost:3839`): monitoring, restarts, configuration reloads, and shutdown
 - Sales app (`http://localhost:3838/proxy/sales/`): an individual app
 
 `start_tss()` occupies the R console until shutdown. Click **Shutdown Server** in the management dashboard or press **Ctrl-C** in R to close connections and stop the app processes. For scripted shutdown, see [Management API](#management-api).
@@ -70,7 +70,7 @@ With the default ports, open:
 
 - Host multiple apps behind one HTTP and WebSocket proxy, with a separate R process for each app.
 - Choose resident or on-demand apps to balance startup delay and resource use.
-- Monitor app status and WebSocket connections, restart individual apps, and shut down from a web dashboard.
+- Monitor app status and WebSocket connections, restart individual apps, reload the configuration, and shut down from a web dashboard.
 - Automatically restart failed resident processes and clean up stale connections.
 - Serve standard Shiny apps, interactive R Markdown documents, and Quarto dashboards.
 - Capture server logs and each app's output and errors.
@@ -209,11 +209,13 @@ The landing page and management dashboard refresh their status every 5 seconds. 
 | Page | Default URL | Capabilities |
 |------|-------------|--------------|
 | Landing page | http://localhost:3838 | App links, status, connection counts, and R environment details |
-| Management dashboard | http://localhost:3839 | App modes, process IDs, ports, paths, connection details, restarts, and server shutdown |
+| Management dashboard | http://localhost:3839 | App modes, process IDs, ports, paths, connection details, restarts, configuration reloads, and server shutdown |
 
 App status is **running**, **dormant** (an on-demand app that is not running), **stopped**, or **crashed**. Running and dormant apps can be opened from the landing page; opening a dormant app starts it. Tiles for stopped or crashed apps are disabled, and all tiles are disabled when the server is unreachable.
 
 The management dashboard lists active WebSocket connections with their client IP addresses, user agents, connection times, and last activity. Running, stopped, and crashed apps can be restarted; dormant apps start when accessed. Restarting an app disconnects its users.
+
+**Reload Config & Restart All** reads the configuration file again, stops every app, and disconnects all users. It then assigns app ports from the new configuration and starts the resident apps; on-demand apps start when next opened. The file is checked first, so an invalid file, or a change to `proxy_host`, `proxy_port`, or `management_port`, is reported without stopping anything; those three settings take effect only when the server restarts.
 
 ### Proxy endpoints
 
@@ -234,6 +236,7 @@ These endpoints are served on the management port (default: 3839). POST requests
 | `/api/apps` | GET | Detailed application status |
 | `/api/connections` | GET | Active connection details |
 | `/api/apps/{name}/restart` | POST | Restart the named application |
+| `/api/reload` | POST | Reload the configuration file and restart all applications |
 | `/api/shutdown` | POST | Graceful server shutdown |
 
 For example:
@@ -244,6 +247,9 @@ curl http://localhost:3839/api/status
 
 # Restart the sales app
 curl -X POST -H "X-TinyShinyServer-Request: management" http://localhost:3839/api/apps/sales/restart
+
+# Reload the configuration and restart all apps
+curl -X POST -H "X-TinyShinyServer-Request: management" http://localhost:3839/api/reload
 
 # Shut down the server
 curl -X POST -H "X-TinyShinyServer-Request: management" http://localhost:3839/api/shutdown
@@ -262,7 +268,7 @@ Point each app's `path` at a directory containing one of these entry points:
 
 Detection prefers standard Shiny files, then R Markdown, then Quarto. File extensions are case-sensitive. For document apps, the first matching file in alphabetical order is used; keep one entry document per directory to make the choice explicit.
 
-To add an app, create its directory, add an entry with `name` and `path` to the configuration, and restart the server.
+To add an app, create its directory, add an entry with `name` and `path` to the configuration, and click **Reload Config & Restart All** in the management dashboard.
 
 For local development, run a copied example directly from R:
 

@@ -204,6 +204,14 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
             break
           }
 
+          # Reload between requests: stopping app processes blocks
+          if (isTRUE(config$reload_requested)) {
+            config$field("reload_requested", FALSE)
+            tryCatch(reload(), error = function(e) {
+              logger::log_error("Configuration reload failed: {error}", error = conditionMessage(e))
+            })
+          }
+
           # Process pending tasks
           later::run_now()
 
@@ -219,6 +227,55 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       }, finally = {
         shutdown()
       })
+    },
+    reload = function() {
+      "Stop all apps, apply the configuration file again, and start the resident apps"
+
+      reload_check <- config$read_reload_config()
+      if (!reload_check$valid) {
+        logger::log_error("Configuration reload rejected: {error}", error = reload_check$error)
+        return(invisible(reload_check))
+      }
+
+      logger::log_info("Reloading configuration from {file}", file = config$config_file)
+
+      # Close every client socket so browsers show that their session ended
+      for (session_id in names(config$get_all_ws_connections())) {
+        connection_manager$close_client_connection(session_id)
+      }
+      process_manager$stop_all_apps()
+      surviving <- names(config$get_all_app_processes())
+      if (length(surviving) > 0) {
+        logger::log_warn("Could not stop apps before reload: {apps}", apps = paste(surviving, collapse = ", "))
+      }
+      config$reset_app_state()
+
+      # Assign ports only now, so the stopped apps' ports can be reused
+      old_config <- config$config
+      config$field("config", reload_check$config)
+      result <- tryCatch(
+        {
+          config$assign_app_ports()
+          list(valid = TRUE)
+        },
+        error = function(e) {
+          logger::log_error("Configuration reload failed, keeping the previous configuration: {error}",
+            error = conditionMessage(e)
+          )
+          config$field("config", old_config)
+          list(valid = FALSE, error = conditionMessage(e))
+        }
+      )
+
+      if (!identical(config$config$log_dir, old_config$log_dir)) {
+        setup_logging(config$config$log_dir)
+      }
+      template_manager$field("server_title", config$config$title)
+      config$log_port_assignments()
+
+      start_all_apps()
+      if (result$valid) logger::log_info("Configuration reloaded")
+      invisible(result)
     },
     shutdown = function() {
       "Gracefully shutdown the entire server"

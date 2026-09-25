@@ -9,8 +9,11 @@ serve <- function(call) {
   stop("No test port available")
 }
 main <- function() {
-  config <- ShinyServerConfig$new()
-  config$config <- list(log_dir = folder, apps = list(list(name = "app")))
+  # A real file, so a reload request is checked against it
+  config_file <- file.path(folder, "config.json")
+  writeLines(jsonlite::toJSON(list(log_dir = folder, starting_port = 3001,
+    apps = list(list(name = "app", path = "/test/app"))), auto_unbox = TRUE), config_file)
+  config <- create_server_config(config_file)
   restarts <- 0
   pm <- list(get_app_status = function(name) list(status = "running"),
     get_all_app_status = function() list(app = list(name = "app", status = "running", resident = TRUE,
@@ -21,7 +24,7 @@ main <- function() {
   on.exit(httpuv::stopServer(management$server), add = TRUE)
   foreign <- serve(function(req) {
     if (req$PATH_INFO == "/state") return(create_json_response(list(restarts = restarts,
-      shutdown = isTRUE(config$shutdown_requested))))
+      reload = isTRUE(config$reload_requested), shutdown = isTRUE(config$shutdown_requested))))
     create_html_response("<!doctype html><title>Foreign origin</title>")
   })
   on.exit(httpuv::stopServer(foreign$server), add = TRUE)

@@ -278,6 +278,12 @@ button {
   margin-bottom: 24px;
 }
 
+.page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .page-header h1 {
   font-size: 26px;
   font-weight: 650;
@@ -664,6 +670,7 @@ button {
 
 .btn,
 .restart-btn,
+.reload-btn,
 .shutdown-btn {
   display: inline-flex;
   align-items: center;
@@ -684,12 +691,14 @@ button {
 
 .btn svg,
 .restart-btn svg,
+.reload-btn svg,
 .shutdown-btn svg {
   width: 15px;
   height: 15px;
 }
 
-.restart-btn:hover {
+.restart-btn:hover,
+.reload-btn:hover {
   background: var(--surface-hover);
   border-color: var(--accent);
   color: var(--accent);
@@ -707,6 +716,7 @@ button {
 }
 
 .restart-btn:disabled,
+.reload-btn:disabled,
 .shutdown-btn:disabled {
   opacity: 0.55;
   cursor: not-allowed;

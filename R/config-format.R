@@ -91,6 +91,13 @@
 #' reaches 3838 or 3839 skips those ports when they are the proxy and management
 #' ports.
 #'
+#' @section Reloading:
+#' The management dashboard's \emph{Reload Config & Restart All} button reads
+#' the configuration file again, stops every app, and starts the resident apps
+#' under the new configuration; ports are assigned again at that point. Changes
+#' to \code{proxy_host}, \code{proxy_port}, or \code{management_port} are
+#' rejected and take effect only when the server restarts.
+#'
 #' @examples
 #' if (interactive()) {
 #'   (function() {

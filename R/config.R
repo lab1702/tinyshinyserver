@@ -6,6 +6,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
   fields = list(
     # Configuration data
     config = "list",
+    config_file = "character", # Absolute path, read again on reload
 
     # Runtime state
     app_processes = "list",
@@ -24,6 +25,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     verified_backends = "environment", # Process generations confirmed to own their app port
     management_server = "ANY",
     shutdown_requested = "logical", # Set by the management API; read by the event loop
+    reload_requested = "logical", # Set by the management API; read by the event loop
 
     # Constants
     MAX_PENDING_MESSAGES = "numeric",
@@ -61,23 +63,35 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       verified_backends <<- new.env(hash = TRUE, parent = emptyenv())
       management_server <<- NULL
       shutdown_requested <<- FALSE
+      reload_requested <<- FALSE
 
       # Initialize empty config (to be loaded via load_config)
       config <<- list()
+      config_file <<- NA_character_
     },
     load_config = function(config_file = "config.json") {
       "Load and validate configuration from file"
 
-      # Resolve config file path (normalize for absolute paths)
-      config_file <- normalizePath(config_file, mustWork = TRUE)
+      # Keep the absolute path so a reload finds the file after setwd()
+      config_file <<- normalizePath(config_file, mustWork = TRUE)
+      config <<- read_config(config_file)
 
-      if (!file.exists(config_file)) {
-        stop("Configuration file not found: ", config_file)
+      # Auto-assign ports to apps
+      assign_app_ports()
+
+      return(config)
+    },
+    read_config = function(file) {
+      "Read, validate, and fill in defaults for a configuration file without applying it"
+
+      if (!file.exists(file)) {
+        stop("Configuration file not found: ", file)
       }
 
       # Read with explicit UTF-8 encoding
-      config_text <- readLines(config_file, encoding = "UTF-8", warn = FALSE)
-      parsed_config <- jsonlite::fromJSON(paste(config_text, collapse = "\n"), simplifyDataFrame = FALSE)
+      config_text <- readLines(file, encoding = "UTF-8", warn = FALSE)
+      parsed_config <- jsonlite::fromJSON(paste(config_text, collapse = "
+"), simplifyDataFrame = FALSE)
 
       # Validate configuration
       validation_result <- validate_config(parsed_config)
@@ -85,30 +99,65 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         stop("Configuration validation failed: ", validation_result$error)
       }
 
-      config <<- validation_result$sanitized
+      new_config <- validation_result$sanitized
 
       # Set defaults for optional fields
-      config$proxy_port <<- config$proxy_port %||% 3838
-      config$proxy_host <<- config$proxy_host %||% "127.0.0.1"
-      config$management_port <<- config$management_port %||% 3839
-      config$restart_delay <<- config$restart_delay %||% 5
-      config$health_check_interval <<- config$health_check_interval %||% 10
-      config$starting_port <<- config$starting_port %||% 3001
-      config$title <<- trimws(config$title %||% DEFAULT_SERVER_TITLE)
-      config$max_request_size_mb <<- config$max_request_size_mb %||% 100
+      new_config$proxy_port <- new_config$proxy_port %||% 3838
+      new_config$proxy_host <- new_config$proxy_host %||% "127.0.0.1"
+      new_config$management_port <- new_config$management_port %||% 3839
+      new_config$restart_delay <- new_config$restart_delay %||% 5
+      new_config$health_check_interval <- new_config$health_check_interval %||% 10
+      new_config$starting_port <- new_config$starting_port %||% 3001
+      new_config$title <- trimws(new_config$title %||% DEFAULT_SERVER_TITLE)
+      new_config$max_request_size_mb <- new_config$max_request_size_mb %||% 100
 
       # Set default values for optional app fields
-      for (i in seq_along(config$apps)) {
-        config$apps[[i]]$appstart_timeout <<- config$apps[[i]]$appstart_timeout %||% 2
-        if (!"resident" %in% names(config$apps[[i]])) {
-          config$apps[[i]]$resident <<- FALSE
+      for (i in seq_along(new_config$apps)) {
+        new_config$apps[[i]]$appstart_timeout <- new_config$apps[[i]]$appstart_timeout %||% 2
+        if (!"resident" %in% names(new_config$apps[[i]])) {
+          new_config$apps[[i]]$resident <- FALSE
         }
       }
 
-      # Auto-assign ports to apps
-      assign_app_ports()
+      return(new_config)
+    },
+    read_reload_config = function() {
+      "Read the configuration file again, rejecting changes that need a server restart"
 
-      return(config)
+      if (is.na(config_file)) {
+        return(list(valid = FALSE, error = "No configuration file was loaded"))
+      }
+
+      new_config <- tryCatch(read_config(config_file), error = function(e) e)
+      if (inherits(new_config, "error")) {
+        return(list(valid = FALSE, error = conditionMessage(new_config)))
+      }
+
+      # The proxy and management servers keep listening where they started
+      loopback <- function(host) if (identical(host, "localhost")) "127.0.0.1" else host
+      changed <- c(
+        proxy_host = !identical(loopback(new_config$proxy_host), loopback(config$proxy_host)),
+        proxy_port = !identical(as.numeric(new_config$proxy_port), as.numeric(config$proxy_port)),
+        management_port = !identical(as.numeric(new_config$management_port), as.numeric(config$management_port))
+      )
+      if (any(changed)) {
+        return(list(valid = FALSE, error = paste(
+          paste(names(changed)[changed], collapse = ", "),
+          "changed;",
+          "restart the server to apply"
+        )))
+      }
+
+      list(valid = TRUE, config = new_config)
+    },
+    reset_app_state = function() {
+      "Forget per-app runtime state after all apps have stopped"
+
+      app_connection_counts <<- new.env(hash = TRUE, parent = emptyenv())
+      deferred_idle_stops <<- new.env(hash = TRUE, parent = emptyenv())
+      pending_session_checks <<- new.env(hash = TRUE, parent = emptyenv())
+      app_startup_state <<- new.env(hash = TRUE, parent = emptyenv())
+      verified_backends <<- new.env(hash = TRUE, parent = emptyenv())
     },
     validate_config = function(config) {
       "Validate configuration structure and values"

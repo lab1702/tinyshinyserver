@@ -25,7 +25,7 @@ const { chromium } = require('playwright');
     const page = await browser.newPage();
     await page.goto(urls.foreign);
     const state = async () => (await page.request.get(urls.foreign + '/state')).json();
-    for (const route of ['/api/apps/app/restart', '/api/shutdown']) {
+    for (const route of ['/api/apps/app/restart', '/api/reload', '/api/shutdown']) {
       const url = urls.management + route;
       // Original no-cors attack.
       const response = page.waitForResponse(r => r.url() === url && r.request().method() === 'POST');
@@ -46,13 +46,16 @@ const { chromium } = require('playwright');
       }, url);
       assert.equal((await formResponse).status(), 403);
     }
-    assert.deepEqual(await state(), {restarts: 0, shutdown: false});
+    assert.deepEqual(await state(), {restarts: 0, reload: false, shutdown: false});
     // Real management UI buttons, including their automatic request headers.
     page.on('dialog', dialog => dialog.accept());
     await page.goto(urls.management);
     await page.getByRole('button', {name: 'Restart', exact: true}).click();
     await page.waitForFunction(() => document.querySelector('.restart-btn')?.textContent === 'Restart');
     assert.equal((await state()).restarts, 1);
+    await page.getByRole('button', {name: 'Reload Config & Restart All'}).click();
+    await page.waitForFunction(() => document.getElementById('notice').textContent.includes('Reloading configuration'));
+    assert.equal((await state()).reload, true);
     await page.locator('.shutdown-btn').click();
     await page.waitForFunction(() => document.body.textContent.includes('Server Shutdown'));
     assert.equal((await state()).shutdown, true);

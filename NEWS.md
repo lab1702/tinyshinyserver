@@ -28,6 +28,8 @@
 
 * Management dashboard actions report their results in an inline notice instead of browser alert dialogs.
 
+* The management dashboard has a **Reload Config & Restart All** button, also available as `POST /api/reload`. It reads the configuration file again, stops every app, and starts the resident apps under the new configuration, so apps can be added, removed, or changed without restarting the server. An invalid file, or a change to `proxy_host`, `proxy_port`, or `management_port`, is rejected before any app stops.
+
 * The new `title` configuration option sets the name shown in the browser tab and top bar of the landing and management pages (default: "Tiny Shiny Server").
 
 ## Apps and logging

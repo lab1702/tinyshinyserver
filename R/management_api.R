@@ -86,6 +86,11 @@ route_management_request <- function(path, method, req, config, process_manager,
     return(handle_app_restart(path, process_manager))
   }
 
+  # Configuration reload endpoint
+  if (path == "/api/reload" && method == "POST") {
+    return(handle_config_reload(config))
+  }
+
   # Shutdown endpoint
   if (path == "/api/shutdown" && method == "POST") {
     return(handle_server_shutdown(config))
@@ -252,5 +257,25 @@ handle_server_shutdown <- function(config) {
   create_json_response(list(
     success = TRUE,
     message = "Shutdown initiated"
+  ))
+}
+
+handle_config_reload <- function(config) {
+  "Handle requests to reload the configuration and restart all apps"
+
+  # Check the file now so a mistake is reported before any app is stopped
+  reload_check <- config$read_reload_config()
+  if (!reload_check$valid) {
+    logger::log_warn("Configuration reload rejected: {error}", error = reload_check$error)
+    return(create_json_response(list(success = FALSE, message = reload_check$error), status = 400))
+  }
+
+  logger::log_info("Configuration reload requested via management API")
+
+  # Stopping apps blocks, so the event loop reloads after this response is sent
+  config$reload_requested <- TRUE
+  create_json_response(list(
+    success = TRUE,
+    message = "Reloading configuration and restarting all apps"
   ))
 }
