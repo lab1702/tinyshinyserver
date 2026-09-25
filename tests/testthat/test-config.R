@@ -179,6 +179,12 @@ test_that("validate_config validates app resident field", {
   expect_false(result$valid)
   expect_match(result$error, "resident field must be a single logical value")
 
+  # JSON [null] arrives as a logical NA
+  conf$apps[[1]]$resident <- NA
+  result <- config$validate_config(conf)
+  expect_false(result$valid)
+  expect_match(result$error, "resident field must be a single logical value")
+
   # Valid resident values
   conf$apps[[1]]$resident <- TRUE
   result <- config$validate_config(conf)
@@ -187,6 +193,22 @@ test_that("validate_config validates app resident field", {
   conf$apps[[1]]$resident <- FALSE
   result <- config$validate_config(conf)
   expect_true(result$valid)
+})
+
+test_that("validate_config rejects an empty log_dir", {
+  config <- ShinyServerConfig$new()
+  conf <- list(apps = list(list(name = "app1", path = "/path")), starting_port = 3001)
+
+  # An empty log_dir would put the logs in the filesystem root
+  for (log_dir in list("", "   ", NA_character_, c("a", "b"), 1)) {
+    conf$log_dir <- log_dir
+    result <- config$validate_config(conf)
+    expect_false(result$valid)
+    expect_match(result$error, "log_dir must be a non-empty string")
+  }
+
+  conf$log_dir <- "logs"
+  expect_true(config$validate_config(conf)$valid)
 })
 
 test_that("validate_config validates app name", {

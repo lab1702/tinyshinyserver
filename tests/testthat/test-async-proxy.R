@@ -196,6 +196,23 @@ test_that("startup polling yields and sends a queued POST only once", {
   expect_null(config$get_app_startup_state("app"))
 })
 
+test_that("proxied requests close their backend connections when they finish", {
+  skip_if_not(ps::ps_is_supported())
+  backend <- start_test_http_server(function(req) create_html_response("ok"))
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  config <- proxy_test_config(backend$port)
+  for (i in 1:5) {
+    response <- await_response(forward_request("GET", backend$url, list(), "app", config))
+    expect_equal(response$status, 200)
+  }
+  # Count this session's client ends of connections to the backend without
+  # running garbage collection, which would also close abandoned connections.
+  connections <- ps::ps_connections(ps::ps_handle())
+  open <- !is.na(connections$rport) & connections$rport == backend$port &
+    connections$state == "CONN_ESTABLISHED"
+  expect_equal(sum(open), 0)
+})
+
 test_that("startup grace expiry returns 503 without blocking timers", {
   backend <- start_test_http_server(function(req) create_html_response("unused"))
   httpuv::stopServer(backend$server)

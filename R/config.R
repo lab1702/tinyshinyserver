@@ -255,7 +255,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
 
         # Validate optional resident field
         if ("resident" %in% names(app)) {
-          if (!is.logical(app$resident) || length(app$resident) != 1) {
+          if (!is.logical(app$resident) || length(app$resident) != 1 || is.na(app$resident)) {
             return(list(valid = FALSE, error = paste("App", i, "resident field must be a single logical value (TRUE/FALSE)")))
           }
         }
@@ -307,8 +307,9 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       }
 
       # Validate log_dir
-      if (!is.character(config$log_dir) || length(config$log_dir) != 1) {
-        return(list(valid = FALSE, error = "log_dir must be a string"))
+      if (!is.character(config$log_dir) || length(config$log_dir) != 1 ||
+        is.na(config$log_dir) || !nzchar(trimws(config$log_dir))) {
+        return(list(valid = FALSE, error = "log_dir must be a non-empty string"))
       }
 
       return(list(valid = TRUE, sanitized = config))

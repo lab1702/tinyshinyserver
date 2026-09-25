@@ -324,11 +324,13 @@ forward_request <- function(method, target_url, req, app_name, config) {
       }
       if (starting) config$set_app_ready(app_name)
       # Bound stalled transfers rather than total time, so slow downloads and
-      # documents that render during the request still complete.
+      # documents that render during the request still complete. The handle and
+      # its pool are never reused, so close the backend connection when done
+      # instead of leaving it open until garbage collection.
       handle <- curl::new_handle(
         customrequest = method, nobody = identical(method, "HEAD"),
         connecttimeout = 10, low_speed_limit = 1, low_speed_time = 600, followlocation = FALSE,
-        accept_encoding = "identity", http_content_decoding = FALSE
+        accept_encoding = "identity", http_content_decoding = FALSE, forbid_reuse = TRUE
       )
       curl::handle_setheaders(handle, .list = headers)
       if (!is.null(body) && length(body) > 0) {

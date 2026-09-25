@@ -48,6 +48,10 @@
 
 * Proxied HTTP requests are no longer cut off after 30 seconds. Once the app accepts the connection, a request fails only if the app sends no data for 10 minutes, so slow downloads and documents rendered on request complete.
 
+* Proxied HTTP requests now close their connection to the app when they finish. The connections previously stayed open until R ran garbage collection, so bursts of requests left many idle sockets open in both the server and the app.
+
+* Configuration validation now rejects an empty `log_dir`, which put the logs in the filesystem root, and an app `resident` value of `null`, which stopped the server at startup.
+
 * Query strings may now be up to 8,192 characters (previously 2,048), so Shiny URL bookmarks with many inputs load.
 
 * Port assignments are now written to `server.log`, not only to the console.
