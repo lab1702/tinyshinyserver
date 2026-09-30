@@ -437,7 +437,11 @@ wait_for_backend <- function(url, wait_seconds = 0) {
     probe <- function() {
       remaining <- as.numeric(difftime(deadline, Sys.time(), units = "secs"))
       timeout_ms <- if (wait_seconds > 0) max(1, min(1000, remaining * 1000)) else 1000
-      handle <- curl::new_handle(connect_only = TRUE, timeout_ms = ceiling(timeout_ms))
+      # Close the probe connection when it completes. Before libcurl 8, a
+      # connect-only connection otherwise stays open in the unused pool until
+      # garbage collection.
+      handle <- curl::new_handle(connect_only = TRUE, forbid_reuse = TRUE,
+        timeout_ms = ceiling(timeout_ms))
       promises::then(fetch_backend_async(url, handle),
         onFulfilled = function(response) resolve(TRUE),
         onRejected = function(error) {

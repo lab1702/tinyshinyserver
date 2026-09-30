@@ -227,6 +227,21 @@ test_that("proxied requests close their backend connections when they finish", {
   expect_equal(sum(open), 0)
 })
 
+test_that("readiness probes close their connections without garbage collection", {
+  # libcurl 8 closes a finished connect-only connection itself, so the
+  # connection count above can only catch a missing option on older libcurl.
+  options <- NULL
+  new_handle <- curl::new_handle
+  local_mocked_bindings(new_handle = function(...) {
+    options <<- list(...)
+    new_handle()
+  }, .package = "curl")
+  local_mocked_bindings(fetch_backend_async = function(url, handle) promises::promise_resolve(NULL))
+  expect_true(await_response(wait_for_backend("http://127.0.0.1:1/")))
+  expect_true(options$connect_only)
+  expect_true(options$forbid_reuse)
+})
+
 test_that("startup grace expiry returns 503 without blocking timers", {
   backend <- start_test_http_server(function(req) create_html_response("unused"))
   httpuv::stopServer(backend$server)
