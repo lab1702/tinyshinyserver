@@ -65,24 +65,23 @@ documented in NEWS.md and README.md.
   commit that records these results (this file is excluded from the build),
   including the PDF manual, with remote incoming checks disabled and OpenMP
   thread limit set to one.
-* R-hub (commit 2d78c23, run
-  https://github.com/lab1702/tinyshinyserver/actions/runs/36097057817):
+* R-hub (commit 4fc72a8, run
+  https://github.com/lab1702/tinyshinyserver/actions/runs/36750248365):
   linux (R-devel), windows (R-devel), macos-arm64 (R-devel), gcc16, and
-  ubuntu-gcc12.
+  ubuntu-gcc12. The commit recording these results changes only this file,
+  so the package checked is identical.
 
 ## R CMD check results
 
 Local: 0 errors | 0 warnings | 0 notes.
 
-R-hub at commit 2d78c23: 0 errors | 0 warnings | 0 notes on all five platforms.
-Later commits, including the configuration reload and `base_path` features,
-have been checked only locally.
+R-hub at commit 4fc72a8: 0 errors | 0 warnings | 0 notes on all five platforms.
 
-Test results: 1760 passes locally, with 3 intentional skips on CRAN (the
-invalid-device-path write test and two tests that start real R
-processes). Each R-hub platform at commit 2d78c23, before the configuration
-reload tests were added, had 1541 passes and 2 of those skips. All runs had
-0 failures and 0 warnings. One test's expectation count depends on timing.
+Test results: 1760 passes locally and on windows (R-devel), and 1759 on the
+other four R-hub platforms, with 3 intentional skips on CRAN (the
+invalid-device-path write test and two tests that start real R processes).
+All runs had 0 failures and 0 warnings. One test's expectation count depends
+on timing.
 
 ## Downstream dependencies
 
