@@ -1,8 +1,20 @@
 ## Submission
 
-This is an update to version 0.3.0. Version 0.2.1 was submitted on
-2026-09-24, but the CRAN package index still listed 0.2.0 when checked on
-2026-09-24 (UTC).
+This is an update to version 0.3.0. The current CRAN version is 0.2.1,
+published on 2026-09-24 (CRAN package index checked on 2026-11-20).
+
+## CRAN check problems in 0.2.1
+
+The CRAN check results for 0.2.1 show an ERROR on
+r-devel-linux-x86_64-debian-clang and in the noLD additional check (as seen
+on 2026-11-20). Both are the same failure of one test in
+`tests/testthat/test-utils.R`, "is_port_in_use detects open and closed ports
+without warnings". The test stopped an httpuv server and expected its port to
+be closed straight away, but `httpuv::stopServer()` closes the listening
+socket on a background thread after it returns, so the port can still accept
+a connection for a moment. This was a timing fault in the test, not in the
+package, and it is fixed in this release: the test now waits up to 5 seconds
+for the port to close.
 
 ## Changes in this release
 
