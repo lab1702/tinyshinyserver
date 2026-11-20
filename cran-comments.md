@@ -69,8 +69,18 @@ documented in NEWS.md and README.md.
 * Configuration fields that the server does not recognize, such as a
   misspelled option name, are reported as a warning in `server.log` and in
   the outcome of a reload instead of being ignored without notice.
+* A configuration field whose name begins with an option's name, such as
+  `proxy_port_old`, no longer sets that option: R matched it by prefix when
+  the option itself was absent. Unrecognized fields are now removed from the
+  configuration as well as reported.
 * Proxied responses no longer carry two `Date` headers, and a response that
   an app sends without a `Content-Type` is no longer labelled `text/html`.
+* App responses larger than 8 MB are written to a temporary file as they
+  arrive and sent from there, instead of being held in the server's memory.
+  Responses that cannot have a body (HTTP 204 and 304, and the answer to a
+  `HEAD` request) are sent without one; for clients that accept gzip, a
+  compressed empty body followed them.
+* The proxy forwards `PATCH` requests, which it answered with HTTP 405.
 * Apps can be stopped on platforms where the `ps` package cannot list
   processes; stopping an app failed there.
 * An app whose directory is missing, or holds no app entry point, is no
@@ -86,6 +96,11 @@ documented in NEWS.md and README.md.
   path.
 * A Quarto document is rendered only when its rendered page is missing or
   older than another file in the app directory, instead of on every start.
+* An on-demand app that is still starting is no longer stopped as unused 30
+  seconds after the last request. It is left to finish, for up to 10 minutes
+  from its start. A start slower than the two minutes for which the
+  visitor's page reloads, such as a Quarto render, used to be thrown away
+  and begun again on the next visit.
 * New `idle_timeout_minutes` and `log_level` options set how long a session
   may carry no WebSocket message before it is closed (30 minutes by
   default, as before; 0 keeps idle sessions open) and the threshold of the
@@ -106,6 +121,9 @@ documented in NEWS.md and README.md.
 * The landing page and management dashboard have a new design that follows
   the system light or dark theme and has a theme toggle. A new `title`
   option sets the name shown on both pages.
+* The pages' style sheet and script are sent with `Cache-Control` and `ETag`
+  headers, so browsers reuse them instead of fetching them again for every
+  page.
 * `start_tss()` configures logging only in the package's own logger
   namespace, leaving the caller's logger settings unchanged. Port assignments
   are written to `server.log`.
@@ -116,18 +134,18 @@ documented in NEWS.md and README.md.
   imports, as is `glue`, which `logger` needs to format the package's log
   messages. Added `ps`, which `callr` already requires. The package now
   requires `websocket` >= 1.1.0, the first version whose client accepts a
-  `maxMessageSize` argument, and `later` >= 1.4.0, the first version with
-  `later_fd()`.
+  `maxMessageSize` argument, `later` >= 1.4.0, the first version with
+  `later_fd()`, and `curl` >= 3.3, the first version with `file_writer()`.
 
 ## Test environments
 
 * Local: Windows 11 x64 (build 26300), x86_64-w64-mingw32,
   R 4.6.2 (2026-10-29 ucrt).
   Checked with `R CMD check --as-cran` on the source tarball built from
-  commit 97491b8, including the PDF manual and the CRAN incoming
+  commit a76ae4e, including the PDF manual and the CRAN incoming
   feasibility check.
-* R-hub (commit 97491b8, run
-  https://github.com/lab1702/tinyshinyserver/actions/runs/44817964051):
+* R-hub (commit a76ae4e, run
+  https://github.com/lab1702/tinyshinyserver/actions/runs/44827460307):
   linux (R-devel), windows (R-devel), macos-arm64 (R-devel), gcc16, and
   ubuntu-gcc12.
 
@@ -138,10 +156,10 @@ from the build, so the package checked is identical.
 
 Local: 0 errors | 0 warnings | 0 notes.
 
-R-hub at commit 97491b8: 0 errors | 0 warnings | 0 notes on all five platforms.
+R-hub at commit a76ae4e: 0 errors | 0 warnings | 0 notes on all five platforms.
 
-Test results: 1827 passes locally and on all five R-hub platforms, with 5
-intentional skips on CRAN (a timing check of the port test and four tests
+Test results: 1907 passes locally and on all five R-hub platforms, with 7
+intentional skips on CRAN (a timing check of the port test and six tests
 that start real R processes). All runs had 0 failures and 0 warnings. One
 test's expectation count depends on timing.
 
