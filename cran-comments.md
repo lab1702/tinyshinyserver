@@ -73,6 +73,26 @@ documented in NEWS.md and README.md.
   an app sends without a `Content-Type` is no longer labelled `text/html`.
 * Apps can be stopped on platforms where the `ps` package cannot list
   processes; stopping an app failed there.
+* An app whose directory is missing, or holds no app entry point, is no
+  longer started. A resident app with a mistyped path used to start a new R
+  process that exited, every 10 to 15 seconds; the reason is now written to
+  `server.log`.
+* A restart requested from the dashboard or API no longer waits for
+  `restart_delay`, which applies to restarts after a failure. Restarting an
+  on-demand app stops it until it is next opened.
+* The proxy connects to an app's WebSocket when the browser's socket opens
+  instead of at the browser's first message, so sockets on which only the
+  app speaks work. A WebSocket path is checked in the same way as an HTTP
+  path.
+* A Quarto document is rendered only when its rendered page is missing or
+  older than another file in the app directory, instead of on every start.
+* New `idle_timeout_minutes` and `log_level` options set how long a session
+  may carry no WebSocket message before it is closed (30 minutes by
+  default, as before; 0 keeps idle sessions open) and the threshold of the
+  server log.
+* `base_path` values ending in `//` are rejected instead of being accepted
+  with a trailing slash, and `start_tss()` reports a `config` argument that
+  is not a single file path.
 * The management dashboard has a "Reload Config & Restart All" button, also
   available as `POST /api/reload`, that reads the configuration file again
   and restarts all apps without restarting the server. Like the other
@@ -91,7 +111,8 @@ documented in NEWS.md and README.md.
   are written to `server.log`.
 * The package now requires R >= 4.1.0, as its `promises` and `quarto`
   dependencies already do.
-* Removed the unused `future` dependency; `tools` and `utils` are now declared
+* Removed the unused `future` dependency, and `digest`, which only hashed
+  session IDs that are already random. `tools` and `utils` are now declared
   imports, as is `glue`, which `logger` needs to format the package's log
   messages. Added `ps`, which `callr` already requires. The package now
   requires `websocket` >= 1.1.0, the first version whose client accepts a
@@ -103,10 +124,10 @@ documented in NEWS.md and README.md.
 * Local: Windows 11 x64 (build 26300), x86_64-w64-mingw32,
   R 4.6.2 (2026-10-29 ucrt).
   Checked with `R CMD check --as-cran` on the source tarball built from
-  commit 47cf901, including the PDF manual and the CRAN incoming
+  commit 97491b8, including the PDF manual and the CRAN incoming
   feasibility check.
-* R-hub (commit 47cf901, run
-  https://github.com/lab1702/tinyshinyserver/actions/runs/44806384943):
+* R-hub (commit 97491b8, run
+  https://github.com/lab1702/tinyshinyserver/actions/runs/44817964051):
   linux (R-devel), windows (R-devel), macos-arm64 (R-devel), gcc16, and
   ubuntu-gcc12.
 
@@ -117,9 +138,9 @@ from the build, so the package checked is identical.
 
 Local: 0 errors | 0 warnings | 0 notes.
 
-R-hub at commit 47cf901: 0 errors | 0 warnings | 0 notes on all five platforms.
+R-hub at commit 97491b8: 0 errors | 0 warnings | 0 notes on all five platforms.
 
-Test results: 1711 passes locally and on all five R-hub platforms, with 5
+Test results: 1827 passes locally and on all five R-hub platforms, with 5
 intentional skips on CRAN (a timing check of the port test and four tests
 that start real R processes). All runs had 0 failures and 0 warnings. One
 test's expectation count depends on timing.
