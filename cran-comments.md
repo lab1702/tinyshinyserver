@@ -41,6 +41,9 @@ documented in NEWS.md and README.md.
 * The proxy forwards requests and WebSocket sessions only when the app's own
   process is listening on the app's port, so another program holding that
   port never receives users' cookies or credentials.
+* App WebSocket sessions receive the same request headers as proxied HTTP
+  requests, including the identity headers an authenticating reverse proxy
+  adds. Previously only `Cookie` and `Authorization` were forwarded.
 * WebSocket messages larger than 32 MB from an app to the browser no longer
   close the browser session.
 * Proxied HTTP requests are no longer cut off after 30 seconds. Query
@@ -59,6 +62,17 @@ documented in NEWS.md and README.md.
   proxy's JSON error. The response status and headers are unchanged, and
   other clients still receive JSON.
 * Stopping the server with Ctrl-C no longer runs the shutdown twice.
+* The server opens the proxy and management ports before it starts any app,
+  so a second server started by mistake on the same ports stops with an
+  error instead of first starting its own apps and renaming the running
+  server's app logs.
+* Configuration fields that the server does not recognize, such as a
+  misspelled option name, are reported as a warning in `server.log` and in
+  the outcome of a reload instead of being ignored without notice.
+* Proxied responses no longer carry two `Date` headers, and a response that
+  an app sends without a `Content-Type` is no longer labelled `text/html`.
+* Apps can be stopped on platforms where the `ps` package cannot list
+  processes; stopping an app failed there.
 * The management dashboard has a "Reload Config & Restart All" button, also
   available as `POST /api/reload`, that reads the configuration file again
   and restarts all apps without restarting the server. Like the other
@@ -89,14 +103,12 @@ documented in NEWS.md and README.md.
 * Local: Windows 11 x64 (build 26300), x86_64-w64-mingw32,
   R 4.6.2 (2026-10-29 ucrt).
   Checked with `R CMD check --as-cran` on the source tarball built from
-  commit f8e5a83, including the PDF manual and the CRAN incoming
+  commit 47cf901, including the PDF manual and the CRAN incoming
   feasibility check.
-* R-hub (commit f8e5a83, run
-  https://github.com/lab1702/tinyshinyserver/actions/runs/44793781681):
+* R-hub (commit 47cf901, run
+  https://github.com/lab1702/tinyshinyserver/actions/runs/44806384943):
   linux (R-devel), windows (R-devel), macos-arm64 (R-devel), gcc16, and
-  ubuntu-gcc12. The gcc16 job passed on its second attempt; the first
-  stopped before the check began, when the job's dependency setup could not
-  download the `pak` installer.
+  ubuntu-gcc12.
 
 The commit recording these results changes only this file, which is excluded
 from the build, so the package checked is identical.
@@ -105,12 +117,12 @@ from the build, so the package checked is identical.
 
 Local: 0 errors | 0 warnings | 0 notes.
 
-R-hub at commit f8e5a83: 0 errors | 0 warnings | 0 notes on all five platforms.
+R-hub at commit 47cf901: 0 errors | 0 warnings | 0 notes on all five platforms.
 
-Test results: 1712 passes locally and on all five R-hub platforms, with 3
-intentional skips on CRAN (a timing check of the port test and two tests that
-start real R processes). All runs had 0 failures and 0 warnings. One test's
-expectation count depends on timing.
+Test results: 1711 passes locally and on all five R-hub platforms, with 5
+intentional skips on CRAN (a timing check of the port test and four tests
+that start real R processes). All runs had 0 failures and 0 warnings. One
+test's expectation count depends on timing.
 
 ## Downstream dependencies
 
