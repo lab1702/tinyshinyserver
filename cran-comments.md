@@ -43,8 +43,17 @@ documented in NEWS.md and README.md.
   port never receives users' cookies or credentials.
 * WebSocket messages larger than 32 MB from an app to the browser no longer
   close the browser session.
-* Proxied HTTP requests are no longer cut off after 30 seconds, and query
-  strings may be up to 8,192 characters.
+* Proxied HTTP requests are no longer cut off after 30 seconds. Query
+  strings may be up to 8,192 characters and may contain a literal `%`.
+* Requests from the proxy to apps no longer follow the `http_proxy` and
+  `ALL_PROXY` environment variables, which sent app traffic to a configured
+  proxy and left every app unreachable.
+* Transfers between the proxy and apps wait on their sockets instead of
+  polling on a timer, which limited uploads to about 4 MB per second, and a
+  request to a running app no longer opens a separate connection first. An
+  upload that an app refuses from its headers returns the app's response.
+* A port is tested for use by listening on it briefly instead of connecting
+  to it, which took about a second for each app on Windows.
 * The management dashboard has a "Reload Config & Restart All" button, also
   available as `POST /api/reload`, that reads the configuration file again
   and restarts all apps without restarting the server. Like the other
@@ -67,33 +76,34 @@ documented in NEWS.md and README.md.
   imports, as is `glue`, which `logger` needs to format the package's log
   messages. Added `ps`, which `callr` already requires. The package now
   requires `websocket` >= 1.1.0, the first version whose client accepts a
-  `maxMessageSize` argument.
+  `maxMessageSize` argument, and `later` >= 1.4.0, the first version with
+  `later_fd()`.
 
 ## Test environments
 
-* Local: Windows 11 x64 (build 28000), x86_64-w64-mingw32,
-  R 4.6.1 (2026-06-24 ucrt).
-  Checked with `R CMD check --as-cran` on the source tarball built from the
-  commit that records these results (this file is excluded from the build),
-  including the PDF manual, with remote incoming checks disabled and OpenMP
-  thread limit set to one.
-* R-hub (commit 4fc72a8, run
-  https://github.com/lab1702/tinyshinyserver/actions/runs/36750248365):
+* Local: Windows 11 x64 (build 26300), x86_64-w64-mingw32,
+  R 4.6.2 (2026-10-29 ucrt).
+  Checked with `R CMD check --as-cran` on the source tarball built from
+  commit a7d9069, including the PDF manual and the CRAN incoming
+  feasibility check.
+* R-hub (commit a7d9069, run
+  https://github.com/lab1702/tinyshinyserver/actions/runs/44785636730):
   linux (R-devel), windows (R-devel), macos-arm64 (R-devel), gcc16, and
-  ubuntu-gcc12. The commit recording these results changes only this file,
-  so the package checked is identical.
+  ubuntu-gcc12.
+
+The commit recording these results changes only this file, which is excluded
+from the build, so the package checked is identical.
 
 ## R CMD check results
 
 Local: 0 errors | 0 warnings | 0 notes.
 
-R-hub at commit 4fc72a8: 0 errors | 0 warnings | 0 notes on all five platforms.
+R-hub at commit a7d9069: 0 errors | 0 warnings | 0 notes on all five platforms.
 
-Test results: 1760 passes locally and on windows (R-devel), and 1759 on the
-other four R-hub platforms, with 3 intentional skips on CRAN (the
-invalid-device-path write test and two tests that start real R processes).
-All runs had 0 failures and 0 warnings. One test's expectation count depends
-on timing.
+Test results: 1810 passes locally and on all five R-hub platforms, with 4
+intentional skips on CRAN (the invalid-device-path write test, a timing check
+of the port test, and two tests that start real R processes). All runs had
+0 failures and 0 warnings. One test's expectation count depends on timing.
 
 ## Downstream dependencies
 
