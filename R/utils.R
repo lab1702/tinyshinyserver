@@ -385,19 +385,17 @@ process_owns_port <- function(process, port) {
 }
 
 is_port_in_use <- function(host, port) {
-  "Check if a port is in use (has a process listening on it)"
+  "Check if a port is in use (an app could not listen on it)"
 
+  # Listen on the port briefly, as an app will. Connecting to it instead
+  # waits about a second for each free port on Windows, where a refused
+  # loopback connection is retried, which held up startup and every reload.
   tryCatch(
     {
-      # Try to establish a connection to the port
-      conn <- suppressWarnings(
-        socketConnection(host = host, port = port, timeout = 1, blocking = TRUE)
-      )
-      close(conn)
-      return(TRUE) # Connection succeeded = port is in use
+      server <- httpuv::startServer(host, port, list(), quiet = TRUE)
+      httpuv::stopServer(server)
+      FALSE
     },
-    error = function(e) {
-      return(FALSE) # Connection failed = port is free
-    }
+    error = function(e) TRUE
   )
 }

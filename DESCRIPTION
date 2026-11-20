@@ -18,7 +18,7 @@ Imports:
     callr,
     ps,
     jsonlite,
-    later,
+    later (>= 1.4.0),
     curl,
     promises,
     digest,

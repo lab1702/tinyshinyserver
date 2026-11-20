@@ -240,6 +240,157 @@ test_that("readiness probes close their connections without garbage collection",
   expect_true(await_response(wait_for_backend("http://127.0.0.1:1/")))
   expect_true(options$connect_only)
   expect_true(options$forbid_reuse)
+  expect_identical(options$noproxy, "*")
+})
+
+test_that("backend requests ignore proxy environment variables", {
+  backend <- start_test_http_server(function(req) create_html_response("direct"))
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  variables <- c("http_proxy", "ALL_PROXY", "all_proxy", "no_proxy", "NO_PROXY")
+  old <- Sys.getenv(variables, unset = NA)
+  on.exit(for (name in variables) {
+    if (is.na(old[[name]])) Sys.unsetenv(name) else do.call(Sys.setenv, as.list(old[name]))
+  }, add = TRUE)
+  # Nothing listens on the discard port, so a request sent to this proxy fails
+  Sys.unsetenv(c("no_proxy", "NO_PROXY"))
+  Sys.setenv(http_proxy = "http://127.0.0.1:9", ALL_PROXY = "http://127.0.0.1:9")
+
+  expect_true(await_response(wait_for_backend(backend$url)))
+  config <- proxy_test_config(backend$port)
+  response <- await_response(forward_request("GET", backend$url, list(), "app", config))
+  expect_equal(response$status, 200)
+  expect_identical(rawToChar(response$body), "direct")
+})
+
+test_that("requests to a running app are forwarded without a readiness probe", {
+  seen <- character()
+  backend <- start_test_http_server(function(req) {
+    seen <<- c(seen, paste0(req$PATH_INFO, req$QUERY_STRING))
+    create_html_response("ready")
+  })
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  config <- proxy_test_config(backend$port)
+  local_mocked_bindings(wait_for_backend = function(...) stop("A running app must not be probed"))
+  # A literal "%" in the query reaches the app unchanged
+  url <- paste0(backend$url, "/page?discount=50%&x=1")
+  response <- await_response(forward_request("GET", url, list(), "app", config))
+  expect_equal(response$status, 200)
+  expect_identical(seen, "/page?discount=50%&x=1")
+})
+
+test_that("a refused connection to a verified app returns 503 and rechecks its port", {
+  config <- proxy_test_config(3001)
+  local_mocked_bindings(process_owns_port = function(process, port) TRUE)
+  expect_true(config$app_backend_verified("app"))
+  local_mocked_bindings(
+    wait_for_backend = function(...) stop("A running app must not be probed"),
+    fetch_backend_async = function(url, handle) promises::promise_reject(structure(
+      class = c("backend_connect_error", "simpleError", "error", "condition"),
+      list(message = "Could not connect to 127.0.0.1 port 3001", call = NULL)
+    ))
+  )
+  result <- await_response(forward_request("GET", "http://127.0.0.1:3001/", list(), "app", config))
+  expect_equal(result$status, 503)
+  expect_match(result$body, "not ready")
+  expect_no_match(result$body, "3001")
+  expect_false(exists("app", envir = config$verified_backends, inherits = FALSE))
+})
+
+test_that("only transfers that never connect are marked as connection failures", {
+  backend <- start_test_http_server(function(req) create_html_response("unused"))
+  httpuv::stopServer(backend$server)
+  deadline <- Sys.time() + 5
+  while (is_port_in_use("127.0.0.1", backend$port) && Sys.time() < deadline) Sys.sleep(0.05)
+  # Windows retries a refused loopback connection for about two seconds
+  refused <- tryCatch(
+    await_response(fetch_backend_async(backend$url, curl::new_handle(connecttimeout_ms = 500))),
+    error = function(e) e
+  )
+  expect_s3_class(refused, "backend_connect_error")
+  expect_s3_class(refused, "error")
+
+  release <- NULL
+  stalled <- start_test_http_server(function(req) promises::promise(function(resolve, reject) {
+    release <<- resolve
+  }))
+  on.exit(httpuv::stopServer(stalled$server), add = TRUE)
+  timed_out <- tryCatch(
+    await_response(fetch_backend_async(stalled$url, curl::new_handle(timeout_ms = 300))),
+    error = function(e) e
+  )
+  release(create_html_response("late"))
+  expect_s3_class(timed_out, "error")
+  expect_false(inherits(timed_out, "backend_connect_error"))
+})
+
+test_that("an upload the app refuses from its headers returns the app's response", {
+  # Like Shiny above shiny.maxRequestSize: answer from the headers, then close
+  expects <- list()
+  stored <- NULL
+  server <- NULL
+  for (port in sample(20000:50000, 3)) {
+    server <- tryCatch(httpuv::startServer("127.0.0.1", port, list(
+      onHeaders = function(req) {
+        expects[[length(expects) + 1L]] <<- req$HTTP_EXPECT
+        reject_large_request_body(req, 1024^2)
+      },
+      call = function(req) {
+        stored <<- length(req$rook.input$read())
+        create_html_response("stored")
+      }
+    ), quiet = TRUE), error = function(e) NULL)
+    if (!is.null(server)) break
+  }
+  if (is.null(server)) skip("Loopback sockets unavailable")
+  on.exit(httpuv::stopServer(server), add = TRUE)
+  config <- proxy_test_config(port)
+  url <- paste0("http://127.0.0.1:", port, "/upload")
+  upload <- function(size) {
+    body <- raw(size)
+    # curl sends this header with large uploads; the proxy must not pass it on
+    req <- list(HTTP_EXPECT = "100-continue", CONTENT_TYPE = "application/octet-stream",
+      rook.input = list(read = function() body))
+    await_response(forward_request("POST", url, req, "app", config))
+  }
+
+  # Sending the body anyway resets the connection and can lose the answer
+  for (attempt in 1:5) {
+    expect_equal(upload(8 * 1024^2)$status, 413)
+  }
+  expect_null(stored)
+
+  # A large body the app accepts is sent after the app agrees to it
+  expect_equal(upload(512 * 1024)$status, 200)
+  expect_equal(stored, 512 * 1024)
+  expect_identical(expects[[length(expects)]], "100-continue")
+
+  # A small body goes with the request, without the client's Expect header
+  expects <- list()
+  expect_equal(upload(1024)$status, 200)
+  expect_equal(stored, 1024)
+  expect_length(expects, 0)
+})
+
+test_that("transfers wait on their sockets instead of polling on a timer", {
+  received <- NULL
+  backend <- start_test_http_server(function(req) {
+    received <<- length(req$rook.input$read())
+    create_html_response("stored")
+  })
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  # A timer poll sends one upload buffer, 64 KB by default, on each tick
+  timer_polls <- 0
+  later_real <- later::later
+  local_mocked_bindings(later = function(func, delay = 0, ...) {
+    if (delay > 0 && delay <= 0.01) timer_polls <<- timer_polls + 1
+    later_real(func, delay, ...)
+  }, .package = "later")
+  body <- raw(4 * 1024^2)
+  handle <- curl::new_handle(customrequest = "POST", postfields = body)
+  response <- await_response(fetch_backend_async(backend$url, handle))
+  expect_equal(response$status_code, 200)
+  expect_equal(received, length(body))
+  expect_lt(timer_polls, 5)
 })
 
 test_that("startup grace expiry returns 503 without blocking timers", {

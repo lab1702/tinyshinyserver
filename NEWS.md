@@ -24,6 +24,8 @@
 
 * HTTP 502 responses from the proxy no longer include the underlying connection error, which named the app's internal address and port. The error is written to `server.log`.
 
+* Requests to apps no longer follow the `http_proxy` and `ALL_PROXY` environment variables. Where R was configured to use a proxy and `no_proxy` did not list `127.0.0.1`, app requests, with their cookies and bodies, were sent to that proxy, and every app answered HTTP 502 or 503.
+
 ## Web pages
 
 * The landing page and management dashboard have a new design. They follow the system light or dark theme by default and have a theme toggle; an explicit choice is remembered in the browser until it is switched back to match the system. Error and status pages use the same theme.
@@ -61,6 +63,14 @@
 * Proxied responses are passed to the browser as the app's bytes. The proxy previously scanned responses with other content types, such as CSV, JSON, and ZIP downloads, for zero bytes and converted text to a string, briefly using about 11 times the response size in memory; text responses over 2 GB failed.
 
 * Proxied HTTP requests and readiness checks now close their connections to the app when they finish. The connections previously stayed open until R ran garbage collection, so bursts of requests left many idle sockets open in both the server and the app. With libcurl older than 8, each readiness check also left a connection open.
+
+* Uploads to apps are no longer limited to about 4 MB per second, and every proxied request is faster. A transfer now continues as soon as the app's socket is ready instead of on a 10-millisecond timer, and a request to a running app no longer opens a separate connection first to check that the app is listening. This requires `later` 1.4.0 or later.
+
+* An upload that an app refuses from its headers, such as one above `shiny.maxRequestSize`, now returns the app's HTTP 413 response. It returned HTTP 502 when the client sent `Expect: 100-continue`, as curl does for large uploads. The proxy now offers request bodies over 64 KB to the app with `Expect: 100-continue` and sends them once the app agrees.
+
+* Assigning app ports no longer waits about a second for each app on Windows, which delayed startup and paused all apps' traffic during a configuration reload. A port now counts as in use when the server cannot listen on it.
+
+* The proxy no longer rejects, with HTTP 400, query strings that contain a literal `%`, such as `?discount=50%&x=1`, or paths with a name that only starts or ends with two dots, such as `/..hidden/`. Paths with a `..` segment are still rejected.
 
 * Configuration validation now rejects an empty `log_dir`, which put the logs in the filesystem root, an app `resident` value of `null`, which stopped the server at startup, and app names that differ only in letter case, which shared log files on Windows and macOS.
 

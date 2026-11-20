@@ -254,6 +254,11 @@ handle_proxy_request <- function(path, method, query_string, req, config, proces
   })
 }
 
+# Request bodies above this size are offered to the app with
+# "Expect: 100-continue" before they are sent. libcurl writes a smaller body
+# in one piece, right after the request headers.
+EXPECT_CONTINUE_BYTES <- 65536
+
 forward_request <- function(method, target_url, req, app_name, config) {
   "Forward HTTP requests without blocking the server's event loop"
 
@@ -289,7 +294,9 @@ forward_request <- function(method, target_url, req, app_name, config) {
     skip_headers <- c(
       "HOST", "CONNECTION", "KEEP_ALIVE", "TRANSFER_ENCODING",
       "TE", "TRAILER", "UPGRADE", "PROXY_AUTHORIZATION",
-      "PROXY_AUTHENTICATE", "CONTENT_LENGTH", "CONTENT_TYPE"
+      "PROXY_AUTHENTICATE", "CONTENT_LENGTH", "CONTENT_TYPE",
+      # httpuv has already answered the client's expectation and read the body
+      "EXPECT"
     )
     headers <- list()
     for (name in names(req)) {
@@ -309,7 +316,17 @@ forward_request <- function(method, target_url, req, app_name, config) {
       }
     }
 
-    response <- promises::then(wait_for_backend(target_url, wait_seconds), function(ready) {
+    # A running app whose own process holds its port needs no probe. While an
+    # app starts, or when its port cannot be verified, probe first so the
+    # request is never sent before the app is ready.
+    probe <- starting || !config$app_backend_verified(app_name)
+    backend_ready <- if (probe) {
+      wait_for_backend(target_url, wait_seconds)
+    } else {
+      promises::promise_resolve(TRUE)
+    }
+
+    response <- promises::then(backend_ready, function(ready) {
       if (!identical(config$get_app_process(app_name), request_process)) {
         return(create_503_response(sprintf("App '%s' restarted, please retry", app_name), 2))
       }
@@ -332,11 +349,22 @@ forward_request <- function(method, target_url, req, app_name, config) {
       # documents that render during the request still complete. The handle and
       # its pool are never reused, so close the backend connection when done
       # instead of leaving it open until garbage collection.
-      handle <- curl::new_handle(
+      handle <- new_backend_handle(
         customrequest = method, nobody = identical(method, "HEAD"),
         connecttimeout = 10, low_speed_limit = 1, low_speed_time = 600, followlocation = FALSE,
         accept_encoding = "identity", http_content_decoding = FALSE, forbid_reuse = TRUE
       )
+      # An app can refuse an upload from its headers alone, as Shiny does above
+      # shiny.maxRequestSize, and then closes the connection. Body data sent
+      # after that resets the connection, which can discard the app's answer
+      # before it is read. So offer a large body first and send it once the
+      # app agrees. The curl package turns this handshake off: it sets no wait
+      # and handle_setheaders() adds an empty "Expect" header, hence the
+      # lower-case name.
+      if (length(body) > EXPECT_CONTINUE_BYTES) {
+        headers[["expect"]] <- "100-continue"
+        curl::handle_setopt(handle, expect_100_timeout_ms = 1000)
+      }
       curl::handle_setheaders(handle, .list = headers)
       if (!is.null(body) && length(body) > 0) {
         curl::handle_setopt(handle, postfields = body)
@@ -353,6 +381,17 @@ forward_request <- function(method, target_url, req, app_name, config) {
           headers = response_headers,
           body = response$content
         )
+      }, onRejected = function(e) {
+        if (!inherits(e, "backend_connect_error")) stop(e)
+        # The app no longer listens where it was verified, so check its port
+        # again before the next request is forwarded.
+        logger::log_warn("App {app_name} did not accept a connection: {error}",
+          app_name = app_name, error = conditionMessage(e)
+        )
+        if (exists(app_name, envir = config$verified_backends, inherits = FALSE)) {
+          rm(list = app_name, envir = config$verified_backends)
+        }
+        create_503_response(sprintf("App '%s' is not ready", app_name), 2)
       })
     })
     promises::then(response, onRejected = proxy_error)
@@ -407,19 +446,54 @@ proxy_response_headers <- function(raw_headers, target_url, app_name, method, ba
   headers
 }
 
-# Drive libcurl with zero-timeout polls so other HTTP and WebSocket callbacks
-# can run between polls. Each transfer has its own pool and fresh easy handle;
-# neither cookies nor authentication state can survive into another request.
+# Apps listen on loopback, so their traffic must never follow http_proxy or
+# ALL_PROXY: a proxy cannot reach the app, and would be sent users' cookies
+# and request bodies.
+new_backend_handle <- function(...) {
+  curl::new_handle(..., noproxy = "*")
+}
+
+# A transfer that failed before a connection was established never reached
+# the app. Such failures carry the class "backend_connect_error".
+backend_fetch_error <- function(message, handle) {
+  connected <- tryCatch(
+    curl::handle_data(handle)$times[["connect"]] > 0,
+    error = function(e) TRUE
+  )
+  structure(
+    class = c(if (!isTRUE(connected)) "backend_connect_error", "simpleError", "error", "condition"),
+    list(message = as.character(message), call = NULL)
+  )
+}
+
+# Drive libcurl without blocking: after each step, wait for the transfer's own
+# sockets, so other HTTP and WebSocket callbacks run in between and a transfer
+# continues as soon as it can. Polling on a timer instead sent one buffer per
+# tick, which capped uploads at a few megabytes per second. Each transfer has
+# its own pool and fresh easy handle; neither cookies nor authentication state
+# can survive into another request.
 fetch_backend_async <- function(url, handle) {
   promises::promise(function(resolve, reject) {
     pool <- curl::new_pool()
     curl::curl_fetch_multi(url, handle = handle, pool = pool,
-      done = resolve, fail = function(message) reject(simpleError(as.character(message)))
+      done = resolve, fail = function(message) reject(backend_fetch_error(message, handle))
     )
-    pump <- function() {
+    # later_fd() passes the sockets' readiness, which multi_run() finds itself
+    pump <- function(...) {
       tryCatch({
         result <- curl::multi_run(timeout = 0, pool = pool)
-        if (result$pending > 0) later::later(pump, 0.01)
+        if (result$pending > 0) {
+          fds <- curl::multi_fdset(pool)
+          # libcurl's timers (connect and stall timeouts) need a call even
+          # when no socket becomes ready; its timeout is in milliseconds
+          wait <- if (fds$timeout < 0) 1 else min(fds$timeout / 1000, 1)
+          if (length(fds$reads) + length(fds$writes) + length(fds$exceptions) == 0) {
+            # Nothing to wait on yet, for example before the socket exists
+            later::later(pump, min(wait, 0.01))
+          } else {
+            later::later_fd(pump, fds$reads, fds$writes, fds$exceptions, timeout = wait)
+          }
+        }
       }, error = function(e) {
         curl::multi_cancel(handle)
         reject(e)
@@ -440,7 +514,7 @@ wait_for_backend <- function(url, wait_seconds = 0) {
       # Close the probe connection when it completes. Before libcurl 8, a
       # connect-only connection otherwise stays open in the unused pool until
       # garbage collection.
-      handle <- curl::new_handle(connect_only = TRUE, forbid_reuse = TRUE,
+      handle <- new_backend_handle(connect_only = TRUE, forbid_reuse = TRUE,
         timeout_ms = ceiling(timeout_ms))
       promises::then(fetch_backend_async(url, handle),
         onFulfilled = function(response) resolve(TRUE),

@@ -18,8 +18,10 @@ validate_path <- function(path, max_length = 1000) {
     return(list(valid = FALSE, error = "Path contains null bytes"))
   }
 
-  # Check for path traversal attempts (only dangerous patterns)
-  if (grepl("\\.\\.[\\/\\\\]", path) || grepl("[\\/\\\\]\\.\\.", path)) {
+  # Check for path traversal: ".." as a whole path segment. Names that only
+  # start or end with two dots, such as "/..hidden" or "/notes../", are not
+  # parent-directory references.
+  if (grepl("(^|[/\\\\])\\.\\.([/\\\\]|$)", path)) {
     return(list(valid = FALSE, error = "Path traversal detected"))
   }
 
@@ -71,11 +73,8 @@ validate_query_string <- function(query_string, max_length = 8192) {
     return(list(valid = FALSE, error = "Query string contains null bytes"))
   }
 
-  # Basic URL encoding validation
-  if (grepl("%[^0-9A-Fa-f]", query_string) || grepl("%[0-9A-Fa-f][^0-9A-Fa-f]", query_string)) {
-    return(list(valid = FALSE, error = "Invalid URL encoding"))
-  }
-
+  # The query is forwarded to the app verbatim, so its percent-encoding is the
+  # app's to interpret: a literal "%" as in "?discount=50%&x=1" is not rejected.
   return(list(valid = TRUE, sanitized = query_string))
 }
 

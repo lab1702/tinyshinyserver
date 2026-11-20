@@ -54,9 +54,21 @@ test_that("validate_path detects path traversal attacks", {
   expect_false(result$valid)
   expect_match(result$error, "Path traversal")
 
-  # ".." by itself or at the end is OK (handled by patterns)
+  # Two dots at the end of a name are not a parent-directory reference
   result <- validate_path("valid/path..")
   expect_true(result$valid)
+})
+
+test_that("validate_path treats only whole '..' segments as traversal", {
+  for (path in c("/proxy/app/..hidden/x.css", "/proxy/app/notes../file.txt",
+    "/proxy/app/v1...latest/x", "/proxy/app/a..b")) {
+    expect_true(validate_path(path)$valid, info = path)
+  }
+  for (path in c("..", "../x", "/proxy/app/..", "/proxy/app/../x", "a\\..\\b", "a/..\\b")) {
+    result <- validate_path(path)
+    expect_false(result$valid, info = path)
+    expect_match(result$error, "Path traversal", info = path)
+  }
 })
 
 test_that("validate_path rejects dangerous control characters", {
@@ -170,20 +182,13 @@ test_that("validate_query_string accepts long Shiny bookmark URLs by default", {
   expect_false(validate_query_string(paste0("?", strrep("a", 8193)))$valid)
 })
 
-test_that("validate_query_string validates URL encoding", {
-  # Invalid: % followed by non-hex
-  result <- validate_query_string("key=%ZZ")
-  expect_false(result$valid)
-  expect_match(result$error, "Invalid URL encoding")
-
-  # Invalid: % followed by only one hex digit
-  result <- validate_query_string("key=%2G")
-  expect_false(result$valid)
-  expect_match(result$error, "Invalid URL encoding")
-
-  # Valid: proper encoding
-  result <- validate_query_string("key=%20%2F%3D")
-  expect_true(result$valid)
+test_that("validate_query_string leaves percent-encoding to the app", {
+  # The query is forwarded verbatim, so a literal "%" must reach the app
+  for (query in c("?discount=50%&x=1", "q=100%", "key=%ZZ", "key=%2G", "key=%20%2F%3D")) {
+    result <- validate_query_string(query)
+    expect_true(result$valid, info = query)
+    expect_identical(result$sanitized, query, info = query)
+  }
 })
 
 # ============================================================================

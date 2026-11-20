@@ -284,6 +284,18 @@ test_that("is_port_in_use detects open and closed ports without warnings", {
   expect_false(in_use)
 })
 
+test_that("is_port_in_use answers for a free port without waiting for a refused connection", {
+  # Connecting to a free loopback port takes over a second on Windows
+  skip_on_cran()
+  backend <- start_test_http_server(function(req) create_html_response("OK"))
+  httpuv::stopServer(backend$server)
+  deadline <- Sys.time() + 5
+  while (is_port_in_use("127.0.0.1", backend$port) && Sys.time() < deadline) Sys.sleep(0.05)
+  elapsed <- system.time(in_use <- is_port_in_use("127.0.0.1", backend$port))[["elapsed"]]
+  expect_false(in_use)
+  expect_lt(elapsed, 0.5)
+})
+
 # ============================================================================
 # is_process_alive() tests
 # ============================================================================
