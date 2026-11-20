@@ -1,6 +1,60 @@
 # Process Management Module
 # Handles Shiny app process lifecycle, health monitoring, and cleanup
 
+# What an app directory holds, in the order start_app() prefers: a standard
+# Shiny app, then an R Markdown document, then a Quarto document. A directory
+# that cannot be served is an error here, so that no process is started only
+# to exit again.
+detect_app_type <- function(app_path) {
+  if (!dir.exists(app_path)) {
+    stop("App directory not found: ", app_path, call. = FALSE)
+  }
+
+  has_app_r <- file.exists(file.path(app_path, "app.R"))
+  has_ui_server <- file.exists(file.path(app_path, "ui.R")) && file.exists(file.path(app_path, "server.R"))
+  if (has_app_r || has_ui_server) {
+    return(list(type = "shiny"))
+  }
+
+  # The first matching document in alphabetical order is used
+  rmd_files <- list.files(app_path, pattern = "\\.Rmd$", full.names = TRUE)
+  if (length(rmd_files) > 0) {
+    return(list(type = "rmd", file = rmd_files[1]))
+  }
+  qmd_files <- list.files(app_path, pattern = "\\.qmd$", full.names = TRUE)
+  if (length(qmd_files) > 0) {
+    return(list(type = "qmd", file = qmd_files[1]))
+  }
+
+  # shiny::runApp() also accepts these names in any letter case, and a
+  # server.R whose page is www/index.html
+  if (any(tolower(list.files(app_path)) %in% c("app.r", "server.r"))) {
+    return(list(type = "shiny"))
+  }
+
+  stop("No app.R, ui.R and server.R, .Rmd, or .qmd file found in ", app_path, call. = FALSE)
+}
+
+# quarto_serve() renders a document before serving it, which takes many
+# seconds on every start, including each start of an on-demand app. The
+# rendered page stays valid while it is newer than every other file in the
+# app directory, so render only when it is missing or something has changed.
+quarto_needs_render <- function(qmd_file) {
+  output <- sub("\\.qmd$", ".html", qmd_file)
+  if (!file.exists(output)) {
+    return(TRUE)
+  }
+
+  app_dir <- dirname(qmd_file)
+  # Files that rendering itself writes
+  generated <- c(basename(output), sub("\\.qmd$", "_files", basename(qmd_file)), ".quarto")
+  sources <- list.files(app_dir, recursive = TRUE, all.files = TRUE)
+  sources <- sources[!sub("/.*$", "", sources) %in% generated]
+  # A file as new as the page may have changed after it was rendered
+  changed <- file.mtime(file.path(app_dir, sources)) >= file.mtime(output)
+  any(is.na(changed) | changed)
+}
+
 # Process Manager Class
 ProcessManager <- setRefClass("ProcessManager",
   fields = list(
@@ -20,23 +74,20 @@ ProcessManager <- setRefClass("ProcessManager",
       app_port <- app_config$port
       app_path <- normalizePath(app_config$path, mustWork = FALSE)
 
+      # Fails here, with the reason, for a directory that cannot be served
+      app <- detect_app_type(app_path)
+
       logger::log_info("Starting app {app_name} on port {app_port}", app_name = app_name, app_port = app_port)
 
-      # Determine app type - prioritize traditional Shiny apps over Rmd
-      has_app_r <- file.exists(file.path(app_path, "app.R"))
-      has_ui_server <- file.exists(file.path(app_path, "ui.R")) && file.exists(file.path(app_path, "server.R"))
-      has_traditional_shiny <- has_app_r || has_ui_server
-
-      rmd_files <- list.files(app_path, pattern = "\\.Rmd$", full.names = TRUE)
-      qmd_files <- list.files(app_path, pattern = "\\.qmd$", full.names = TRUE)
-      is_rmd_app <- !has_traditional_shiny && length(rmd_files) > 0
-      is_qmd_app <- !has_traditional_shiny && !is_rmd_app && length(qmd_files) > 0
-
-      if (is_qmd_app) {
-        logger::log_info("Detected Quarto document for {app_name}, using quarto::quarto_serve", app_name = app_name)
-      } else if (is_rmd_app) {
+      render <- FALSE
+      if (app$type == "qmd") {
+        render <- quarto_needs_render(app$file)
+        logger::log_info("Detected Quarto document for {app_name}, using quarto::quarto_serve ({rendering})",
+          app_name = app_name, rendering = if (render) "rendering it first" else "its rendered page is current"
+        )
+      } else if (app$type == "rmd") {
         logger::log_info("Detected R Markdown app for {app_name}, using rmarkdown::run", app_name = app_name)
-      } else if (has_traditional_shiny) {
+      } else {
         logger::log_info("Detected traditional Shiny app for {app_name}", app_name = app_name)
       }
 
@@ -65,56 +116,18 @@ ProcessManager <- setRefClass("ProcessManager",
       # files so that output from child processes and native code is captured
       # and can never fill an unread pipe.
       process <- callr::r_bg(
-        function(app_path, port, is_rmd_app, rmd_files, is_qmd_app, qmd_files) {
-          if (is_qmd_app && length(qmd_files) > 0) {
-            # Load quarto library with error handling
-            tryCatch(
-              {
-                requireNamespace("quarto", quietly = TRUE)
-              },
-              error = function(e) {
-                stop("quarto package required. Install with: install.packages('quarto')")
-              }
-            )
-
-            # Use the first .qmd file found (use absolute path for security)
-            qmd_file <- qmd_files[1]
-
-            # Validate that the qmd file exists and is readable
-            if (!file.exists(qmd_file)) {
-              stop("Quarto document not found: ", qmd_file)
-            }
-
-            # Start the Quarto app using quarto::quarto_serve
+        function(app_path, port, type, file, render) {
+          if (type == "qmd") {
             quarto::quarto_serve(
-              input = qmd_file,
-              render = TRUE,
+              input = file,
+              render = render,
               port = port,
               host = "127.0.0.1",
               browse = FALSE
             )
-          } else if (is_rmd_app && length(rmd_files) > 0) {
-            # Load rmarkdown library with error handling
-            tryCatch(
-              {
-                requireNamespace("rmarkdown", quietly = TRUE)
-              },
-              error = function(e) {
-                stop("rmarkdown package required. Install with: install.packages('rmarkdown')")
-              }
-            )
-
-            # Use the first .Rmd file found (use absolute path for security)
-            rmd_file <- rmd_files[1]
-
-            # Validate that the Rmd file exists and is readable
-            if (!file.exists(rmd_file)) {
-              stop("R Markdown file not found: ", rmd_file)
-            }
-
-            # Start the R Markdown app using rmarkdown::run
+          } else if (type == "rmd") {
             rmarkdown::run(
-              file = rmd_file,
+              file = file,
               shiny_args = list(
                 port = port,
                 host = "127.0.0.1",
@@ -122,7 +135,6 @@ ProcessManager <- setRefClass("ProcessManager",
               )
             )
           } else {
-            # Start the regular Shiny app
             shiny::runApp(
               appDir = app_path,
               port = port,
@@ -134,10 +146,9 @@ ProcessManager <- setRefClass("ProcessManager",
         args = list(
           app_path = app_path,
           port = app_port,
-          is_rmd_app = is_rmd_app,
-          rmd_files = rmd_files,
-          is_qmd_app = is_qmd_app,
-          qmd_files = qmd_files
+          type = app$type,
+          file = app$file,
+          render = render
         ),
         stdout = output_log,
         stderr = error_log,
@@ -269,7 +280,7 @@ ProcessManager <- setRefClass("ProcessManager",
       return(success)
     },
     schedule_restart = function(app_config) {
-      "Schedule a replacement without blocking other applications"
+      "Restart a failed resident app after restart_delay, without blocking other applications"
       app_name <- app_config$name
       token <- new.env(parent = emptyenv())
       assign(app_name, token, envir = pending_restarts)
@@ -278,30 +289,20 @@ ProcessManager <- setRefClass("ProcessManager",
         assign(app_name, NULL, envir = pending_restarts)
         process <- config$get_app_process(app_name)
         if (!is.null(process) && is_process_alive(process)) return(FALSE)
-        tryCatch({
-          success <- start_app(app_config)
-          if (isTRUE(success) && !app_config$resident) {
-            # A restart disconnects users; reclaim the replacement if none return.
-            # Allow startup time as well as the normal browser-session grace.
-            create_connection_manager(config, .self)$schedule_session_check(app_name,
-              (app_config$appstart_timeout %||% 2) + config$HTTP_SESSION_GRACE_SECONDS)
-          }
-          success
-        }, error = function(e) {
+        tryCatch(start_app(app_config), error = function(e) {
           logger::log_error("Failed to restart app {app_name}: {error}", app_name = app_name, error = e$message)
           FALSE
         })
       }
       delay <- config$config$restart_delay %||% 5
       if (delay <= 0) {
-        success <- isTRUE(restart())
-        return(list(success = success, message = if (success) paste("App", app_name, "restarted successfully") else paste("Failed to restart app", app_name)))
+        return(isTRUE(restart()))
       }
       later::later(restart, delay)
-      list(success = TRUE, message = paste("Restart scheduled for app", app_name))
+      TRUE
     },
     restart_app = function(app_name) {
-      "Restart a specific application"
+      "Restart a specific application on request"
 
       app_config <- config$get_app_config(app_name)
       if (is.null(app_config)) {
@@ -323,7 +324,21 @@ ProcessManager <- setRefClass("ProcessManager",
             }
           }
           config$remove_app_process(app_name)
-          return(schedule_restart(app_config))
+          # This restart replaces one that a failure had scheduled
+          assign(app_name, NULL, envir = pending_restarts)
+
+          # An on-demand app has no users left to serve, so it starts again
+          # when it is next opened
+          if (!app_config$resident) {
+            return(list(success = TRUE, message = paste(
+              "App", app_name, "stopped; it starts again when it is next opened"
+            )))
+          }
+
+          # restart_delay spaces out the retries of an app that keeps failing.
+          # A restart asked for here has nothing to wait for.
+          start_app(app_config)
+          return(list(success = TRUE, message = paste("App", app_name, "restarted")))
         },
         error = function(e) {
           logger::log_error("Failed to restart app {app_name}: {error}", app_name = app_name, error = e$message)
@@ -447,10 +462,18 @@ ProcessManager <- setRefClass("ProcessManager",
       }
     },
     cleanup_stale_connections = function() {
-      "Clean up stale connections based on timeout (safe for concurrent execution)"
+      "Close sessions that have carried no message for idle_timeout_minutes"
+
+      # An idle session's sockets are still open, so this is a limit on idle
+      # time, not a search for dead peers: a socket that closes removes its own
+      # session. A timeout of zero keeps idle sessions open.
+      timeout_minutes <- config$config$idle_timeout_minutes %||% config$CONNECTION_TIMEOUT_MINUTES
+      if (timeout_minutes <= 0) {
+        return(0)
+      }
 
       current_time <- Sys.time()
-      timeout_threshold <- current_time - (config$CONNECTION_TIMEOUT_MINUTES * 60)
+      timeout_threshold <- current_time - (timeout_minutes * 60)
       connections_cleaned <- 0
 
       # Snapshot connection names to avoid issues if connections are removed during iteration
@@ -469,9 +492,10 @@ ProcessManager <- setRefClass("ProcessManager",
             }
 
             # Check if connection has timestamp and is stale
-            if (!is.null(conn_info$last_activity) && conn_info$last_activity < timeout_threshold) {
+            last_activity <- config$get_session_activity(session_id, conn_info$last_activity)
+            if (!is.null(last_activity) && last_activity < timeout_threshold) {
               logger::log_info("Cleaning stale backend connection: {session_id}, last activity: {time}",
-                session_id = session_id, time = format(conn_info$last_activity)
+                session_id = session_id, time = format(last_activity)
               )
 
               if (!is.null(config$get_ws_connection(session_id))) {
@@ -507,11 +531,12 @@ ProcessManager <- setRefClass("ProcessManager",
             }
 
             # Check if connection has timestamp and is stale
-            if (!is.null(conn_info$last_activity) && conn_info$last_activity < timeout_threshold) {
+            last_activity <- config$get_session_activity(session_id, conn_info$last_activity)
+            if (!is.null(last_activity) && last_activity < timeout_threshold) {
               logger::log_info("Cleaning stale client connection: {session_id}, app: {app}, last activity: {time}",
                 session_id = session_id,
                 app = conn_info$app_name %||% "unknown",
-                time = format(conn_info$last_activity)
+                time = format(last_activity)
               )
 
               # Close both sockets and run the normal idle-app cleanup path.
@@ -539,47 +564,6 @@ ProcessManager <- setRefClass("ProcessManager",
       )
 
       return(connections_cleaned)
-    },
-    cleanup_dead_processes = function() {
-      "Clean up dead processes from tracking (safe for concurrent execution)"
-
-      processes_cleaned <- 0
-      # Snapshot process names to avoid issues if processes are removed during iteration
-      app_names <- names(config$get_all_app_processes())
-
-      for (app_name in app_names) {
-        tryCatch(
-          {
-            process <- config$get_app_process(app_name)
-
-            # Defensive: process might have been removed by health check or manual restart
-            if (is.null(process)) {
-              next
-            }
-
-            if (!is_process_alive(process)) {
-              logger::log_info("Cleaning dead process for app {app_name}", app_name = app_name)
-              if (!kill_process_safely(process)) next
-              config$remove_app_process(app_name)
-              processes_cleaned <- processes_cleaned + 1
-
-              # Also clean up any orphaned connections for this app
-              cleanup_app_connections(app_name)
-            }
-          },
-          error = function(e) {
-            logger::log_warn("Error during process cleanup for {app_name}: {error}",
-              app_name = app_name, error = e$message
-            )
-          }
-        )
-      }
-
-      if (processes_cleaned > 0) {
-        logger::log_info("Cleaned up {processes_cleaned} dead processes", processes_cleaned = processes_cleaned)
-      }
-
-      return(processes_cleaned)
     },
     get_app_status = function(app_name) {
       "Get status of a specific app"

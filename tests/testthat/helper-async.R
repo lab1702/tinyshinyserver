@@ -36,6 +36,14 @@ stop_test_app_processes <- function(config) {
   config$app_processes <- list()
 }
 
+# A directory that start_app() accepts as a Shiny app; the caller removes it.
+make_test_app_dir <- function() {
+  app_dir <- tempfile("tss-app")
+  dir.create(app_dir)
+  writeLines("# placeholder", file.path(app_dir, "app.R"))
+  app_dir
+}
+
 # In-process test backends are owned by this R session, so this stands in for
 # an app process that holds its port.
 test_backend_process <- function() list(is_alive = function() TRUE, get_pid = function() Sys.getpid())

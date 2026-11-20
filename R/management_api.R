@@ -156,7 +156,9 @@ handle_management_connections_api <- function(config) {
             client_ip = conn$client_ip %||% "unknown",
             user_agent = conn$user_agent %||% "unknown",
             connected_at = format(conn$created_at, "%Y-%m-%d %H:%M:%S"),
-            last_activity = format(conn$last_activity, "%Y-%m-%d %H:%M:%S"),
+            last_activity = format(
+              config$get_session_activity(session_id, conn$last_activity), "%Y-%m-%d %H:%M:%S"
+            ),
             duration_seconds = as.numeric(difftime(Sys.time(), conn$created_at, units = "secs"))
           )
         }

@@ -49,38 +49,16 @@ test_that("get_client_ip returns unknown for missing info", {
 # ============================================================================
 
 test_that("generate_session_id creates 64-character hex string", {
-  req <- list(
-    HTTP_USER_AGENT = "Mozilla/5.0",
-    REMOTE_ADDR = "127.0.0.1"
-  )
-
-  session_id <- generate_session_id(req)
+  session_id <- generate_session_id()
 
   expect_equal(nchar(session_id), 64)
   expect_match(session_id, "^[a-f0-9]{64}$")
 })
 
 test_that("generate_session_id creates unique IDs", {
-  req <- list(
-    HTTP_USER_AGENT = "Mozilla/5.0",
-    REMOTE_ADDR = "127.0.0.1"
-  )
+  ids <- vapply(1:50, function(i) generate_session_id(), "")
 
-  # Generate multiple IDs - they should be different due to random salt and timestamp
-  id1 <- generate_session_id(req)
-  Sys.sleep(0.01)
-  id2 <- generate_session_id(req)
-
-  expect_false(id1 == id2)
-})
-
-test_that("generate_session_id handles missing request fields", {
-  req <- list()
-
-  session_id <- generate_session_id(req)
-
-  expect_equal(nchar(session_id), 64)
-  expect_match(session_id, "^[a-f0-9]{64}$")
+  expect_equal(length(unique(ids)), 50)
 })
 
 # ============================================================================

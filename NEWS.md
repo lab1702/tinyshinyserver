@@ -36,6 +36,8 @@
 
 * Management dashboard actions report their results in an inline notice instead of browser alert dialogs.
 
+* Restarting an app refreshes the dashboard's status tiles and connection list at once. They previously kept their old values, such as the number of running apps, for up to 5 seconds.
+
 * `POST /api/apps/{name}/restart` returns HTTP 404 instead of 500 for an app name that is not configured.
 
 * Requests for a directory under `/templates/` return HTTP 404 instead of 500.
@@ -49,6 +51,12 @@
 * The new `base_path` configuration option serves the landing page and apps under a URL prefix, such as `https://example.com/shiny/`, behind a reverse proxy. The proxy accepts requests with or without the prefix, so the reverse proxy may pass it through or strip it, and landing page links, redirects, and app cookie paths include it. The management dashboard now uses relative URLs, so it also works under a prefix that the reverse proxy strips.
 
 * The new `title` configuration option sets the name shown in the browser tab and top bar of the landing and management pages (default: "Tiny Shiny Server").
+
+* The new `idle_timeout_minutes` configuration option sets how long a session may carry no WebSocket message before it is closed (default: 30, the limit that was fixed before). `0` keeps idle sessions open, for dashboards that people leave open without interacting.
+
+* The new `log_level` configuration option chooses the least severe messages written to `server.log` (default: "INFO"). The package's DEBUG messages, which could not be turned on before, record each request's routing and the connection bookkeeping, and the first 100 characters of every WebSocket message.
+
+* Restarting an app from the management dashboard or with `POST /api/apps/{name}/restart` no longer waits for `restart_delay`, which left a healthy app answering HTTP 503 for 5 seconds by default; the delay now applies only to restarts after a failure. Restarting an on-demand app stops it until it is next opened, instead of starting it with nobody connected and stopping it again half a minute later.
 
 ## Apps and logging
 
@@ -114,11 +122,29 @@
 
 * The inventory example app accepts at most 10,000 items, so a visitor can no longer make it allocate unbounded memory.
 
+* An app whose directory is missing, or contains no `app.R`, `ui.R` and `server.R`, `.Rmd`, or `.qmd` file, is no longer started. A resident app with a mistyped `path` previously started a new R process that exited, every 10 to 15 seconds, indefinitely, with the reason only in the app's error log. The reason is now written to `server.log`, for on-demand apps already when the configuration is loaded.
+
+* A Quarto document is rendered only when its rendered page is missing or older than another file in the app directory, instead of on every start. On-demand Quarto apps and restarts no longer wait for a full render each time. Delete the document's `.html` file to force a render.
+
+* The proxy connects to an app's WebSocket as soon as the browser's WebSocket opens, instead of at the browser's first message. Sockets on which only the app speaks, such as Shiny's autoreload socket, now work.
+
+* A WebSocket to a path such as `/proxy//app/websocket/` is rejected, as the same HTTP path already was. It was connected to the app's default socket whatever path followed the app name.
+
+* `base_path` values ending in `//`, such as `"/shiny//"`, are rejected. They were accepted with a trailing slash, which made requests under the prefix return HTTP 404.
+
+* `start_tss()` reports a `config` argument that is not a single file path, instead of failing with an unrelated error.
+
+* A WebSocket message no longer rewrites the server's records of every connected session, so busy sessions cost less as the number of sessions grows. Exited app processes are removed by the health check alone; the five-minute cleanup repeated that work.
+
 ## Package
 
 * The package now requires R 4.1.0 or later, as its `promises` and `quarto` dependencies already do.
 
 * Removed the unused `future` dependency. `tools` and `utils` are now declared imports, as is `glue`, which `logger` needs to format the package's log messages. Added `ps`, already required by `callr`, to identify the process listening on an app's port.
+
+* Removed the `digest` dependency. Session IDs are 256 random bits from `openssl`; hashing them with request details added nothing.
+
+* The browser tests in `tests/browser`, which need Node.js and Playwright, are no longer included in the built package.
 
 # tinyshinyserver 0.2.1
 

@@ -5,9 +5,13 @@
 # misspelled option, has no effect and is reported in the server log.
 KNOWN_CONFIG_FIELDS <- c(
   "apps", "log_dir", "starting_port", "proxy_port", "proxy_host", "management_port",
-  "restart_delay", "health_check_interval", "max_request_size_mb", "title", "base_path"
+  "restart_delay", "health_check_interval", "max_request_size_mb", "title", "base_path",
+  "idle_timeout_minutes", "log_level"
 )
 KNOWN_APP_FIELDS <- c("name", "path", "resident", "appstart_timeout")
+
+# The values of the log_level field, from most to least detailed
+LOG_LEVELS <- c("DEBUG", "INFO", "WARN", "ERROR")
 
 unrecognized_config_fields <- function(config) {
   "Describe the fields of a validated configuration that the server does not use"
@@ -39,6 +43,9 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     # Complexity: Adds defensive checks to add/remove operations
     # Validation: validate_connection_count_consistency() detects/fixes corruption
     app_connection_counts = "environment",
+    # When each session last carried a message. Kept apart from the connection
+    # lists so that a message does not rewrite them.
+    session_activity = "environment",
     active_http_requests = "environment",
     pending_session_checks = "environment",
     app_startup_state = "environment", # Track app startup progress (starting/ready)
@@ -51,7 +58,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     # Constants. Limits on request paths, query strings, and methods are the
     # defaults of the validation functions in validation.R.
     MAX_PENDING_MESSAGES = "numeric",
-    CONNECTION_TIMEOUT_MINUTES = "numeric",
+    CONNECTION_TIMEOUT_MINUTES = "numeric", # Default of the idle_timeout_minutes field
     CLEANUP_INTERVAL_SECONDS = "numeric",
     MAX_MESSAGE_SIZE = "numeric",
     APP_STARTUP_TIMEOUT_SECONDS = "numeric",
@@ -72,6 +79,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       ws_connections <<- list()
       backend_connections <<- list()
       app_connection_counts <<- new.env(hash = TRUE, parent = emptyenv())
+      session_activity <<- new.env(hash = TRUE, parent = emptyenv())
       active_http_requests <<- new.env(hash = TRUE, parent = emptyenv())
       pending_session_checks <<- new.env(hash = TRUE, parent = emptyenv())
       app_startup_state <<- new.env(hash = TRUE, parent = emptyenv())
@@ -132,6 +140,8 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       new_config$title <- trimws(new_config$title %||% DEFAULT_SERVER_TITLE)
       new_config$max_request_size_mb <- new_config$max_request_size_mb %||% 100
       new_config$base_path <- new_config$base_path %||% ""
+      new_config$idle_timeout_minutes <- new_config$idle_timeout_minutes %||% CONNECTION_TIMEOUT_MINUTES
+      new_config$log_level <- toupper(new_config$log_level %||% "INFO")
 
       # Set default values for optional app fields
       for (i in seq_along(new_config$apps)) {
@@ -226,6 +236,21 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         value <- config$max_request_size_mb
         if (!is.numeric(value) || length(value) != 1 || !is.finite(value) || value <= 0) {
           return(list(valid = FALSE, error = "max_request_size_mb must be a single positive finite number of megabytes"))
+        }
+      }
+
+      # Zero keeps idle sessions open
+      if ("idle_timeout_minutes" %in% names(config)) {
+        value <- config$idle_timeout_minutes
+        if (!is.numeric(value) || length(value) != 1 || !is.finite(value) || value < 0) {
+          return(list(valid = FALSE, error = "idle_timeout_minutes must be a single non-negative finite number of minutes"))
+        }
+      }
+
+      if ("log_level" %in% names(config)) {
+        level <- config$log_level
+        if (!is.character(level) || length(level) != 1 || is.na(level) || !toupper(level) %in% LOG_LEVELS) {
+          return(list(valid = FALSE, error = paste("log_level must be one of:", paste(LOG_LEVELS, collapse = ", "))))
         }
       }
 
@@ -466,6 +491,10 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         return(FALSE)
       }
 
+      if (exists(session_id, envir = session_activity, inherits = FALSE)) {
+        rm(list = session_id, envir = session_activity)
+      }
+
       # IDEMPOTENT: Check if connection actually exists before removing
       # Critical: prevents double-decrement in concurrent/callback scenarios
       if (!(session_id %in% names(ws_connections))) {
@@ -517,6 +546,17 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     get_ws_connection = function(session_id) {
       "Get WebSocket connection info by session ID"
       return(ws_connections[[session_id]])
+    },
+    touch_session = function(session_id) {
+      "Record that a session carried a message, in either direction"
+      assign(session_id, Sys.time(), envir = session_activity)
+    },
+    get_session_activity = function(session_id, default = NULL) {
+      "When a session last carried a message, or a default for one that has carried none"
+      if (exists(session_id, envir = session_activity, inherits = FALSE)) {
+        return(get(session_id, envir = session_activity))
+      }
+      default
     },
     add_backend_connection = function(session_id, connection_info) {
       "Add a backend connection to tracking"
@@ -741,6 +781,25 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         logger::log_warn("Ignoring unrecognized configuration fields: {fields}",
           fields = paste(ignored_fields, collapse = ", ")
         )
+      }
+    },
+    log_unusable_apps = function() {
+      "Warn about on-demand apps that could not start (after logging is set up)"
+
+      # A resident app reports the same problem when it is started, but an
+      # on-demand app would only show it to its first visitor
+      for (app in config$apps) {
+        if (isTRUE(app$resident)) next
+        problem <- tryCatch(
+          {
+            detect_app_type(normalizePath(app$path, mustWork = FALSE))
+            NULL
+          },
+          error = function(e) conditionMessage(e)
+        )
+        if (!is.null(problem)) {
+          logger::log_warn("On-demand app {name} cannot start: {problem}", name = app$name, problem = problem)
+        }
       }
     },
 

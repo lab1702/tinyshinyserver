@@ -21,7 +21,6 @@ Imports:
     later (>= 1.4.0),
     curl,
     promises,
-    digest,
     glue,
     httpuv,
     websocket (>= 1.1.0),

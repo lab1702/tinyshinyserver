@@ -32,7 +32,7 @@ test_that("crash cleanup terminates workers after their parent has exited", {
     config$set_app_starting("app")
     pm <- ProcessManager$new(config)
     assign("start_app", function(...) TRUE, envir = pm)
-    switch(action, health = pm$health_check(), cleanup = pm$cleanup_dead_processes(),
+    switch(action, health = pm$health_check(),
       readiness = pm$check_app_ready("app", 3001, parent), restart = pm$restart_app("app"),
       shutdown = pm$stop_all_apps(), on_demand = pm$start_app_on_demand("app"))
     expect_null(config$get_app_process("app"), info = action)
@@ -41,7 +41,7 @@ test_that("crash cleanup terminates workers after their parent has exited", {
     Sys.sleep(.15)
     expect_equal(file.info(marker)$size, size, info = action)
   }
-  for (action in c("health", "cleanup", "readiness", "restart", "shutdown", "on_demand")) check_cleanup(action)
+  for (action in c("health", "readiness", "restart", "shutdown", "on_demand")) check_cleanup(action)
 })
 
 test_that("crash cleanup retains ownership if descendant cleanup fails", {
@@ -51,8 +51,6 @@ test_that("crash cleanup retains ownership if descendant cleanup fails", {
   config$add_app_process("app", process)
   pm <- ProcessManager$new(config)
   pm$health_check()
-  expect_identical(config$get_app_process("app"), process)
-  expect_equal(pm$cleanup_dead_processes(), 0)
   expect_identical(config$get_app_process("app"), process)
   expect_false(pm$check_app_ready("app", 3001, process))
   expect_identical(config$get_app_process("app"), process)
@@ -165,34 +163,66 @@ test_that("WebSocket-only startup is reclaimed if the client never retries", {
   expect_null(config$get_app_process("app"))
 })
 
-test_that("restarted on-demand apps get an idle grace that reconnects cancel", {
-  for (reconnect in c(FALSE, TRUE)) {
-    config <- ShinyServerConfig$new()
-    config$config <- list(apps = list(list(name = "app", resident = FALSE,
-      appstart_timeout = 60)), restart_delay = 0)
-    pm <- ProcessManager$new(config)
-    alive <- TRUE
-    process <- list(is_alive = function() alive, kill_tree = function() alive <<- FALSE)
-    assign("start_app", function(app_config) {
-      config$add_app_process("app", process)
-      TRUE
-    }, envir = pm)
-    callback <- NULL
-    delay <- NULL
-    local_mocked_bindings(later = function(func, delay, ...) {
-      callback <<- func
-      # Store outside the formal argument's scope.
-      delays <<- c(delays, delay)
-    }, .package = "later")
-    delays <- numeric()
-    expect_true(pm$restart_app("app")$success)
-    expect_equal(delays, 90)
-    expect_true(alive)
-    if (reconnect) ConnectionManager$new(config, pm)$add_client_connection(
-      "s", list(), "app", "127.0.0.1", "test")
-    callback()
-    expect_identical(alive, reconnect)
-  }
+test_that("a requested restart does not wait for restart_delay", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = TRUE)), restart_delay = 60)
+  alive <- TRUE
+  config$add_app_process("app", list(is_alive = function() alive, kill_tree = function() alive <<- FALSE))
+  pm <- ProcessManager$new(config)
+  starts <- 0
+  assign("start_app", function(app_config) { starts <<- starts + 1; TRUE }, envir = pm)
+  scheduled <- 0
+  local_mocked_bindings(later = function(...) scheduled <<- scheduled + 1, .package = "later")
+
+  result <- pm$restart_app("app")
+  expect_true(result$success)
+  expect_match(result$message, "restarted")
+  expect_false(alive)
+  expect_equal(starts, 1)
+  expect_equal(scheduled, 0)
+})
+
+test_that("a requested restart replaces the one a failure had scheduled", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = TRUE)), restart_delay = 0.05)
+  pm <- ProcessManager$new(config)
+  starts <- 0
+  assign("start_app", function(app_config) { starts <<- starts + 1; TRUE }, envir = pm)
+  pm$health_check()
+  expect_equal(starts, 0)
+  expect_true(pm$restart_app("app")$success)
+  expect_equal(starts, 1)
+  await_response(promises::promise(function(resolve, reject) later::later(function() resolve(TRUE), .1)))
+  expect_equal(starts, 1)
+})
+
+test_that("restarting an on-demand app stops it until it is next opened", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = FALSE)), restart_delay = 0)
+  alive <- TRUE
+  config$add_app_process("app", list(is_alive = function() alive, kill_tree = function() alive <<- FALSE))
+  closed <- 0
+  config$add_ws_connection("s", list(app_name = "app", ws = list(close = function() closed <<- closed + 1)))
+  pm <- ProcessManager$new(config)
+  assign("start_app", function(app_config) stop("An idle on-demand app must not be started"), envir = pm)
+
+  result <- pm$restart_app("app")
+  expect_true(result$success)
+  expect_match(result$message, "starts again when it is next opened")
+  expect_false(alive)
+  expect_equal(closed, 1)
+  expect_null(config$get_app_process("app"))
+  expect_equal(pm$get_app_status("app")$status, "dormant")
+})
+
+test_that("a restart that cannot start the app reports the reason", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = TRUE,
+    path = file.path(tempdir(), "tss-no-such-app"))), restart_delay = 0, log_dir = tempdir())
+  result <- ProcessManager$new(config)$restart_app("app")
+  expect_false(result$success)
+  expect_match(result$message, "App directory not found")
+  expect_null(config$get_app_process("app"))
 })
 
 test_that("unknown WebSocket apps are rejected without retaining state", {
@@ -267,7 +297,7 @@ test_that("HTTP-only launches stop after a cancellable session grace period", {
 })
 
 test_that("removing a starting process allows the next on-demand launch", {
-  for (removal in c("health", "cleanup", "stop")) {
+  for (removal in c("health", "stop")) {
     config <- ShinyServerConfig$new()
     config$config <- list(apps = list(list(name = "app", port = 3001,
       resident = FALSE, appstart_timeout = 60)))
@@ -284,8 +314,7 @@ test_that("removing a starting process allows the next on-demand launch", {
       TRUE
     }, envir = pm)
 
-    switch(removal, health = pm$health_check(), cleanup = pm$cleanup_dead_processes(),
-      stop = pm$stop_app("app"))
+    switch(removal, health = pm$health_check(), stop = pm$stop_app("app"))
     expect_null(config$get_app_process("app"), info = removal)
     expect_false(config$is_app_starting("app"), info = removal)
     expect_false(pm$check_app_ready("app", 3001, old))
@@ -477,9 +506,8 @@ test_that("restart delays yield and are cancelled by stop and shutdown", {
   assign("start_app", function(app_config) { starts <<- starts + 1; TRUE }, envir = pm)
   tick <- FALSE
   later::later(function() tick <<- TRUE, 0)
-  result <- pm$restart_app("app")
-  expect_true(result$success)
-  expect_match(result$message, "scheduled")
+  # A resident app without a process is restarted by the health check
+  pm$health_check()
   expect_equal(starts, 0)
   later::run_now(0)
   expect_true(tick)
@@ -488,11 +516,11 @@ test_that("restart delays yield and are cancelled by stop and shutdown", {
   await_response(promises::promise(function(resolve, reject) later::later(function() resolve(TRUE), .1)))
   expect_equal(starts, 1)
 
-  pm$restart_app("app")
+  pm$health_check()
   pm$stop_app("app")
   await_response(promises::promise(function(resolve, reject) later::later(function() resolve(TRUE), .1)))
   expect_equal(starts, 1)
-  pm$restart_app("app")
+  pm$health_check()
   pm$stop_all_apps()
   await_response(promises::promise(function(resolve, reject) later::later(function() resolve(TRUE), .1)))
   expect_equal(starts, 1)
@@ -908,9 +936,10 @@ test_that("setup_logging rejects a log_dir where the server log cannot be writte
 
 test_that("start_app recreates a log_dir removed while the server runs", {
   log_dir <- tempfile("tss-logs")
-  on.exit(unlink(log_dir, recursive = TRUE), add = TRUE)
+  app_dir <- make_test_app_dir()
+  on.exit(unlink(c(log_dir, app_dir), recursive = TRUE), add = TRUE)
   config <- ShinyServerConfig$new()
-  config$config <- list(apps = list(list(name = "app", path = tempdir(), port = 1, resident = TRUE)),
+  config$config <- list(apps = list(list(name = "app", path = app_dir, port = 1, resident = TRUE)),
     log_dir = log_dir)
   local_mocked_bindings(r_bg = function(...) list(is_alive = function() TRUE), .package = "callr")
   ProcessManager$new(config)$start_app(config$config$apps[[1]])
@@ -979,8 +1008,10 @@ test_that("a shutdown that was interrupted runs again", {
 })
 
 test_that("start_app supervises app processes", {
+  app_dir <- make_test_app_dir()
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
   config <- ShinyServerConfig$new()
-  config$config <- list(apps = list(list(name = "app", path = tempdir(), port = 1, resident = TRUE)),
+  config$config <- list(apps = list(list(name = "app", path = app_dir, port = 1, resident = TRUE)),
     log_dir = tempdir())
   args <- NULL
   local_mocked_bindings(r_bg = function(...) {

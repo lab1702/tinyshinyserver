@@ -318,13 +318,14 @@
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    showNotice(data.message || "Restart scheduled for " + appName, "success");
+                    showNotice(data.message || "Restarted " + appName, "success");
                 } else {
                     showNotice("Failed to restart " + appName + ": " + data.message, "error");
                 }
                 button.disabled = false;
                 button.textContent = "Restart";
-                updateApps();
+                // A restart changes the status tiles and the connection list too
+                refreshAll();
             })
             .catch(error => {
                 console.error("Error restarting app:", error);

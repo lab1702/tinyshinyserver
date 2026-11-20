@@ -1,6 +1,15 @@
 # Connection Manager Module
 # Manages WebSocket connections and session handling
 
+# A WebSocket message as DEBUG logs show it. Text that cannot be cut as
+# characters is described by its size, so that logging never fails a session.
+describe_ws_message <- function(data) {
+  if (is.raw(data)) {
+    return(paste(length(data), "binary bytes"))
+  }
+  tryCatch(substring(data, 1, 100), error = function(e) paste(nchar(data, type = "bytes"), "bytes of text"))
+}
+
 # Connection Manager Class
 ConnectionManager <- setRefClass("ConnectionManager",
   fields = list(
@@ -29,11 +38,11 @@ ConnectionManager <- setRefClass("ConnectionManager",
         return(NULL)
       }
 
+      # A handshake that names only the app gets Shiny's own socket path
       backend_path <- "/websocket/"
-      client_path <- strip_base_path(client_ws$request$PATH_INFO, config$config$base_path)
-      prefix <- paste0("/proxy/", app_name)
-      if (!is.null(client_path) && startsWith(client_path, paste0(prefix, "/"))) {
-        backend_path <- substring(client_path, nchar(prefix) + 1L)
+      route <- parse_proxy_path(strip_base_path(client_ws$request$PATH_INFO, config$config$base_path))
+      if (route$valid && identical(route$app_name, app_name) && route$backend_path != "") {
+        backend_path <- route$backend_path
       }
       backend_query <- client_ws$request$QUERY_STRING %||% ""
       if (backend_query != "" && !startsWith(backend_query, "?")) {
@@ -73,16 +82,13 @@ ConnectionManager <- setRefClass("ConnectionManager",
       # Handle messages from backend to client
       backend_ws$onMessage(function(event) {
         logger::log_debug("Backend->Client message for {app_name}: {data}",
-          app_name = app_name, data = if (is.raw(event$data)) paste(length(event$data), "binary bytes") else substring(event$data, 1, 100)
+          app_name = app_name, data = describe_ws_message(event$data)
         )
         conn <- config$get_backend_connection(session_id)
         if (is.null(conn) || !identical(conn$ws, backend_ws)) return()
-        conn$last_activity <- Sys.time()
-        config$add_backend_connection(session_id, conn)
-        client <- config$get_ws_connection(session_id)
-        if (is.null(client)) return()
-        client$last_activity <- conn$last_activity
-        config$add_ws_connection(session_id, client)
+        if (is.null(config$get_ws_connection(session_id))) return()
+        # Traffic from the app alone keeps a session from counting as idle
+        config$touch_session(session_id)
         client_ws$send(event$data)
       })
 
@@ -141,52 +147,35 @@ ConnectionManager <- setRefClass("ConnectionManager",
       }
       validated_message <- message_validation$sanitized
 
-      logger::log_debug("Client message: {message}",
-        message = if (is.raw(validated_message)) paste(length(validated_message), "binary bytes") else substring(validated_message, 1, 100))
+      logger::log_debug("Client message: {message}", message = describe_ws_message(validated_message))
 
-      # Update last activity timestamp
-      conn_info <- config$get_ws_connection(session_id)
-      if (is.null(conn_info)) {
-        # The session was already removed (e.g. by an app restart); do not
-        # open a backend session that no client can use.
+      # The app's socket is opened when the browser connects, and the browser's
+      # socket is closed along with it. A message with nowhere to go belongs
+      # to a session that has already been removed, for example by a restart.
+      backend_conn <- config$get_backend_connection(session_id)
+      if (is.null(config$get_ws_connection(session_id)) || is.null(backend_conn) || is.null(backend_conn$ws)) {
         logger::log_debug("Ignoring message for untracked session {session_id}", session_id = session_id)
         return(FALSE)
       }
-      conn_info$last_activity <- Sys.time()
-      config$add_ws_connection(session_id, conn_info)
+      config$touch_session(session_id)
 
       tryCatch(
         {
-          if (!is.null(app_name)) {
-            # Get or create backend connection
-            backend_conn <- config$get_backend_connection(session_id)
-            if (is.null(backend_conn)) {
-              create_backend_connection(app_name, session_id, conn_info$ws)
-              backend_conn <- config$get_backend_connection(session_id)
+          if (backend_conn$ready) {
+            backend_conn$ws$send(validated_message)
+          } else {
+            # Queue message for when connection is ready (with size limit)
+            current_pending <- backend_conn$pending_messages
+            if (length(current_pending) >= config$MAX_PENDING_MESSAGES) {
+              # Drop oldest messages to make room
+              current_pending <- tail(current_pending, config$MAX_PENDING_MESSAGES - 1)
+              logger::log_warn("Pending queue full, dropped oldest messages for app {app_name}", app_name = app_name)
             }
-
-            # Forward message to backend
-            if (!is.null(backend_conn) && !is.null(backend_conn$ws)) {
-              if (backend_conn$ready) {
-                backend_conn$ws$send(validated_message)
-                # Update last activity timestamp
-                backend_conn$last_activity <- Sys.time()
-                config$add_backend_connection(session_id, backend_conn)
-              } else {
-                # Queue message for when connection is ready (with size limit)
-                current_pending <- backend_conn$pending_messages
-                if (length(current_pending) >= config$MAX_PENDING_MESSAGES) {
-                  # Drop oldest messages to make room
-                  current_pending <- tail(current_pending, config$MAX_PENDING_MESSAGES - 1)
-                  logger::log_warn("Pending queue full, dropped oldest messages for app {app_name}", app_name = app_name)
-                }
-                backend_conn$pending_messages <- append(current_pending, list(validated_message))
-                config$add_backend_connection(session_id, backend_conn)
-                logger::log_debug("Queued message for pending connection ({count}/{max}) for app {app_name}",
-                  count = length(current_pending) + 1, max = config$MAX_PENDING_MESSAGES, app_name = app_name
-                )
-              }
-            }
+            backend_conn$pending_messages <- append(current_pending, list(validated_message))
+            config$add_backend_connection(session_id, backend_conn)
+            logger::log_debug("Queued message for pending connection ({count}/{max}) for app {app_name}",
+              count = length(current_pending) + 1, max = config$MAX_PENDING_MESSAGES, app_name = app_name
+            )
           }
           return(TRUE)
         },

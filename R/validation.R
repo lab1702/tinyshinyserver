@@ -13,11 +13,6 @@ validate_path <- function(path, max_length = 1000) {
     return(list(valid = FALSE, error = "Path too long"))
   }
 
-  # Check for null bytes
-  if (grepl("\\x00", path, useBytes = TRUE)) {
-    return(list(valid = FALSE, error = "Path contains null bytes"))
-  }
-
   # Check for path traversal: ".." as a whole path segment. Names that only
   # start or end with two dots, such as "/..hidden" or "/notes../", are not
   # parent-directory references.
@@ -68,11 +63,6 @@ validate_query_string <- function(query_string, max_length = 8192) {
     return(list(valid = FALSE, error = "Query string too long"))
   }
 
-  # Check for null bytes
-  if (grepl("\\x00", query_string, useBytes = TRUE)) {
-    return(list(valid = FALSE, error = "Query string contains null bytes"))
-  }
-
   # The query is forwarded to the app verbatim, so its percent-encoding is the
   # app's to interpret: a literal "%" as in "?discount=50%&x=1" is not rejected.
   return(list(valid = TRUE, sanitized = query_string))
@@ -101,11 +91,6 @@ validate_ws_message <- function(message, max_size = 1048576) {
     return(list(valid = FALSE, error = "Message too large"))
   }
 
-  # Check for null bytes
-  if (grepl("\\x00", message, useBytes = TRUE)) {
-    return(list(valid = FALSE, error = "Message contains null bytes"))
-  }
-
   return(list(valid = TRUE, sanitized = message))
 }
 
@@ -132,10 +117,10 @@ validate_base_path <- function(base_path, max_length = 100) {
   }
 
   # The path is written into page scripts and cookie paths, so allow only
-  # unreserved URL characters
+  # unreserved URL characters. The pattern covers the whole path, because
+  # strsplit() drops a trailing empty segment such as the one in "/a//".
   segments <- strsplit(substring(base_path, 2), "/", fixed = TRUE)[[1]]
-  if (length(segments) == 0 || any(!grepl("^[A-Za-z0-9._~-]+$", segments)) ||
-    any(segments %in% c(".", ".."))) {
+  if (!grepl("^(/[A-Za-z0-9._~-]+)+$", base_path) || any(segments %in% c(".", ".."))) {
     return(list(valid = FALSE, error = paste(
       "base_path segments may contain only letters, digits, and . _ ~ -,",
       "and may not be empty, . or .."

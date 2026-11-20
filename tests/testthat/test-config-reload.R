@@ -302,6 +302,28 @@ test_that("reload keeps the previous configuration when an app does not stop", {
   expect_equal(test$calls$started, "other")
 })
 
+test_that("reload applies a changed log_level", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  write_reload_config(path, list(list(name = "app", path = "/tmp")))
+  levels <- character()
+  local_mocked_bindings(is_port_in_use = function(...) FALSE,
+    setup_logging = function(log_dir, log_level = "INFO") levels <<- c(levels, log_level),
+    create_process_manager = function(config) list(
+      start_app = function(app) TRUE, stop_all_apps = function() NULL
+    ))
+  server <- TinyShinyServer$new(path)
+  expect_equal(levels, "INFO")
+
+  write_reload_config(path, list(list(name = "app", path = "/tmp")), log_level = "debug")
+  expect_true(server$reload()$valid)
+  expect_equal(levels, c("INFO", "DEBUG"))
+
+  # Unchanged logging settings leave the logger alone
+  expect_true(server$reload()$valid)
+  expect_equal(levels, c("INFO", "DEBUG"))
+})
+
 test_that("the event loop runs a requested reload", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)

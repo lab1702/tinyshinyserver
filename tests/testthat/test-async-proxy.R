@@ -31,6 +31,35 @@ test_that("WebSocket proxy preserves document paths and query strings", {
   }
 })
 
+test_that("an app that speaks first reaches a browser that never sends", {
+  backend <- start_test_http_server(function(req) handle_health_check(), on_ws = function(ws) {
+    ws$send(paste0("hello from ", ws$request$PATH_INFO))
+  })
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  config <- proxy_test_config(backend$port)
+  cm <- ConnectionManager$new(config)
+  proxy <- start_test_http_server(function(req) handle_health_check(),
+    on_ws = function(ws) handle_websocket_connection(ws, config, cm))
+  on.exit(httpuv::stopServer(proxy$server), add = TRUE)
+  # Shiny's autoreload socket, for one, only listens
+  client <- websocket::WebSocket$new(paste0(sub("^http", "ws", proxy$url), "/proxy/app/autoreload/"))
+  on.exit(client$close(), add = TRUE, after = FALSE)
+  opened <- Sys.time()
+  response <- promises::promise(function(resolve, reject) {
+    client$onMessage(function(event) resolve(event$data))
+    client$onClose(function(event) reject(simpleError("Proxy closed the listening session")))
+    client$onError(function(event) reject(simpleError(event$message)))
+  })
+  expect_identical(await_response(response), "hello from /autoreload/")
+
+  # The app's message counts as the session's activity without rewriting its records
+  session_id <- names(config$get_all_ws_connections())
+  expect_length(session_id, 1)
+  expect_gte(as.numeric(config$get_session_activity(session_id)), as.numeric(opened))
+  expect_lte(as.numeric(config$get_ws_connection(session_id)$last_activity),
+    as.numeric(config$get_session_activity(session_id)))
+})
+
 test_that("proxy preserves binary WebSocket frames before and after backend readiness", {
   observed <- list()
   backend <- start_test_http_server(function(req) handle_health_check(), on_ws = function(ws) {

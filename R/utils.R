@@ -41,21 +41,10 @@ get_client_ip <- function(req) {
 
 
 # Generate session ID
-generate_session_id <- function(req) {
-  "Generate secure session ID from request information"
+generate_session_id <- function() {
+  "Generate a session ID: 256 cryptographically secure random bits as 64 hex characters"
 
-  user_agent <- if (is.null(req$HTTP_USER_AGENT)) "" else req$HTTP_USER_AGENT
-  remote_addr <- if (is.null(req$REMOTE_ADDR)) "" else req$REMOTE_ADDR
-  timestamp <- as.character(Sys.time())
-
-  # Add cryptographically secure random entropy (32 bytes = 256 bits)
-  random_salt <- paste(as.character(openssl::rand_bytes(32)), collapse = "")
-
-  # Create session ID with SHA-256
-  session_data <- paste(user_agent, remote_addr, timestamp, random_salt, sep = "|")
-  session_id <- digest::digest(session_data, algo = "sha256")
-
-  return(session_id)
+  paste(as.character(openssl::rand_bytes(32)), collapse = "")
 }
 
 # Logging setup

@@ -22,6 +22,8 @@
 #'   "restart_delay": 5,
 #'   "health_check_interval": 10,
 #'   "max_request_size_mb": 100,
+#'   "idle_timeout_minutes": 30,
+#'   "log_level": "INFO",
 #'   "title": "Tiny Shiny Server",
 #'   "base_path": "",
 #'   "log_dir": "./logs"
@@ -46,9 +48,11 @@
 #'   \item{\code{proxy_port}}{Port for the proxy, which serves the landing page and the apps (default: 3838).}
 #'   \item{\code{proxy_host}}{Network interface the proxy listens on (default: \code{"127.0.0.1"}); see \sQuote{Host Configuration}.}
 #'   \item{\code{management_port}}{Port for the management dashboard and API (default: 3839).}
-#'   \item{\code{restart_delay}}{Seconds to wait before restarting a failed resident app; a non-negative finite number (default: 5).}
+#'   \item{\code{restart_delay}}{Seconds to wait before restarting a failed resident app; a non-negative finite number (default: 5). A restart requested from the management dashboard or API does not wait.}
 #'   \item{\code{health_check_interval}}{Seconds between health checks; a positive finite number (default: 10).}
 #'   \item{\code{max_request_size_mb}}{Largest HTTP request body, in megabytes, that the proxy accepts; a positive finite number (default: 100). Larger bodies, and bodies sent with chunked transfer encoding, are rejected with HTTP 413 before they are read. Apps that raise \code{shiny.maxRequestSize} above this need a larger value.}
+#'   \item{\code{idle_timeout_minutes}}{Minutes without a WebSocket message, in either direction, after which a session is closed and the browser shows the app as disconnected; a non-negative finite number (default: 30). \code{0} keeps idle sessions open. Idle sessions are checked every 5 minutes.}
+#'   \item{\code{log_level}}{Least severe messages written to \code{server.log}: \code{"DEBUG"}, \code{"INFO"}, \code{"WARN"}, or \code{"ERROR"} (default: \code{"INFO"}). \code{"DEBUG"} also records the first 100 characters of every WebSocket message.}
 #'   \item{\code{title}}{Name shown in the browser tab and top bar of the landing and management pages; a non-empty string of up to 100 characters (default: \code{"Tiny Shiny Server"}).}
 #'   \item{\code{base_path}}{Public URL prefix when a reverse proxy serves the landing page and apps under a path such as \code{"/shiny"} (default: \code{""}, the site root). It must start with \code{/}; a trailing \code{/} is removed. Path segments may contain only ASCII letters, digits, and \code{. _ ~ -}, and the first segment may not be \code{proxy}, \code{api}, \code{templates}, or \code{health}. The proxy accepts requests with or without the prefix, so the reverse proxy may either pass it through or strip it. Links, redirects, and cookie paths use the prefix. See the README section \sQuote{Serving under a URL prefix}.}
 #' }
@@ -57,8 +61,8 @@
 #' Each application in the \code{apps} array can have:
 #' \describe{
 #'   \item{\code{name}}{Unique identifier used in URLs and log file names: 1--50 ASCII letters, digits, underscores, or hyphens. Names must differ by more than letter case. Required.}
-#'   \item{\code{path}}{Path to the app directory, either absolute or relative to the R working directory. Required.}
-#'   \item{\code{resident}}{Boolean. If \code{true}, the app starts with the server and is restarted if its process fails. If \code{false} (the default), the app starts on demand and stops 30 seconds after its last WebSocket connection closes.}
+#'   \item{\code{path}}{Path to the app directory, either absolute or relative to the R working directory. Required. An app whose directory is missing, or holds no \code{app.R}, \code{ui.R} and \code{server.R}, \code{.Rmd}, or \code{.qmd} file, is not started; the reason is written to \code{server.log}.}
+#'   \item{\code{resident}}{Boolean. If \code{true}, the app starts with the server and is restarted if its process fails. If \code{false} (the default), the app starts on demand and stops 30 seconds after its last WebSocket connection closes. Restarting an on-demand app from the management dashboard or API stops it until it is next opened.}
 #'   \item{\code{appstart_timeout}}{Seconds, measured from app startup, that a request waits for the app to become ready before the proxy returns HTTP 503; a positive finite number (default: 2). Fractional seconds are supported.}
 #' }
 #'

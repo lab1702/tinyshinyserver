@@ -44,6 +44,9 @@
 #'
 #' @export
 start_tss <- function(config = "config.json") {
+  if (!is.character(config) || length(config) != 1 || is.na(config) || !nzchar(config)) {
+    stop("`config` must be the path to a configuration file, as a single string", call. = FALSE)
+  }
   if (!file.exists(config)) {
     stop(sprintf("Configuration file not found: %s", config))
   }

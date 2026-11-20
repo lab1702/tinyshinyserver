@@ -17,58 +17,44 @@ test_that("handle_health_check returns healthy status", {
 })
 
 # ============================================================================
-# extract_app_name_from_ws_path() tests
+# parse_proxy_path() tests
 # ============================================================================
 
-test_that("extract_app_name_from_ws_path extracts app name from valid paths", {
-  config <- ShinyServerConfig$new()
-
-  # Valid proxy path
-  result <- extract_app_name_from_ws_path("/proxy/myapp/websocket", config)
-  expect_equal(result, "myapp")
-
-  result <- extract_app_name_from_ws_path("/proxy/my-app/some/path", config)
-  expect_equal(result, "my-app")
-
-  result <- extract_app_name_from_ws_path("/proxy/my_app_123/ws", config)
-  expect_equal(result, "my_app_123")
+test_that("parse_proxy_path splits the app name from the path the app sees", {
+  cases <- list(
+    list("/proxy/myapp/websocket/", "myapp", "/websocket/"),
+    list("/proxy/my-app/some/path", "my-app", "/some/path"),
+    list("/proxy/my_app_123/", "my_app_123", "/"),
+    list("/proxy/ValidApp123/doc.Rmd/__sockjs__/", "ValidApp123", "/doc.Rmd/__sockjs__/"),
+    # The app name ends the path
+    list("/proxy/myapp", "myapp", ""),
+    # Later slashes belong to the app
+    list("/proxy/myapp//x", "myapp", "//x")
+  )
+  for (case in cases) {
+    route <- parse_proxy_path(case[[1]])
+    expect_true(route$valid, info = case[[1]])
+    expect_equal(route$app_name, case[[2]], info = case[[1]])
+    expect_equal(route$backend_path, case[[3]], info = case[[1]])
+  }
 })
 
-test_that("extract_app_name_from_ws_path returns NULL for invalid paths", {
-  config <- ShinyServerConfig$new()
-
-  # Not a proxy path
-  result <- extract_app_name_from_ws_path("/health", config)
-  expect_null(result)
-
-  # Proxy path but no app name
-  result <- extract_app_name_from_ws_path("/proxy/", config)
-  expect_null(result)
-
-  # Proxy path with invalid app name (contains spaces)
-  result <- extract_app_name_from_ws_path("/proxy/my app/ws", config)
-  expect_null(result)
-
-  # Proxy path with invalid app name (special chars)
-  result <- extract_app_name_from_ws_path("/proxy/my@app/ws", config)
-  expect_null(result)
+test_that("parse_proxy_path rejects paths that name no app", {
+  for (path in list(NULL, NA_character_, 1, c("/proxy/a/", "/proxy/b/"), "", "/", "/health", "/proxy",
+    "/proxy/", "/proxy//myapp", "/proxy//myapp/websocket/", "/other/proxy/myapp/")) {
+    route <- parse_proxy_path(path)
+    expect_false(route$valid, info = paste(format(path), collapse = " "))
+    expect_match(route$error, "Invalid proxy path")
+  }
 })
 
-test_that("extract_app_name_from_ws_path handles edge cases", {
-  config <- ShinyServerConfig$new()
-
-  # Empty path
-  result <- extract_app_name_from_ws_path("", config)
-  expect_null(result)
-
-  # Root path
-  result <- extract_app_name_from_ws_path("/", config)
-  expect_null(result)
-
-  # Path with multiple slashes
-  result <- extract_app_name_from_ws_path("/proxy//myapp", config)
-  # Double slashes are filtered out, so "myapp" should be extracted
-  expect_equal(result, "myapp")
+test_that("parse_proxy_path rejects invalid app names", {
+  for (path in c("/proxy/my app/ws", "/proxy/my@app/ws", "/proxy/invalid<script>/ws", "/proxy/../etc",
+    paste0("/proxy/", strrep("a", 51), "/"))) {
+    route <- parse_proxy_path(path)
+    expect_false(route$valid, info = path)
+    expect_match(route$error, "Invalid app name")
+  }
 })
 
 # ============================================================================
@@ -596,34 +582,6 @@ test_that("forward_request returns 503 when backend is unavailable", {
   result <- await_response(forward_request("GET", "http://127.0.0.1:3001/", list(), "testapp", config))
   expect_equal(result$status, 503)
   expect_match(result$body, "not ready")
-})
-
-# ============================================================================
-# extract_app_name_from_ws_path() additional tests
-# ============================================================================
-
-test_that("extract_app_name_from_ws_path validates app name format", {
-  config <- ShinyServerConfig$new()
-
-  # Valid app names
-  expect_equal(extract_app_name_from_ws_path("/proxy/valid-app/ws", config), "valid-app")
-  expect_equal(extract_app_name_from_ws_path("/proxy/valid_app/ws", config), "valid_app")
-  expect_equal(extract_app_name_from_ws_path("/proxy/ValidApp123/ws", config), "ValidApp123")
-
-  # Invalid app names - should return NULL
-  expect_null(extract_app_name_from_ws_path("/proxy/invalid app/ws", config))
-  expect_null(extract_app_name_from_ws_path("/proxy/invalid<script>/ws", config))
-})
-
-test_that("extract_app_name_from_ws_path handles various path formats", {
-  config <- ShinyServerConfig$new()
-
-  # With trailing components
-  expect_equal(extract_app_name_from_ws_path("/proxy/myapp/websocket/", config), "myapp")
-  expect_equal(extract_app_name_from_ws_path("/proxy/myapp/__sockjs__/", config), "myapp")
-
-  # Minimal path
-  expect_equal(extract_app_name_from_ws_path("/proxy/myapp", config), "myapp")
 })
 
 # ============================================================================

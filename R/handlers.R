@@ -147,28 +147,41 @@ handle_static_file <- function(path, template_manager) {
   return(template_manager$serve_static_file(file_path))
 }
 
+# The route to an app, /proxy/<app name><path the app sees>, for HTTP requests
+# and WebSocket handshakes alike. `backend_path` is "" when the app name ends
+# the path.
+parse_proxy_path <- function(path) {
+  invalid <- function(error) list(valid = FALSE, error = error)
+
+  if (!is.character(path) || length(path) != 1 || is.na(path) ||
+    !startsWith(path, "/proxy/") || startsWith(path, "/proxy//")) {
+    return(invalid("Invalid proxy path"))
+  }
+
+  rest <- substring(path, nchar("/proxy/") + 1L)
+  app_name <- sub("/.*$", "", rest)
+  if (app_name == "") {
+    return(invalid("Invalid proxy path"))
+  }
+
+  app_name_validation <- validate_app_name(app_name)
+  if (!app_name_validation$valid) {
+    return(invalid(paste("Invalid app name:", app_name_validation$error)))
+  }
+
+  list(valid = TRUE, app_name = app_name, backend_path = substring(rest, nchar(app_name) + 1L))
+}
+
 handle_proxy_request <- function(path, method, query_string, req, config, process_manager = NULL,
                                  connection_manager = NULL, template_manager = NULL) {
   "Handle proxy requests to Shiny apps"
 
-  if (!startsWith(path, "/proxy/") || startsWith(path, "/proxy//")) {
-    return(create_error_response("Invalid proxy path", 400))
+  route <- parse_proxy_path(path)
+  if (!route$valid) {
+    return(create_error_response(route$error, 400))
   }
 
-  path_parts <- strsplit(path, "/")[[1]]
-  path_parts <- path_parts[path_parts != ""] # Remove empty parts
-
-  if (length(path_parts) < 2) {
-    return(create_error_response("Invalid proxy path", 400))
-  }
-
-  # Validate app name
-  app_name_validation <- validate_app_name(path_parts[2])
-  if (!app_name_validation$valid) {
-    return(create_error_response(paste("Invalid app name:", app_name_validation$error), 400))
-  }
-
-  app_name <- app_name_validation$sanitized
+  app_name <- route$app_name
   app_config <- config$get_app_config(app_name)
 
   if (is.null(app_config)) {
@@ -176,7 +189,7 @@ handle_proxy_request <- function(path, method, query_string, req, config, proces
   }
 
   # Canonicalize the mount URL before starting an app or forwarding a body.
-  if (identical(path, paste0("/proxy/", app_name))) {
+  if (route$backend_path == "") {
     return(create_redirect_response(paste0(config$config$base_path, path, "/"), query_string))
   }
 
@@ -192,10 +205,8 @@ handle_proxy_request <- function(path, method, query_string, req, config, proces
     }
   }
 
-  # Remove only the routing prefix, preserving the backend path verbatim.
-  target_path <- substring(path, nchar(paste0("/proxy/", app_name)) + 1L)
-  if (target_path == "") target_path <- "/"
-  target_url <- paste0("http://127.0.0.1:", app_config$port, target_path)
+  # Only the routing prefix is removed; the backend path is passed on verbatim.
+  target_url <- paste0("http://127.0.0.1:", app_config$port, route$backend_path)
 
   # httpuv includes the leading question mark in QUERY_STRING.
   if (!is.null(query_string) && query_string != "") {
@@ -601,7 +612,7 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
   }
 
   # Generate session ID
-  session_id <- generate_session_id(ws$request)
+  session_id <- generate_session_id()
 
   # Determine which app this WebSocket is for
   request_path_validation <- validate_path(strip_base_path(ws$request$PATH_INFO, config$config$base_path))
@@ -611,25 +622,26 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
     return()
   }
 
-  request_path <- request_path_validation$sanitized
-  app_name <- extract_app_name_from_ws_path(request_path, config)
-
-  if (is.null(app_name)) {
-    logger::log_error("Could not determine app for WebSocket connection")
+  # Do not fall back to another app when the path names none
+  route <- parse_proxy_path(request_path_validation$sanitized)
+  if (!route$valid) {
+    logger::log_error("Could not determine app for WebSocket connection: {error}", error = route$error)
     ws$close()
     return()
   }
+  app_name <- route$app_name
 
   logger::log_info("WebSocket routed to app: {app_name}", app_name = app_name)
 
-  # Start app on demand if it's non-resident and not running
   app_config <- config$get_app_config(app_name)
   if (is.null(app_config)) {
     logger::log_warn("Rejecting WebSocket for unknown app: {app_name}", app_name = app_name)
     ws$close()
     return()
   }
-  if (!is.null(app_config) && !app_config$resident && !is.null(process_manager)) {
+
+  # Start app on demand if it's non-resident and not running
+  if (!app_config$resident && !is.null(process_manager)) {
     process <- config$get_app_process(app_name)
     if (is.null(process) || !is_process_alive(process)) {
       logger::log_info("Starting non-resident app {app_name} on demand for WebSocket connection", app_name = app_name)
@@ -684,30 +696,17 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
   ws$onClose(function() {
     connection_manager$remove_client_connection(session_id)
   })
-}
 
-extract_app_name_from_ws_path <- function(request_path, config) {
-  "Extract app name from WebSocket request path
-
-  Returns NULL if app cannot be determined from path.
-  Caller should handle NULL by rejecting the connection with an error.
-  "
-
-  app_name <- NULL
-
-  if (startsWith(request_path, "/proxy/")) {
-    path_parts <- strsplit(request_path, "/")[[1]]
-    path_parts <- path_parts[path_parts != ""]
-    if (length(path_parts) >= 2) {
-      # Validate app name for WebSocket routing
-      app_name_validation <- validate_app_name(path_parts[2])
-      if (app_name_validation$valid) {
-        app_name <- app_name_validation$sanitized
-      }
+  # Connect to the app now rather than on the browser's first message: on
+  # some sockets, such as Shiny's autoreload socket, only the app speaks.
+  # Messages that arrive before the app's socket opens are queued.
+  tryCatch(
+    connection_manager$create_backend_connection(app_name, session_id, ws),
+    error = function(e) {
+      logger::log_error("Could not connect to app {app_name}: {error}",
+        app_name = app_name, error = conditionMessage(e)
+      )
+      connection_manager$close_client_connection(session_id)
     }
-  }
-
-  # Do NOT default to first app - return NULL if routing failed
-  # This prevents silently routing connections to the wrong app
-  return(app_name)
+  )
 }

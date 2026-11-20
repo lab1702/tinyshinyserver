@@ -434,23 +434,10 @@ test_that("validate_ws_message rejects messages that are too large", {
   expect_match(result$error, "too large")
 })
 
-test_that("validate_ws_message rejects messages with null bytes", {
-
-  # Note: R cannot easily embed null bytes in strings, and the validate_ws_message
-
-  # function uses grepl("\\x00", ..., useBytes = TRUE) which requires actual null bytes.
-  # This is essentially impossible to test directly in R because:
-  # 1. rawToChar(as.raw(0)) returns "" (empty string)
-  # 2. Literal \x00 in strings causes parse errors
-  # 3. The string is terminated at the null byte
-  #
-  # We test the function logic indirectly by ensuring the pattern check exists.
-  # In practice, null bytes in WebSocket messages would come from binary data
-  # that R would handle at the raw/binary level before conversion.
-  #
-  # For now, just verify that valid messages pass (null byte rejection is
-
-  # an edge case that requires binary-level testing)
-  result <- validate_ws_message("normal message without null bytes")
-  expect_true(result$valid)
+test_that("percent-encoded bytes are left for the app to interpret", {
+  # An R string cannot hold a zero byte, and request paths and query strings
+  # are forwarded without decoding, so an encoded one passes through
+  expect_true(validate_path("/proxy/app/a%00b")$valid)
+  expect_true(validate_query_string("?a=%00")$valid)
+  expect_true(validate_ws_message("a%00b")$valid)
 })

@@ -150,9 +150,11 @@ The proxy applies these limits:
 | `proxy_port` | Port for the proxy server | 3838 |
 | `proxy_host` | Network interface for the proxy server (`localhost`, `127.0.0.1`, `0.0.0.0`, `::1`, or `::`) | `"127.0.0.1"` |
 | `management_port` | Port for the management dashboard and API | 3839 |
-| `restart_delay` | Seconds to wait before restarting a failed resident app; a non-negative finite number | 5 |
+| `restart_delay` | Seconds to wait before restarting a failed resident app; a non-negative finite number. A restart requested from the dashboard or API does not wait | 5 |
 | `health_check_interval` | Seconds between health checks; a positive finite number | 10 |
 | `max_request_size_mb` | Largest HTTP request body, in megabytes, that the proxy accepts; larger or chunked bodies get HTTP 413 | 100 |
+| `idle_timeout_minutes` | Minutes without a WebSocket message, in either direction, after which a session is closed; a non-negative finite number. `0` keeps idle sessions open | 30 |
+| `log_level` | Least severe messages written to `server.log`: `"DEBUG"`, `"INFO"`, `"WARN"`, or `"ERROR"`; see [Log levels](#log-levels) | `"INFO"` |
 | `title` | Name shown in the browser tab and top bar of the landing and management pages; up to 100 characters | `"Tiny Shiny Server"` |
 | `base_path` | Public URL prefix, such as `"/shiny"`, when a reverse proxy serves the apps under a path; see [Serving under a URL prefix](#serving-under-a-url-prefix) | `""` (site root) |
 
@@ -251,7 +253,7 @@ App status is **running**, **dormant** (an on-demand app that is not running), *
 
 Memory figures are the resident memory (RSS) of the server's own R process and of each app's R process. Processes that an app starts itself, such as Pandoc or a database driver's helper, are not included. An app's uptime restarts from zero whenever its process starts again. Memory shows as N/A on platforms where the `ps` package cannot read it.
 
-The management dashboard lists active WebSocket connections with their client IP addresses, user agents, connection times, and last activity. Running, stopped, and crashed apps can be restarted; dormant apps start when accessed. Restarting an app disconnects its users.
+The management dashboard lists active WebSocket connections with their client IP addresses, user agents, connection times, and last activity. Running, stopped, and crashed apps can be restarted; dormant apps start when accessed. Restarting an app disconnects its users. A resident app starts again at once, without waiting for `restart_delay`. An on-demand app stops and starts again when it is next opened.
 
 **Reload Config & Restart All** reads the configuration file again, stops every app, and disconnects all users. It then assigns app ports from the new configuration and starts the resident apps; on-demand apps start when next opened. The file is checked first, so an invalid file, a `log_dir` where the server log cannot be written, or a change to `proxy_host`, `proxy_port`, or `management_port`, is reported without stopping anything; those three settings take effect only when the server restarts. If an app cannot be stopped, the previous configuration stays in effect and its stopped resident apps start again. The dashboard reports whether the reload succeeded once it finishes.
 
@@ -306,6 +308,10 @@ Point each app's `path` at a directory containing one of these entry points:
 
 Detection prefers standard Shiny files, then R Markdown, then Quarto. File extensions are case-sensitive. For document apps, the first matching file in alphabetical order is used; keep one entry document per directory to make the choice explicit.
 
+An app whose directory is missing, or contains none of these entry points, is not started. The reason is written to `server.log`: when a resident app is started, and for on-demand apps when the configuration is loaded and again when someone opens the app.
+
+A Quarto document is rendered before it is served, which can take many seconds. To keep on-demand starts and restarts fast, the server renders it only when the rendered page (`{name}.html`, next to the `.qmd`) is missing or older than another file in the app directory. Changes outside that directory, such as an upgraded package, are not noticed; delete the `.html` file to force a render at the next start.
+
 To add an app, create its directory, add an entry with `name` and `path` to the configuration, and click **Reload Config & Restart All** in the management dashboard.
 
 For local development, run a copied example directly from R:
@@ -324,12 +330,12 @@ Run one command at a time, with tinyshinyserver stopped or a different port sele
 
 The server limits its own memory use:
 
-- **Connection cleanup**: Connections inactive for 30 minutes are closed and removed.
+- **Idle sessions**: A session whose WebSocket has carried no message in either direction for `idle_timeout_minutes` (default: 30) is closed, and the browser shows the app as disconnected. Raise the value, or set it to `0` to keep idle sessions open, for dashboards that people leave open without interacting.
 - **Queue limits**: Messages waiting for an app's WebSocket to open are limited to 100 per connection; when the queue is full, the oldest messages are dropped.
-- **Process cleanup**: Objects for exited app processes are removed.
+- **Process cleanup**: Objects for exited app processes are removed at each health check.
 - **Log files**: App output is written directly to log files instead of being held in memory. One previous run's logs are kept per app.
 
-Cleanup runs every 5 minutes and is recorded in the server log.
+Idle sessions are checked every 5 minutes, and each one closed is recorded in the server log.
 
 ## Logging
 
@@ -347,9 +353,12 @@ When an app starts, its logs from the previous run are kept as `{app_name}_outpu
 
 The server log records messages at these levels:
 
+- `DEBUG`: each request's routing, port probing, and connection bookkeeping
 - `INFO`: normal operations
 - `WARN`: warning conditions, such as a full message queue
 - `ERROR`: errors that need attention
+
+The `log_level` setting chooses the least severe level that is written (default: `"INFO"`); a reload applies a changed level. `DEBUG` also records the first 100 characters of every WebSocket message, which can include what users type, so use it only while diagnosing a problem.
 
 ## Architecture
 
@@ -366,7 +375,7 @@ In the source repository, the code is in `R/`, generated help pages are in `man/
 <details>
 <summary><strong>Apps won't start</strong></summary>
 
-- Check that the app directory exists and contains a supported [entry point](#application-structure)
+- Check that the app directory exists and contains a supported [entry point](#application-structure); `server.log` names a directory that is missing or has none
 - Check `server.log` for port conflicts and the assigned app ports
 - Check the app's error log, `logs/{app_name}_error.log`; after a crash and automatic restart, the crash output is in `logs/{app_name}_error.prev.log`
 - See `help("config-format")` for configuration help

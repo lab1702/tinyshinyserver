@@ -23,7 +23,7 @@ test_that("validate_base_path normalizes accepted prefixes", {
 })
 
 test_that("validate_base_path rejects unsafe or ambiguous prefixes", {
-  for (value in list(NULL, NA_character_, 1, c("/a", "/b"), "shiny", "//", "/a//b", "/a/../b",
+  for (value in list(NULL, NA_character_, 1, c("/a", "/b"), "shiny", "//", "/a//b", "/a//", "/a///", "/a/../b",
     "/./a", "/a b", "/a\"b", "/a<b", "/a?b", "/a%20b", paste0("/", strrep("a", 100)))) {
     expect_false(validate_base_path(value)$valid, info = paste(format(value), collapse = " "))
   }

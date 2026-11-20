@@ -640,76 +640,69 @@ test_that("cleanup_stale_connections handles connections without last_activity",
   expect_false(is.null(config$get_ws_connection("no_activity")))
 })
 
-# ============================================================================
-# cleanup_dead_processes() Tests
-# ============================================================================
+test_that("cleanup_stale_connections uses idle_timeout_minutes, and zero keeps idle sessions", {
+  stale_config <- function(idle_timeout_minutes) {
+    config <- ShinyServerConfig$new()
+    config$config <- list(apps = list(), idle_timeout_minutes = idle_timeout_minutes)
+    config$add_ws_connection("quiet", list(app_name = "app1", ws = NULL, last_activity = Sys.time() - 45 * 60))
+    config
+  }
 
-test_that("cleanup_dead_processes removes dead processes", {
+  # Idle for 45 minutes: over the default, under a raised limit
+  config <- stale_config(30)
+  expect_equal(ProcessManager$new(config)$cleanup_stale_connections(), 1)
+  expect_null(config$get_ws_connection("quiet"))
+
+  config <- stale_config(60)
+  expect_equal(ProcessManager$new(config)$cleanup_stale_connections(), 0)
+  expect_false(is.null(config$get_ws_connection("quiet")))
+
+  config <- stale_config(0)
+  expect_equal(ProcessManager$new(config)$cleanup_stale_connections(), 0)
+  expect_false(is.null(config$get_ws_connection("quiet")))
+})
+
+test_that("a session's latest message decides whether it is idle", {
   config <- ShinyServerConfig$new()
-  config$config <- list(apps = list())
+  config$config <- list(apps = list(), idle_timeout_minutes = 30)
+  opened <- Sys.time() - 45 * 60
+  config$add_ws_connection("busy", list(app_name = "app1", ws = NULL, last_activity = opened))
+  config$add_ws_connection("quiet", list(app_name = "app1", ws = NULL, last_activity = opened))
+  expect_equal(config$get_session_activity("busy", opened), opened)
+  config$touch_session("busy")
+  expect_gt(config$get_session_activity("busy", opened), opened)
 
-  # Add dead process
-  dead_process <- list(
-    get_pid = function() 99999,
-    is_alive = function() FALSE
-  )
-  config$add_app_process("dead_app", dead_process)
+  expect_equal(ProcessManager$new(config)$cleanup_stale_connections(), 1)
+  expect_false(is.null(config$get_ws_connection("busy")))
+  expect_null(config$get_ws_connection("quiet"))
 
-  # Add live process
-  live_process <- list(
-    get_pid = function() 12345,
-    is_alive = function() TRUE
-  )
-  config$add_app_process("live_app", live_process)
+  # A removed session leaves no activity record behind
+  config$remove_ws_connection("busy")
+  expect_null(config$get_session_activity("busy"))
+  expect_length(ls(config$session_activity), 0)
+})
 
-  pm <- ProcessManager$new(config)
+# ============================================================================
+# Dead processes are removed by health_check()
+# ============================================================================
 
-  # Mock is_process_alive
-  local_mocked_bindings(
-    is_process_alive = function(process) {
-      process$is_alive()
-    }
-  )
+test_that("health_check removes dead processes and their connections", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(
+    list(name = "dead_app", resident = FALSE),
+    list(name = "live_app", resident = FALSE)
+  ))
+  config$add_app_process("dead_app", list(get_pid = function() 99999, is_alive = function() FALSE))
+  config$add_app_process("live_app", list(get_pid = function() 12345, is_alive = function() TRUE))
+  config$add_ws_connection("orphan", list(app_name = "dead_app", ws = NULL))
+  config$add_ws_connection("kept", list(app_name = "live_app", ws = NULL))
 
-  cleaned <- pm$cleanup_dead_processes()
+  ProcessManager$new(config)$health_check()
 
-  expect_equal(cleaned, 1)
   expect_null(config$get_app_process("dead_app"))
   expect_false(is.null(config$get_app_process("live_app")))
-})
-
-test_that("cleanup_dead_processes handles empty process list", {
-  config <- ShinyServerConfig$new()
-  config$config <- list(apps = list())
-  pm <- ProcessManager$new(config)
-
-  cleaned <- pm$cleanup_dead_processes()
-
-  expect_equal(cleaned, 0)
-})
-
-test_that("cleanup_dead_processes cleans up orphaned connections", {
-  config <- ShinyServerConfig$new()
-  config$config <- list(apps = list())
-
-  # Add dead process with connections
-  dead_process <- list(
-    get_pid = function() 99999,
-    is_alive = function() FALSE
-  )
-  config$add_app_process("dead_app", dead_process)
-  config$add_ws_connection("orphan", list(app_name = "dead_app", ws = NULL))
-
-  pm <- ProcessManager$new(config)
-
-  local_mocked_bindings(
-    is_process_alive = function(process) FALSE
-  )
-
-  pm$cleanup_dead_processes()
-
-  # Connection should be cleaned up
   expect_null(config$get_ws_connection("orphan"))
+  expect_false(is.null(config$get_ws_connection("kept")))
 })
 
 # ============================================================================

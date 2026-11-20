@@ -15,8 +15,7 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
     proxy_server = "ANY",
     management_server = "ANY",
     is_shutting_down = "logical",
-    shutdown_complete = "logical", # A shutdown that was interrupted runs again
-    cleanup_in_progress = "logical"
+    shutdown_complete = "logical" # A shutdown that was interrupted runs again
   ),
   methods = list(
     initialize = function(config_file = "config.json") {
@@ -26,9 +25,10 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       config <<- create_server_config(config_file)
 
       # Initialize logging
-      setup_logging(config$config$log_dir)
+      setup_logging(config$config$log_dir, config$config$log_level %||% "INFO")
       config$log_port_assignments()
       config$log_ignored_fields()
+      config$log_unusable_apps()
 
       # Initialize other components
       process_manager <<- create_process_manager(config)
@@ -40,7 +40,6 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       management_server <<- NULL
       is_shutting_down <<- FALSE
       shutdown_complete <<- FALSE
-      cleanup_in_progress <<- FALSE
 
       logger::log_info("Tiny Shiny Server initialized")
     },
@@ -115,33 +114,14 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       }
       later::later(schedule_health_check, 5)
 
-      # Cleanup scheduler
-      # NOTE: Running cleanup in main thread instead of future to avoid race conditions
-      # Future-based cleanup runs in a separate process and modifications don't affect main process
+      # Cleanup scheduler. It runs on the event loop like every other callback,
+      # so one cleanup always finishes before the next starts. Exited app
+      # processes are removed by the health check above.
       schedule_cleanup <- function() {
         if (!is_shutting_down) {
-          # Simple lock to prevent concurrent cleanup
-          if (cleanup_in_progress) {
-            logger::log_debug("Cleanup already in progress, skipping this cycle")
-            later::later(schedule_cleanup, config$CLEANUP_INTERVAL_SECONDS)
-            return()
-          }
-
-          cleanup_in_progress <<- TRUE
-
-          # Ensure flag is always reset, even if interrupted or error occurs
-          on.exit(
-            {
-              cleanup_in_progress <<- FALSE
-            },
-            add = TRUE
-          )
-
           tryCatch(
             {
-              # Run cleanup directly in main thread
               process_manager$cleanup_stale_connections()
-              process_manager$cleanup_dead_processes()
 
               # Validate connection count consistency and auto-fix errors
               validation_result <- config$validate_connection_count_consistency(fix_errors = TRUE)
@@ -282,11 +262,12 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
         }
       )
 
-      if (!identical(config$config$log_dir, old_config$log_dir)) {
+      if (!identical(config$config$log_dir, old_config$log_dir) ||
+        !identical(config$config$log_level, old_config$log_level)) {
         # The new log_dir was checked before any app stopped. If it has
         # become unwritable since, keep the previous server log rather than
         # leave the reload half applied.
-        tryCatch(setup_logging(config$config$log_dir), error = function(e) {
+        tryCatch(setup_logging(config$config$log_dir, config$config$log_level %||% "INFO"), error = function(e) {
           logger::log_warn("Keeping the previous server log: {error}", error = conditionMessage(e))
         })
       }
@@ -299,6 +280,7 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       if (result$valid) {
         logger::log_info("Configuration reloaded")
         config$log_ignored_fields()
+        config$log_unusable_apps()
         # The dashboard shows this message, so name any option that had no effect
         message <- "Configuration reloaded"
         if (length(config$ignored_fields) > 0) {
