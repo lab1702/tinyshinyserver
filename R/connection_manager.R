@@ -44,12 +44,14 @@ ConnectionManager <- setRefClass("ConnectionManager",
         backend_url = backend_url, app_name = app_name
       )
 
-      # Create WebSocket connection to backend
-      headers <- list()
-      for (name in c("Cookie", "Authorization")) {
-        value <- client_ws$request[[paste0("HTTP_", toupper(name))]]
-        if (!is.null(value)) headers[[name]] <- value
-      }
+      # Create WebSocket connection to backend. An app's session reads its
+      # request headers from this handshake, so it carries the same headers as
+      # a proxied HTTP request, such as the identity headers an authenticating
+      # reverse proxy adds. The handshake's own Sec-WebSocket fields belong to
+      # each connection, and the proxy has already checked Origin, which would
+      # not match the app's internal address.
+      headers <- forwarded_request_headers(client_ws$request, skip = "ORIGIN")
+      headers <- headers[!grepl("^SEC-WEBSOCKET-", names(headers))]
       # Apps may send large outputs (e.g. htmlwidget data) as one message;
       # don't impose the websocket package's 32 MiB default on them.
       backend_ws <- websocket::WebSocket$new(backend_url,
@@ -196,7 +198,7 @@ ConnectionManager <- setRefClass("ConnectionManager",
     },
     add_client_connection = function(session_id, ws, app_name, client_ip, user_agent) {
       "Add a new client WebSocket connection"
-      assign(app_name, NULL, envir = config$pending_session_checks)
+      cancel_session_check(app_name)
 
       config$add_ws_connection(session_id, list(
         ws = ws,
@@ -249,7 +251,7 @@ ConnectionManager <- setRefClass("ConnectionManager",
       }
     },
     begin_http_request = function(app_name) {
-      assign(app_name, NULL, envir = config$pending_session_checks)
+      cancel_session_check(app_name)
       count <- config$active_http_requests[[app_name]] %||% 0L
       assign(app_name, count + 1L, envir = config$active_http_requests)
     },
@@ -268,9 +270,12 @@ ConnectionManager <- setRefClass("ConnectionManager",
       process <- config$get_app_process(app_name)
       if (is.null(process_manager) || is.null(app_config) || app_config$resident ||
           is.null(process) || config$get_app_connection_count(app_name) > 0L) return(FALSE)
+      # Every finished HTTP request asks for a check, so drop the timer this
+      # one replaces instead of leaving it queued for the whole grace period.
+      cancel_session_check(app_name)
       token <- new.env(parent = emptyenv())
       assign(app_name, token, envir = config$pending_session_checks)
-      later::later(function() {
+      token$cancel <- later::later(function() {
         if (!identical(config$pending_session_checks[[app_name]], token)) return(FALSE)
         assign(app_name, NULL, envir = config$pending_session_checks)
         if (!identical(config$get_app_process(app_name), process) ||
@@ -279,6 +284,14 @@ ConnectionManager <- setRefClass("ConnectionManager",
         maybe_stop_idle_app(app_name)
       }, grace_seconds)
       TRUE
+    },
+    cancel_session_check = function(app_name) {
+      "Withdraw an app's pending idle check and its timer"
+      pending <- config$pending_session_checks[[app_name]]
+      # Forget the check before cancelling its timer: a timer that still fires
+      # then finds that it is no longer the pending one and does nothing.
+      assign(app_name, NULL, envir = config$pending_session_checks)
+      if (is.function(pending$cancel)) pending$cancel()
     },
     maybe_stop_idle_app = function(app_name) {
       "Stop on-demand app if it has no active connections"

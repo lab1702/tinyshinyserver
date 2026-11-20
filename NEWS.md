@@ -22,6 +22,8 @@
 
 * Client IP addresses shown in the management dashboard and logs are taken from `X-Forwarded-For` or `X-Real-IP` only when the request comes from a reverse proxy on the same machine, and then from the entry that proxy added.
 
+* App WebSocket sessions now receive the same request headers as proxied HTTP requests, so `session$request` includes the identity headers that an authenticating reverse proxy adds, such as `X-Forwarded-User`, as well as `User-Agent` and `X-Forwarded-For`. Previously only `Cookie` and `Authorization` were forwarded.
+
 * HTTP 502 responses from the proxy no longer include the underlying connection error, which named the app's internal address and port. The error is written to `server.log`.
 
 * Requests to apps no longer follow the `http_proxy` and `ALL_PROXY` environment variables. Where R was configured to use a proxy and `no_proxy` did not list `127.0.0.1`, app requests, with their cookies and bodies, were sent to that proxy, and every app answered HTTP 502 or 503.
@@ -57,6 +59,16 @@
 * `start_tss()` now configures logging only for the package's own logger namespace, so the caller's `logger` threshold and appender are no longer changed for the rest of the R session.
 
 * WebSocket messages for a client session that is no longer tracked no longer open an orphaned backend session.
+
+* The server now opens the proxy and management ports before it starts any app. A second server started by mistake on the same ports stops with an error straight away; it previously started its own app processes and renamed the running server's app logs to `.prev.log` first.
+
+* Configuration fields that the server does not recognize, such as a misspelled `resident`, are now reported as a warning in `server.log` at startup, and in the dashboard's notice after a reload. They were ignored without notice.
+
+* Proxied responses no longer carry two `Date` headers, and a response that an app sends without a `Content-Type`, such as HTTP 304, is no longer labelled `text/html`.
+
+* Apps can now be stopped and restarted on platforms where the `ps` package cannot list processes. Stopping an app failed there, which also blocked restarts, reloads, and shutdown; on those platforms only the app's own process is stopped, not processes it started.
+
+* An on-demand app's finished HTTP requests no longer each leave a timer queued for 30 seconds; a newer idle check now replaces the pending one.
 
 * WebSocket messages larger than 32 MB from an app to the browser, such as large htmlwidget outputs, no longer disconnect the browser session.
 

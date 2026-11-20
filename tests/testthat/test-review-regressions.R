@@ -1,4 +1,7 @@
 test_that("crash cleanup terminates workers after their parent has exited", {
+  # Starts two real R processes for each action; too slow and timing-dependent
+  # for a loaded check machine
+  skip_on_cran()
   check_cleanup <- function(action) {
     marker <- tempfile()
     pid_file <- tempfile()
@@ -17,7 +20,7 @@ test_that("crash cleanup terminates workers after their parent has exited", {
       if (file.exists(pid_file)) try(tools::pskill(as.integer(readLines(pid_file))), silent = TRUE)
       unlink(c(marker, pid_file))
     }, add = TRUE)
-    deadline <- Sys.time() + 5
+    deadline <- Sys.time() + 30
     while ((!file.exists(marker) || !file.exists(pid_file)) && Sys.time() < deadline) Sys.sleep(.02)
     expect_true(file.exists(marker), info = action)
     parent$kill()
@@ -385,6 +388,87 @@ test_that("termination tolerates tree members exiting before they are signalled"
   expect_false(alive)
 })
 
+test_that("termination stops the app's own process where ps cannot list processes", {
+  # processx's kill_tree() only raises an error on such platforms
+  local_mocked_bindings(ps_is_supported = function() FALSE, .package = "ps")
+  alive <- TRUE
+  process <- list(
+    is_alive = function() alive,
+    kill_tree = function() stop("kill_tree is not supported on this platform"),
+    kill = function() alive <<- FALSE,
+    wait = function(timeout) NULL
+  )
+  expect_true(kill_process_safely(process))
+  expect_false(alive)
+})
+
+test_that("a superseded idle check withdraws its timer", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = FALSE)))
+  config$add_app_process("app", list(generation = 1))
+  stops <- 0
+  cm <- ConnectionManager$new(config, list(stop_app_immediately = function(...) stops <<- stops + 1))
+  timers <- list()
+  cancelled <- 0
+  local_mocked_bindings(later = function(func, delay, ...) {
+    timers[[length(timers) + 1L]] <<- func
+    function() cancelled <<- cancelled + 1
+  }, .package = "later")
+
+  # Each finished request asks for a check; only the latest timer stays queued
+  for (i in 1:5) {
+    cm$begin_http_request("app")
+    cm$end_http_request("app")
+  }
+  expect_length(timers, 5)
+  expect_equal(cancelled, 4)
+
+  # A timer that fires anyway after being superseded does nothing
+  timers[[1]]()
+  expect_equal(stops, 0)
+  timers[[5]]()
+  expect_equal(stops, 1)
+
+  # A new session withdraws the pending check as well
+  cm$end_http_request("app")
+  cm$add_client_connection("s", list(), "app", "127.0.0.1", "test")
+  expect_equal(cancelled, 5)
+  expect_null(config$pending_session_checks[["app"]])
+})
+
+test_that("backend WebSocket handshakes carry the request's end-to-end headers", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", port = 3001, resident = TRUE)))
+  sent <- NULL
+  backend <- list(onMessage = function(f) NULL, onOpen = function(f) NULL,
+    onError = function(f) NULL, onClose = function(f) NULL, close = function() NULL)
+  local_mocked_bindings(WebSocket = list(new = function(url, headers, ...) {
+    sent <<- headers
+    backend
+  }), .package = "websocket")
+  local_mocked_bindings(process_owns_port = function(process, port) TRUE)
+  config$add_app_process("app", test_backend_process())
+  cm <- ConnectionManager$new(config)
+  request <- list(PATH_INFO = "/proxy/app/websocket/", REMOTE_ADDR = "127.0.0.1",
+    HTTP_HOST = "myapp.example.com", HTTP_CONNECTION = "Upgrade", HTTP_UPGRADE = "websocket",
+    HTTP_ORIGIN = "https://myapp.example.com", HTTP_SEC_WEBSOCKET_KEY = "client-key",
+    HTTP_SEC_WEBSOCKET_VERSION = "13", HTTP_SEC_WEBSOCKET_EXTENSIONS = "permessage-deflate",
+    HTTP_COOKIE = "session=alice", HTTP_AUTHORIZATION = "Basic YWxpY2U6cHc=",
+    HTTP_X_FORWARDED_USER = "alice", HTTP_USER_AGENT = "Browser/1.0", HTTP_ACCEPT_LANGUAGE = "sv")
+  client <- list(request = request, close = function() NULL)
+  cm$add_client_connection("s", client, "app", "127.0.0.1", "test")
+  cm$create_backend_connection("app", "s", client)
+  expect_setequal(names(sent), c("COOKIE", "AUTHORIZATION", "X-FORWARDED-USER", "USER-AGENT", "ACCEPT-LANGUAGE"))
+  expect_equal(sent[["X-FORWARDED-USER"]], "alice")
+
+  # A handshake with nothing to forward still connects
+  bare <- list(request = list(PATH_INFO = "/proxy/app/websocket/", HTTP_HOST = "127.0.0.1:3838",
+    HTTP_SEC_WEBSOCKET_KEY = "client-key"), close = function() NULL)
+  cm$add_client_connection("t", bare, "app", "127.0.0.1", "test")
+  cm$create_backend_connection("app", "t", bare)
+  expect_length(sent, 0)
+})
+
 test_that("restart delays yield and are cancelled by stop and shutdown", {
   config <- ShinyServerConfig$new()
   config$config <- list(apps = list(list(name = "app", resident = TRUE)), restart_delay = 0.05)
@@ -429,6 +513,8 @@ test_that("health checks delay crashed resident app restarts without duplicates"
 })
 
 test_that("termination stops a real child worker as well as its parent", {
+  # Starts two real R processes; see the crash cleanup test above
+  skip_on_cran()
   marker <- tempfile()
   child_pid_file <- tempfile()
   parent <- callr::r_bg(function(marker, child_pid_file) {
@@ -446,7 +532,7 @@ test_that("termination stops a real child worker as well as its parent", {
     if (file.exists(child_pid_file)) try(tools::pskill(as.integer(readLines(child_pid_file))), silent = TRUE)
     unlink(c(marker, child_pid_file))
   }, add = TRUE)
-  deadline <- Sys.time() + 5
+  deadline <- Sys.time() + 30
   while ((!file.exists(marker) || !file.exists(child_pid_file)) && Sys.time() < deadline) Sys.sleep(.02)
   expect_true(file.exists(marker))
   expect_true(kill_process_safely(parent))

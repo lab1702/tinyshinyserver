@@ -143,10 +143,7 @@ test_that("route_http_request routes to apps API", {
   template_manager <- create_mock_template_manager()
   connection_manager <- create_mock_connection_manager()
 
-  # Mock request with process_manager
-  req <- list(process_manager = NULL)
-
-  result <- route_http_request("/api/apps", "GET", NULL, req, config, template_manager, connection_manager)
+  result <- route_http_request("/api/apps", "GET", NULL, list(), config, template_manager, connection_manager)
   expect_equal(result$status, 200)
   expect_equal(result$headers$`Content-Type`, "application/json")
 
@@ -525,9 +522,9 @@ test_that("a browser opening an app that is not ready gets a page that reloads i
   local_mocked_bindings(wait_for_backend = function(url, wait_seconds) promises::promise_resolve(FALSE))
   tm <- create_template_manager(base_url = "/shiny")
   url <- "http://127.0.0.1:3001/"
-  browser <- list(HTTP_ACCEPT = "text/html,application/xhtml+xml,*/*;q=0.8", template_manager = tm)
+  browser <- list(HTTP_ACCEPT = "text/html,application/xhtml+xml,*/*;q=0.8")
 
-  page <- await_response(forward_request("GET", url, browser, "testapp", config))
+  page <- await_response(forward_request("GET", url, browser, "testapp", config, tm))
   expect_equal(page$status, 503)
   expect_equal(page$headers[["Retry-After"]], "2")
   expect_equal(page$headers[["Content-Type"]], "text/html")
@@ -538,16 +535,16 @@ test_that("a browser opening an app that is not ready gets a page that reloads i
 
   # Scripts, other clients and other methods keep the JSON answer
   others <- list(
-    list(method = "GET", req = list(HTTP_ACCEPT = "*/*", template_manager = tm)),
-    list(method = "GET", req = list(template_manager = tm)),
-    list(method = "GET", req = list(HTTP_ACCEPT = "text/html")),
-    list(method = "POST", req = browser),
-    list(method = "GET", req = list(HTTP_ACCEPT = "text/html", template_manager = list(
+    list(method = "GET", req = list(HTTP_ACCEPT = "*/*"), tm = tm),
+    list(method = "GET", req = list(), tm = tm),
+    list(method = "GET", req = browser, tm = NULL),
+    list(method = "POST", req = browser, tm = tm),
+    list(method = "GET", req = browser, tm = list(
       generate_starting_page = function(...) stop("Template error")
-    )))
+    ))
   )
   for (case in others) {
-    json <- await_response(forward_request(case$method, url, case$req, "testapp", config))
+    json <- await_response(forward_request(case$method, url, case$req, "testapp", config, case$tm))
     expect_equal(json$status, 503)
     expect_equal(json$headers[["Content-Type"]], "application/json")
     expect_match(json$body, "starting up")
@@ -557,7 +554,7 @@ test_that("a browser opening an app that is not ready gets a page that reloads i
   assign("testapp", list(
     state = "starting", started_at = Sys.time() - (config$APP_STARTUP_TIMEOUT_SECONDS + 5)
   ), envir = config$app_startup_state)
-  late <- forward_request("GET", url, browser, "testapp", config)
+  late <- forward_request("GET", url, browser, "testapp", config, tm)
   expect_equal(late$status, 502)
   expect_equal(late$headers[["Content-Type"]], "text/html")
   expect_match(late$body, "window.location.reload()", fixed = TRUE)
@@ -567,8 +564,8 @@ test_that("handle_http_request passes the template manager to proxied requests",
   config <- ShinyServerConfig$new()
   config$config <- list(apps = list(list(name = "testapp", path = "/path", port = 3001, resident = TRUE)))
   seen <- NULL
-  local_mocked_bindings(forward_request = function(method, target_url, req, app_name, config) {
-    seen <<- req$template_manager
+  local_mocked_bindings(forward_request = function(method, target_url, req, app_name, config, template_manager = NULL) {
+    seen <<- template_manager
     create_html_response("proxied")
   })
   req <- new.env()
@@ -643,14 +640,12 @@ test_that("route_http_request routes proxy requests correctly", {
   template_manager <- create_mock_template_manager()
   connection_manager <- ConnectionManager$new(config)
 
-  req <- list(process_manager = NULL, connection_manager = connection_manager)
-
   # Without a running app, this should return 503.
   local_mocked_bindings(
     wait_for_backend = function(url, wait_seconds) promises::promise_resolve(FALSE)
   )
 
-  result <- await_response(route_http_request("/proxy/testapp/", "GET", NULL, req, config, template_manager, connection_manager))
+  result <- await_response(route_http_request("/proxy/testapp/", "GET", NULL, list(), config, template_manager, connection_manager))
 
   expect_equal(result$status, 503)
 })

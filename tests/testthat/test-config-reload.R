@@ -130,6 +130,20 @@ test_that("reload endpoint rejects a bad file without requesting a reload", {
   expect_equal(route_management_request("/api/reload", "POST", list(), config, list(), list())$status, 403)
 })
 
+test_that("a reload names the configuration fields that had no effect", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  write_reload_config(path, list(list(name = "app", path = "/tmp", resident = TRUE)))
+  test <- reload_test_server(path)
+  config <- test$server$config
+
+  write_reload_config(path, list(list(name = "app", path = "/tmp", resdient = TRUE)), restart_dealy = 1)
+  test$server$reload()
+  expect_true(config$last_reload$success)
+  expect_equal(config$last_reload$message,
+    'Configuration reloaded; ignored unrecognized fields: "restart_dealy", "resdient" in app "app"')
+})
+
 test_that("the status API reports the latest reload outcome", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)

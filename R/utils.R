@@ -163,7 +163,7 @@ process_usage <- function(process) {
   usage
 }
 
-kill_process_safely <- function(process, force = FALSE) {
+kill_process_safely <- function(process) {
   "Safely terminate a process"
 
   if (is.null(process)) {
@@ -174,10 +174,12 @@ kill_process_safely <- function(process, force = FALSE) {
     {
       # processx tracks descendants by inherited markers, even after parent exit.
       # Tree members can exit between being listed and being signalled.
-      if (is.function(process$kill_tree)) {
+      # Where ps cannot list processes, kill_tree() only raises an error, so
+      # the app's own process is stopped below and its children are not found.
+      if (is.function(process$kill_tree) && ps::ps_is_supported()) {
         tryCatch(process$kill_tree(), no_such_process = function(e) NULL)
       }
-      if (!force && is_process_alive(process)) process$kill()
+      if (is_process_alive(process)) process$kill()
       # Signal delivery can precede process exit, particularly on macOS.
       # Wait briefly for termination, but still report a surviving process.
       if (is.function(process$wait)) process$wait(timeout = 1000)

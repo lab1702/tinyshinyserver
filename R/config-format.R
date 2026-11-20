@@ -30,7 +30,9 @@
 #'
 #' Relative application paths and \code{log_dir} are resolved from the R working
 #' directory (\code{getwd()}), not the configuration file's directory. JSON does
-#' not allow comments.
+#' not allow comments. Fields that the server does not recognize, such as a
+#' misspelled option name, have no effect; they are reported as a warning in
+#' \code{server.log} at startup and after a reload.
 #'
 #' @section Required Fields:
 #' \describe{

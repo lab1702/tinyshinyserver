@@ -111,7 +111,7 @@ test_that("backend closure disconnects its browser and ignores stale callbacks",
   expect_equal(closed, 1)
 })
 
-test_that("partial startup failure stops servers, apps and future monitoring", {
+test_that("a busy port stops startup before any app or monitoring starts", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
   writeLines(jsonlite::toJSON(list(apps = list(list(name = "app", path = "/tmp", resident = TRUE)),
@@ -145,12 +145,13 @@ test_that("partial startup failure stops servers, apps and future monitoring", {
     expect_true(server$is_shutting_down)
     expect_null(server$proxy_server)
     expect_null(server$management_server)
-    expect_equal(started_apps, 1)
+    # The ports are bound first, so a second server on the same ports never
+    # starts app processes or rotates the logs the first one is writing
+    expect_equal(started_apps, 0)
     expect_equal(stopped_apps, 1)
     expect_equal(stopped_servers, 1)
-    for (callback in scheduled) callback()
+    expect_length(scheduled, 0)
     expect_equal(health_checks, 0)
-    expect_length(scheduled, 2)
   })
 })
 

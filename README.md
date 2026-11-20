@@ -98,7 +98,7 @@ The server reads a JSON configuration file. After copying the examples, save thi
 
 `apps`, `starting_port`, and `log_dir` are required. Other server settings have defaults. Relative app paths and `log_dir` are resolved from the R working directory (`getwd()`), **not from the configuration file's directory**. Absolute paths are also supported.
 
-JSON does not allow comments. See `help("config-format")` for the complete reference.
+JSON does not allow comments. A field that the server does not recognize, such as a misspelled option name, has no effect; the server reports it as a warning in `server.log` at startup, and in the dashboard's notice after a reload. See `help("config-format")` for the complete reference.
 
 ### Included examples
 
@@ -168,6 +168,8 @@ The proxy applies these limits:
 | `"::"` | All IPv6 interfaces |
 
 The server is intended for development and internal use. It does not provide built-in authentication or TLS. For external access, put an authenticated HTTPS reverse proxy in front of it and restrict direct access with firewall rules.
+
+The proxy passes request headers on to the app, both on HTTP requests and on the WebSocket connection whose headers Shiny exposes as `session$request`. An app can therefore read an identity header that the reverse proxy sets, such as `X-Forwarded-User`. Rely on such a header only if the reverse proxy overwrites it and clients cannot reach the proxy port directly; otherwise a client can send its own.
 
 The proxy checks the `Host` header to block DNS rebinding only when `proxy_host` is a loopback address. With `"0.0.0.0"` or `"::"`, any website visited by someone who can reach the proxy port can point its own domain at this server and then read and control the apps through that person's browser. A firewall that admits a whole network therefore does not keep the apps private from the web. In that setup, allow direct connections to the proxy port only from the reverse proxy.
 

@@ -1093,6 +1093,43 @@ test_that("title must be a non-empty string of at most 100 characters", {
   }
 })
 
+test_that("unrecognized configuration fields are reported instead of silently dropped", {
+  config <- ShinyServerConfig$new()
+  tmp_config <- tempfile(fileext = ".json")
+  on.exit(unlink(tmp_config), add = TRUE)
+  settings <- list(
+    apps = list(
+      list(name = "sales", path = "/tmp/sales", resdient = TRUE),
+      list(name = "plain", path = "/tmp/plain", resident = TRUE, appstart_timeout = 5)
+    ),
+    log_dir = "/tmp/logs", starting_port = 5001, max_request_size = 10
+  )
+  writeLines(jsonlite::toJSON(settings, auto_unbox = TRUE), tmp_config)
+
+  loaded <- config$read_config(tmp_config)
+  expect_equal(config$ignored_fields, c('"max_request_size"', '"resdient" in app "sales"'))
+  # The misspelled option has no effect
+  expect_false(loaded$apps[[1]]$resident)
+
+  warnings <- character()
+  local_mocked_bindings(log_warn = function(...) {
+    warnings <<- c(warnings, paste(list(...), collapse = " "))
+  }, .package = "logger")
+  config$log_ignored_fields()
+  expect_length(warnings, 1)
+  expect_match(warnings, '"max_request_size", "resdient" in app "sales"', fixed = TRUE)
+
+  # A file with only known fields reports nothing
+  settings$max_request_size <- NULL
+  settings$apps[[1]]$resdient <- NULL
+  writeLines(jsonlite::toJSON(settings, auto_unbox = TRUE), tmp_config)
+  config$read_config(tmp_config)
+  expect_length(config$ignored_fields, 0)
+  warnings <- character()
+  config$log_ignored_fields()
+  expect_length(warnings, 0)
+})
+
 test_that("load_config trims the configured title", {
   config <- ShinyServerConfig$new()
   tmp_config <- tempfile(fileext = ".json")

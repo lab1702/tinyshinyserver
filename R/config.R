@@ -1,12 +1,34 @@
 # Configuration Management Module
 # Centralizes configuration loading, validation, and state management
 
+# The fields a configuration file may contain. Any other field, such as a
+# misspelled option, has no effect and is reported in the server log.
+KNOWN_CONFIG_FIELDS <- c(
+  "apps", "log_dir", "starting_port", "proxy_port", "proxy_host", "management_port",
+  "restart_delay", "health_check_interval", "max_request_size_mb", "title", "base_path"
+)
+KNOWN_APP_FIELDS <- c("name", "path", "resident", "appstart_timeout")
+
+unrecognized_config_fields <- function(config) {
+  "Describe the fields of a validated configuration that the server does not use"
+
+  ignored <- dQuote(setdiff(names(config), KNOWN_CONFIG_FIELDS), FALSE)
+  for (app in config$apps) {
+    extra <- setdiff(names(app), KNOWN_APP_FIELDS)
+    if (length(extra) > 0) {
+      ignored <- c(ignored, paste(dQuote(extra, FALSE), "in app", dQuote(app$name, FALSE)))
+    }
+  }
+  ignored
+}
+
 # Configuration class to encapsulate global state
 ShinyServerConfig <- setRefClass("ShinyServerConfig",
   fields = list(
     # Configuration data
     config = "list",
     config_file = "character", # Absolute path, read again on reload
+    ignored_fields = "character", # Unrecognized fields in the file as last read
 
     # Runtime state
     app_processes = "list",
@@ -21,20 +43,17 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     pending_session_checks = "environment",
     app_startup_state = "environment", # Track app startup progress (starting/ready)
     verified_backends = "environment", # Process generations confirmed to own their app port
-    management_server = "ANY",
     shutdown_requested = "logical", # Set by the management API; read by the event loop
     reload_requested = "logical", # Set by the management API; read by the event loop
     last_reload = "list", # Outcome of the latest reload; empty while one is pending
     started_at = "ANY", # When the server was created, for the reported uptime
 
-    # Constants
+    # Constants. Limits on request paths, query strings, and methods are the
+    # defaults of the validation functions in validation.R.
     MAX_PENDING_MESSAGES = "numeric",
     CONNECTION_TIMEOUT_MINUTES = "numeric",
     CLEANUP_INTERVAL_SECONDS = "numeric",
-    MAX_PATH_LENGTH = "numeric",
-    MAX_QUERY_LENGTH = "numeric",
     MAX_MESSAGE_SIZE = "numeric",
-    ALLOWED_HTTP_METHODS = "character",
     APP_STARTUP_TIMEOUT_SECONDS = "numeric",
     HTTP_SESSION_GRACE_SECONDS = "numeric"
   ),
@@ -44,10 +63,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       MAX_PENDING_MESSAGES <<- 100
       CONNECTION_TIMEOUT_MINUTES <<- 30
       CLEANUP_INTERVAL_SECONDS <<- 300
-      MAX_PATH_LENGTH <<- 1000
-      MAX_QUERY_LENGTH <<- 8192
       MAX_MESSAGE_SIZE <<- 1048576
-      ALLOWED_HTTP_METHODS <<- c("GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS")
       APP_STARTUP_TIMEOUT_SECONDS <<- 30
       HTTP_SESSION_GRACE_SECONDS <<- 30
 
@@ -60,7 +76,6 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       pending_session_checks <<- new.env(hash = TRUE, parent = emptyenv())
       app_startup_state <<- new.env(hash = TRUE, parent = emptyenv())
       verified_backends <<- new.env(hash = TRUE, parent = emptyenv())
-      management_server <<- NULL
       shutdown_requested <<- FALSE
       reload_requested <<- FALSE
       last_reload <<- list()
@@ -69,6 +84,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       # Initialize empty config (to be loaded via load_config)
       config <<- list()
       config_file <<- NA_character_
+      ignored_fields <<- character()
     },
     load_config = function(config_file = "config.json") {
       "Load and validate configuration from file"
@@ -101,6 +117,10 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       }
 
       new_config <- validation_result$sanitized
+
+      # A misspelled option would otherwise be dropped without a trace. The
+      # server log may not be open yet, so log_ignored_fields() reports these.
+      ignored_fields <<- unrecognized_config_fields(parsed_config)
 
       # Set defaults for optional fields
       new_config$proxy_port <- new_config$proxy_port %||% 3838
@@ -714,6 +734,14 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       }
       logger::log_info("  Proxy -> port {port}", port = config$proxy_port)
       logger::log_info("  Management -> port {port}", port = config$management_port)
+    },
+    log_ignored_fields = function() {
+      "Log the configuration fields that have no effect (after logging is set up)"
+      if (length(ignored_fields) > 0) {
+        logger::log_warn("Ignoring unrecognized configuration fields: {fields}",
+          fields = paste(ignored_fields, collapse = ", ")
+        )
+      }
     },
 
     # App startup state tracking methods

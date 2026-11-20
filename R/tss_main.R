@@ -28,6 +28,7 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       # Initialize logging
       setup_logging(config$config$log_dir)
       config$log_port_assignments()
+      config$log_ignored_fields()
 
       # Initialize other components
       process_manager <<- create_process_manager(config)
@@ -54,14 +55,17 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       logger::log_info("Starting Tiny Shiny Server")
       logger::log_info("Press Ctrl-C to shutdown gracefully")
 
+      # Bind the proxy and management ports first. If another server already
+      # holds them, this one stops here, before it starts app processes or
+      # rotates the app logs that the other server is writing. Requests are
+      # served only once the event loop runs.
+      start_servers()
+
       # Start all Shiny applications
       start_all_apps()
 
       # Start monitoring services
       start_monitoring_services()
-
-      # Start HTTP servers
-      start_servers()
 
       # Main event loop
       run_event_loop()
@@ -291,11 +295,20 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       config$log_port_assignments()
 
       start_all_apps()
-      if (result$valid) logger::log_info("Configuration reloaded")
-      config$field("last_reload", list(
-        success = result$valid,
-        message = if (result$valid) "Configuration reloaded" else result$error
-      ))
+      message <- result$error
+      if (result$valid) {
+        logger::log_info("Configuration reloaded")
+        config$log_ignored_fields()
+        # The dashboard shows this message, so name any option that had no effect
+        message <- "Configuration reloaded"
+        if (length(config$ignored_fields) > 0) {
+          message <- paste0(
+            message, "; ignored unrecognized fields: ",
+            paste(config$ignored_fields, collapse = ", ")
+          )
+        }
+      }
+      config$field("last_reload", list(success = result$valid, message = message))
       invisible(result)
     },
     shutdown = function() {

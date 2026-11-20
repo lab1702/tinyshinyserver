@@ -210,6 +210,22 @@ José,Zürich
   expect_identical(response$headers[["content-type"]], "text/csv; charset=utf-8")
 })
 
+test_that("proxied responses carry no second Date and no invented Content-Type", {
+  # httpuv writes each response's Date itself
+  headers <- charToRaw("HTTP/1.1 304 Not Modified\r\nDate: Fri, 20 Nov 2026 19:28:30 GMT\r\nETag: abc\r\n\r\n")
+  expect_equal(names(proxy_response_headers(headers, "http://127.0.0.1:3001/file.txt", "app", "GET")), "etag")
+
+  backend <- start_test_http_server(function(req) {
+    list(status = 200L, headers = list("X-App" = "untyped"), body = charToRaw("bytes"))
+  })
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  response <- await_response(forward_request("GET", backend$url, list(), "app", proxy_test_config(backend$port)))
+  expect_equal(response$status, 200)
+  expect_identical(response$body, charToRaw("bytes"))
+  expect_equal(response$headers[["x-app"]], "untyped")
+  expect_false(any(c("date", "content-type") %in% names(response$headers)))
+})
+
 test_that("proxied requests close their backend connections when they finish", {
   skip_if_not(ps::ps_is_supported())
   backend <- start_test_http_server(function(req) create_html_response("ok"))
@@ -545,7 +561,8 @@ test_that("WebSocket proxy forwards each browser's own authentication headers", 
   backend <- start_test_http_server(function(req) create_html_response("ok"), on_ws = function(ws) {
     ws$onMessage(function(binary, message) {
       ws$send(jsonlite::toJSON(list(cookie = ws$request$HTTP_COOKIE %||% "NONE",
-        auth = ws$request$HTTP_AUTHORIZATION %||% "NONE"), auto_unbox = TRUE))
+        auth = ws$request$HTTP_AUTHORIZATION %||% "NONE",
+        user = ws$request$HTTP_X_FORWARDED_USER %||% "NONE"), auto_unbox = TRUE))
     })
   })
   on.exit(httpuv::stopServer(backend$server), add = TRUE)
@@ -555,7 +572,9 @@ test_that("WebSocket proxy forwards each browser's own authentication headers", 
     on_ws = function(ws) handle_websocket_connection(ws, config, cm))
   on.exit(httpuv::stopServer(proxy$server), add = TRUE)
   for (user in c("alice", "bob", "NONE")) {
-    headers <- if (user == "NONE") list() else list(Cookie = paste0("session=", user), Authorization = paste("Bearer", user))
+    # X-Forwarded-User stands for the identity header of an authenticating reverse proxy
+    headers <- if (user == "NONE") list() else list(Cookie = paste0("session=", user),
+      Authorization = paste("Bearer", user), "X-Forwarded-User" = user)
     ws <- websocket::WebSocket$new(paste0(sub("http:", "ws:", proxy$url), "/proxy/app/websocket/"), headers = headers)
     on.exit(ws$close(), add = TRUE, after = FALSE)
     response <- promises::promise(function(resolve, reject) {
@@ -566,6 +585,7 @@ test_that("WebSocket proxy forwards each browser's own authentication headers", 
     actual <- await_response(response)
     expect_equal(actual$cookie, headers$Cookie %||% "NONE")
     expect_equal(actual$auth, headers$Authorization %||% "NONE")
+    expect_equal(actual$user, user)
     ws$close()
   }
 })

@@ -49,16 +49,15 @@ handle_http_request <- function(req, config, template_manager, connection_manage
 
   logger::log_debug("HTTP request: {method} {path}", method = method, path = path)
 
-  # Attach managers to request for routing
-  req$process_manager <- process_manager
-  req$connection_manager <- connection_manager
-  req$template_manager <- template_manager
-
   # Route handling
-  return(route_http_request(path, method, query_string, req, config, template_manager, connection_manager))
+  return(route_http_request(
+    path, method, query_string, req, config,
+    template_manager, connection_manager, process_manager
+  ))
 }
 
-route_http_request <- function(path, method, query_string, req, config, template_manager, connection_manager) {
+route_http_request <- function(path, method, query_string, req, config, template_manager, connection_manager,
+                               process_manager = NULL) {
   "Route HTTP requests to appropriate handlers"
 
   # Landing page
@@ -73,7 +72,7 @@ route_http_request <- function(path, method, query_string, req, config, template
 
   # API endpoint for app status
   if (path == "/api/apps") {
-    return(handle_apps_api(config, req$process_manager))
+    return(handle_apps_api(config, process_manager))
   }
 
   # Static files (CSS, JS, images)
@@ -83,11 +82,9 @@ route_http_request <- function(path, method, query_string, req, config, template
 
   # Proxy requests to apps
   if (startsWith(path, "/proxy/")) {
-    # We need to get references to process_manager and connection_manager
-    # This will be passed from the main HTTP handler
     return(handle_proxy_request(
       path, method, query_string, req, config,
-      req$process_manager, req$connection_manager
+      process_manager, connection_manager, template_manager
     ))
   }
 
@@ -122,39 +119,9 @@ handle_apps_api <- function(config, process_manager = NULL) {
   # This would normally be in management_api.R but needed here for landing page
   tryCatch(
     {
-      if (!is.null(process_manager)) {
-        # Use the enhanced status from process manager
-        apps_status <- process_manager$get_all_app_status()
-      } else {
-        # Fallback to basic status if no process manager available
-        apps_status <- list()
-
-        for (app_config in config$get_sorted_apps()) {
-          app_name <- app_config$name
-          process <- config$get_app_process(app_name)
-
-          status <- if (is.null(process)) {
-            if (app_config$resident) "stopped" else "dormant"
-          } else if (is_process_alive(process)) {
-            "running"
-          } else {
-            "crashed"
-          }
-
-          # Get connection count from cache (O(1) instead of O(n))
-          app_connections <- config$get_app_connection_count(app_name)
-
-          apps_status[[app_name]] <- list(
-            name = app_name,
-            status = status,
-            resident = app_config$resident,
-            port = app_config$port,
-            path = app_config$path,
-            connections = app_connections,
-            pid = if (!is.null(process) && is_process_alive(process)) process$get_pid() else NULL
-          )
-        }
-      }
+      # App state lives in config, so a manager made here reports the same status
+      process_manager <- process_manager %||% create_process_manager(config)
+      apps_status <- process_manager$get_all_app_status()
 
       # The proxy port may be public, so expose only what the landing page
       # needs; paths, ports, and PIDs stay on the loopback management API
@@ -180,7 +147,8 @@ handle_static_file <- function(path, template_manager) {
   return(template_manager$serve_static_file(file_path))
 }
 
-handle_proxy_request <- function(path, method, query_string, req, config, process_manager = NULL, connection_manager = NULL) {
+handle_proxy_request <- function(path, method, query_string, req, config, process_manager = NULL,
+                                 connection_manager = NULL, template_manager = NULL) {
   "Handle proxy requests to Shiny apps"
 
   if (!startsWith(path, "/proxy/") || startsWith(path, "/proxy//")) {
@@ -245,7 +213,7 @@ handle_proxy_request <- function(path, method, query_string, req, config, proces
     }
   }
   tryCatch({
-    response <- forward_request(method, target_url, req, app_name, config)
+    response <- forward_request(method, target_url, req, app_name, config, template_manager)
     if (promises::is.promise(response)) return(promises::finally(response, release))
     release()
     response
@@ -260,7 +228,32 @@ handle_proxy_request <- function(path, method, query_string, req, config, proces
 # in one piece, right after the request headers.
 EXPECT_CONTINUE_BYTES <- 65536
 
-forward_request <- function(method, target_url, req, app_name, config) {
+# Request headers that are not passed on to an app: they describe the client's
+# own connection to the proxy, or httpuv has already acted on them.
+UNFORWARDED_REQUEST_HEADERS <- c(
+  "HOST", "CONNECTION", "KEEP_ALIVE", "TRANSFER_ENCODING",
+  "TE", "TRAILER", "UPGRADE", "PROXY_AUTHORIZATION",
+  "PROXY_AUTHENTICATE", "CONTENT_LENGTH", "CONTENT_TYPE",
+  # httpuv has already answered the client's expectation and read the body
+  "EXPECT"
+)
+
+forwarded_request_headers <- function(req, skip = character()) {
+  "The request headers to send to an app, for HTTP requests and WebSocket handshakes alike"
+
+  headers <- list()
+  for (name in names(req)) {
+    if (startsWith(name, "HTTP_")) {
+      header_name <- substring(name, 6)
+      if (!header_name %in% c(UNFORWARDED_REQUEST_HEADERS, skip)) {
+        headers[[gsub("_", "-", header_name)]] <- req[[name]]
+      }
+    }
+  }
+  headers
+}
+
+forward_request <- function(method, target_url, req, app_name, config, template_manager = NULL) {
   "Forward HTTP requests without blocking the server's event loop"
 
   proxy_error <- function(e) {
@@ -277,7 +270,6 @@ forward_request <- function(method, target_url, req, app_name, config) {
   # every other client receives the JSON.
   retry_seconds <- 2
   for_browser <- function(response) {
-    template_manager <- req$template_manager
     opens_page <- identical(method, "GET") &&
       grepl("text/html", req$HTTP_ACCEPT %||% "", fixed = TRUE)
     if (is.null(template_manager) || !opens_page) {
@@ -320,22 +312,7 @@ forward_request <- function(method, target_url, req, app_name, config) {
 
     # Capture the request body while the httpuv input stream is available.
     # A new curl handle below owns all transport state for this request only.
-    skip_headers <- c(
-      "HOST", "CONNECTION", "KEEP_ALIVE", "TRANSFER_ENCODING",
-      "TE", "TRAILER", "UPGRADE", "PROXY_AUTHORIZATION",
-      "PROXY_AUTHENTICATE", "CONTENT_LENGTH", "CONTENT_TYPE",
-      # httpuv has already answered the client's expectation and read the body
-      "EXPECT"
-    )
-    headers <- list()
-    for (name in names(req)) {
-      if (startsWith(name, "HTTP_")) {
-        header_name <- substring(name, 6)
-        if (!header_name %in% skip_headers) {
-          headers[[gsub("_", "-", header_name)]] <- req[[name]]
-        }
-      }
-    }
+    headers <- forwarded_request_headers(req)
     body <- NULL
     if (!method %in% c("GET", "HEAD", "OPTIONS")) {
       if (!is.null(req$rook.input)) body <- req$rook.input$read()
@@ -402,7 +379,6 @@ forward_request <- function(method, target_url, req, app_name, config) {
         response_headers <- proxy_response_headers(
           response$headers, target_url, app_name, method, config$config$base_path %||% ""
         )
-        if (is.null(response_headers[["content-type"]])) response_headers[["content-type"]] <- "text/html"
         # httpuv sends raw bodies unchanged. Scanning or converting the bytes
         # would briefly multiply a large download's memory use.
         list(
@@ -430,12 +406,14 @@ forward_request <- function(method, target_url, req, app_name, config) {
 # Preserve end-to-end headers, including repeated Set-Cookie fields. Transfer
 # framing belongs to httpuv; libcurl already removes chunk framing, but content
 # decoding is disabled so Content-Encoding still describes the returned bytes.
+# A response the app sent without a Content-Type is passed on without one.
 proxy_response_headers <- function(raw_headers, target_url, app_name, method, base_path = "") {
   headers <- curl::parse_headers_list(raw_headers)
   connection <- as.character(unlist(headers[names(headers) == "connection"], use.names = FALSE))
   nominated <- tolower(trimws(unlist(strsplit(connection, ",", fixed = TRUE))))
+  # httpuv adds its own Date to every response; the app's would be a second one
   excluded <- c("connection", "keep-alive", "transfer-encoding", "te", "trailer",
-    "upgrade", "proxy-authenticate", "proxy-authorization", nominated)
+    "upgrade", "proxy-authenticate", "proxy-authorization", "date", nominated)
   if (method != "HEAD") excluded <- c(excluded, "content-length")
   headers <- headers[!names(headers) %in% excluded]
   # Redirects and cookie paths must name the app's public URL
