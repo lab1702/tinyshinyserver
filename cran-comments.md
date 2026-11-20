@@ -33,6 +33,12 @@ documented in NEWS.md and README.md.
   reading them, instead of buffering them in memory.
 * The public `/api/apps` endpoint no longer exposes app paths, ports, or
   process IDs.
+* An unexpected error while answering a request is answered with HTTP 500
+  and no detail, and is written to `server.log`. The client used to receive
+  the R error message; on Windows, a request for `/templates/nul` returned
+  the server's installation path that way, and now gets HTTP 404.
+* The INFO message for an app's WebSocket connection no longer includes the
+  connection's query string, which can carry a token.
 * App processes write stdout and stderr directly to their log files instead
   of unread pipes that could fill and hang the app. The previous run's logs
   are kept.
@@ -75,6 +81,10 @@ documented in NEWS.md and README.md.
   configuration as well as reported.
 * Proxied responses no longer carry two `Date` headers, and a response that
   an app sends without a `Content-Type` is no longer labelled `text/html`.
+* A request body that the client sent without a `Content-Type` reaches the
+  app without one; the proxy labelled it
+  `application/x-www-form-urlencoded`. A request with `Content-Length: 0`
+  keeps that header and its `Content-Type`, which were both dropped.
 * App responses larger than 8 MB are written to a temporary file as they
   arrive and sent from there, instead of being held in the server's memory.
   Responses that cannot have a body (HTTP 204 and 304, and the answer to a
@@ -86,7 +96,9 @@ documented in NEWS.md and README.md.
 * An app whose directory is missing, or holds no app entry point, is no
   longer started. A resident app with a mistyped path used to start a new R
   process that exited, every 10 to 15 seconds; the reason is now written to
-  `server.log`.
+  `server.log`. An on-demand app in that state has the new status
+  "unavailable" instead of "dormant", and its landing page tile is disabled;
+  opening it could only fail with HTTP 502.
 * A restart requested from the dashboard or API no longer waits for
   `restart_delay`, which applies to restarts after a failure. Restarting an
   on-demand app stops it until it is next opened.
@@ -117,7 +129,9 @@ documented in NEWS.md and README.md.
   prefix on an existing site behind a reverse proxy.
 * The management dashboard shows the server's and each running app's uptime
   and memory use. `/api/status` returns them in place of the `server_uptime`
-  and `memory_usage` fields, which were always "N/A".
+  and `memory_usage` fields, which were always "N/A". The management
+  `/api/apps` leaves out `pid` for an app that is not running; it returned
+  `"pid": {}`.
 * The landing page and management dashboard have a new design that follows
   the system light or dark theme and has a theme toggle. A new `title`
   option sets the name shown on both pages.
@@ -142,10 +156,10 @@ documented in NEWS.md and README.md.
 * Local: Windows 11 x64 (build 26300), x86_64-w64-mingw32,
   R 4.6.2 (2026-10-29 ucrt).
   Checked with `R CMD check --as-cran` on the source tarball built from
-  commit a76ae4e, including the PDF manual and the CRAN incoming
+  commit 475f580, including the PDF manual and the CRAN incoming
   feasibility check.
-* R-hub (commit a76ae4e, run
-  https://github.com/lab1702/tinyshinyserver/actions/runs/44827460307):
+* R-hub (commit 475f580, run
+  https://github.com/lab1702/tinyshinyserver/actions/runs/44833828009):
   linux (R-devel), windows (R-devel), macos-arm64 (R-devel), gcc16, and
   ubuntu-gcc12.
 
@@ -156,9 +170,9 @@ from the build, so the package checked is identical.
 
 Local: 0 errors | 0 warnings | 0 notes.
 
-R-hub at commit a76ae4e: 0 errors | 0 warnings | 0 notes on all five platforms.
+R-hub at commit 475f580: 0 errors | 0 warnings | 0 notes on all five platforms.
 
-Test results: 1907 passes locally and on all five R-hub platforms, with 7
+Test results: 1954 passes locally and on all five R-hub platforms, with 7
 intentional skips on CRAN (a timing check of the port test and six tests
 that start real R processes). All runs had 0 failures and 0 warnings. One
 test's expectation count depends on timing.
