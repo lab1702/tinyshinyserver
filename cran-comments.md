@@ -114,4 +114,4 @@ expectation count depends on timing.
 
 ## Downstream dependencies
 
-The CRAN package index checked on 2026-09-24 (UTC) lists no reverse dependencies.
+The CRAN package index checked on 2026-11-20 (UTC) lists no reverse dependencies.
