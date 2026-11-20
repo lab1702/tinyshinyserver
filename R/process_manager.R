@@ -587,16 +587,13 @@ ProcessManager <- setRefClass("ProcessManager",
         "crashed"
       }
 
-      # Get connection count from cache (O(1) instead of O(n))
-      app_connections <- config$get_app_connection_count(app_name)
-
       return(list(
         name = app_name,
         status = status,
         resident = app_config$resident,
         port = app_config$port,
         path = app_config$path,
-        connections = app_connections,
+        connections = config$get_app_connection_count(app_name),
         pid = if (!is.null(process) && is_process_alive(process)) process$get_pid() else NULL
       ))
     },
@@ -614,11 +611,6 @@ ProcessManager <- setRefClass("ProcessManager",
       }
 
       return(apps_status)
-    },
-    get_app_connection_count = function(app_name) {
-      "Get the current connection count for a specific app (uses cached count for O(1) performance)"
-
-      return(config$get_app_connection_count(app_name))
     },
     stop_all_apps = function() {
       "Stop all running applications and clean up all connections"
@@ -641,8 +633,8 @@ ProcessManager <- setRefClass("ProcessManager",
         config$remove_backend_connection(session_id)
       }
 
-      # Clean up client WebSocket connections using proper method
-      # This maintains cache consistency by calling remove_ws_connection
+      # Forget the client connections; remove_ws_connection() also updates
+      # each app's connection count
       client_session_ids <- names(config$get_all_ws_connections())
       for (session_id in client_session_ids) {
         config$remove_ws_connection(session_id)

@@ -180,23 +180,6 @@ test_that("get_all_app_status returns empty list when no apps configured", {
 })
 
 # ============================================================================
-# get_app_connection_count() Tests
-# ============================================================================
-
-test_that("get_app_connection_count delegates to config", {
-  config <- ShinyServerConfig$new()
-  config$add_ws_connection("s1", list(app_name = "app1", ws = NULL))
-  config$add_ws_connection("s2", list(app_name = "app1", ws = NULL))
-  config$add_ws_connection("s3", list(app_name = "app2", ws = NULL))
-
-  pm <- ProcessManager$new(config)
-
-  expect_equal(pm$get_app_connection_count("app1"), 2)
-  expect_equal(pm$get_app_connection_count("app2"), 1)
-  expect_equal(pm$get_app_connection_count("app3"), 0)
-})
-
-# ============================================================================
 # stop_app() Tests
 # ============================================================================
 
@@ -1040,4 +1023,564 @@ test_that("readiness checks cover the full startup window for short appstart_tim
   })
 })
 
+})
+
+# ============================================================================
+# App directories and document types
+# ============================================================================
+
+test_that("detect_app_type names what a directory holds, in order of preference", {
+  app_dir <- tempfile("tss-detect")
+  dir.create(app_dir)
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  add <- function(...) for (name in c(...)) writeLines("", file.path(app_dir, name))
+  clear <- function() unlink(list.files(app_dir, full.names = TRUE))
+
+  add("b.qmd", "a.qmd")
+  expect_equal(detect_app_type(app_dir)$type, "qmd")
+  expect_equal(basename(detect_app_type(app_dir)$file), "a.qmd")
+
+  add("z.Rmd", "report.Rmd")
+  expect_equal(detect_app_type(app_dir)$type, "rmd")
+  expect_equal(basename(detect_app_type(app_dir)$file), "report.Rmd")
+
+  add("ui.R")
+  expect_equal(detect_app_type(app_dir)$type, "rmd")
+  add("server.R")
+  expect_equal(detect_app_type(app_dir), list(type = "shiny"))
+
+  clear()
+  add("app.R", "notes.Rmd")
+  expect_equal(detect_app_type(app_dir), list(type = "shiny"))
+
+  # shiny::runApp() serves a server.R whose page is www/index.html
+  clear()
+  add("server.R")
+  expect_equal(detect_app_type(app_dir), list(type = "shiny"))
+})
+
+test_that("detect_app_type explains why a directory cannot be served", {
+  missing <- file.path(tempdir(), "tss-no-such-app")
+  expect_error(detect_app_type(missing), "App directory not found: .*tss-no-such-app")
+
+  empty <- tempfile("tss-empty")
+  dir.create(empty)
+  on.exit(unlink(empty, recursive = TRUE), add = TRUE)
+  writeLines("", file.path(empty, "README.md"))
+  expect_error(detect_app_type(empty), "No app.R, ui.R and server.R, .Rmd, or .qmd file found in")
+})
+
+test_that("an app whose directory is missing starts no process", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "ghost", path = file.path(tempdir(), "tss-no-such-app"),
+    port = 1, resident = FALSE)), log_dir = tempdir())
+  local_mocked_bindings(r_bg = function(...) stop("No process may be started"), .package = "callr")
+  pm <- ProcessManager$new(config)
+
+  expect_error(pm$start_app(config$config$apps[[1]]), "App directory not found")
+  expect_null(config$get_app_process("ghost"))
+  expect_false(config$is_app_starting("ghost"))
+  # A visitor's request reports the failure instead of raising it
+  expect_false(pm$start_app_on_demand("ghost"))
+})
+
+test_that("a Quarto document is rendered only when its page is out of date", {
+  app_dir <- tempfile("tss-qmd")
+  dir.create(file.path(app_dir, "doc_files", "libs"), recursive = TRUE)
+  dir.create(file.path(app_dir, "data"))
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  qmd <- file.path(app_dir, "doc.qmd")
+  html <- file.path(app_dir, "doc.html")
+  data <- file.path(app_dir, "data", "sales.csv")
+  generated <- file.path(app_dir, "doc_files", "libs", "lib.js")
+  for (file in c(qmd, data, generated)) writeLines("", file)
+  now <- Sys.time()
+  age <- function(file, seconds) Sys.setFileTime(file, now - seconds)
+
+  # Never rendered
+  expect_true(quarto_needs_render(qmd))
+
+  writeLines("", html)
+  age(qmd, 300)
+  age(data, 300)
+  age(html, 200)
+  # What rendering writes is newer than the page without making it stale
+  age(generated, 100)
+  expect_false(quarto_needs_render(qmd))
+
+  age(qmd, 100)
+  expect_true(quarto_needs_render(qmd))
+  age(qmd, 300)
+  expect_false(quarto_needs_render(qmd))
+
+  # A file the document reads has changed
+  age(data, 100)
+  expect_true(quarto_needs_render(qmd))
+
+  # A change in the same instant as the page may have come after it
+  age(data, 200)
+  expect_true(quarto_needs_render(qmd))
+})
+
+test_that("start_app tells a Quarto app whether to render first", {
+  app_dir <- tempfile("tss-qmd")
+  dir.create(app_dir)
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  qmd <- file.path(app_dir, "doc.qmd")
+  writeLines("", qmd)
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", path = app_dir, port = 1, resident = TRUE)),
+    log_dir = tempdir())
+  launched <- NULL
+  local_mocked_bindings(r_bg = function(func, args, ...) {
+    launched <<- args
+    list(is_alive = function() TRUE)
+  }, .package = "callr")
+  pm <- ProcessManager$new(config)
+  start <- function() {
+    pm$start_app(config$config$apps[[1]])
+    # Retire the fake process so its scheduled readiness check does nothing
+    config$remove_app_process("app")
+  }
+
+  start()
+  expect_equal(launched$type, "qmd")
+  expect_equal(basename(launched$file), "doc.qmd")
+  expect_true(launched$render)
+
+  writeLines("", file.path(app_dir, "doc.html"))
+  Sys.setFileTime(qmd, Sys.time() - 300)
+  start()
+  expect_false(launched$render)
+})
+
+# ============================================================================
+# App process launch
+# ============================================================================
+
+test_that("start_app recreates a log_dir removed while the server runs", {
+  log_dir <- tempfile("tss-logs")
+  app_dir <- make_test_app_dir()
+  on.exit(unlink(c(log_dir, app_dir), recursive = TRUE), add = TRUE)
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", path = app_dir, port = 1, resident = TRUE)),
+    log_dir = log_dir)
+  local_mocked_bindings(r_bg = function(...) list(is_alive = function() TRUE), .package = "callr")
+  ProcessManager$new(config)$start_app(config$config$apps[[1]])
+  # Retire the fake process so its scheduled readiness check does nothing
+  config$remove_app_process("app")
+  expect_true(dir.exists(log_dir))
+})
+
+test_that("start_app supervises app processes", {
+  app_dir <- make_test_app_dir()
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", path = app_dir, port = 1, resident = TRUE)),
+    log_dir = tempdir())
+  args <- NULL
+  local_mocked_bindings(r_bg = function(...) {
+    args <<- list(...)
+    list(is_alive = function() TRUE)
+  }, .package = "callr")
+  ProcessManager$new(config)$start_app(config$config$apps[[1]])
+  # Retire the fake process so its scheduled readiness check does nothing
+  config$remove_app_process("app")
+  expect_true(args$supervise)
+})
+
+test_that("app output from child processes reaches the log without blocking", {
+  # Starts an R session that loads shiny and runs a further Rscript: how long
+  # that takes on a loaded check machine is not this package's to bound
+  skip_on_cran()
+  app_dir <- tempfile("tss-output-app")
+  log_dir <- tempfile("tss-output-logs")
+  dir.create(app_dir)
+  dir.create(log_dir)
+  on.exit(unlink(c(app_dir, log_dir), recursive = TRUE), add = TRUE)
+  marker <- file.path(app_dir, "done")
+  writeLines("cat(strrep('x', 200000))", file.path(app_dir, "writer.R"))
+  writeLines(c(
+    sprintf("system2(%s, %s)", deparse(file.path(R.home("bin"), "Rscript")),
+      deparse(shQuote(file.path(app_dir, "writer.R")))),
+    sprintf("writeLines('done', %s)", deparse(marker)),
+    "Sys.sleep(60)"
+  ), file.path(app_dir, "app.R"))
+  writeLines("previous run", file.path(log_dir, "app_output.log"))
+
+  config <- ShinyServerConfig$new()
+  on.exit(stop_test_app_processes(config), add = TRUE, after = FALSE)
+  config$config <- list(apps = list(list(name = "app", path = app_dir, port = 1, resident = TRUE)),
+    log_dir = log_dir)
+  pm <- ProcessManager$new(config)
+  pm$start_app(config$config$apps[[1]])
+
+  deadline <- Sys.time() + 30
+  while (!file.exists(marker) && Sys.time() < deadline) Sys.sleep(0.1)
+  expect_true(file.exists(marker))
+  output <- paste(readLines(file.path(log_dir, "app_output.log"), warn = FALSE), collapse = "")
+  expect_gte(nchar(output), 200000)
+  expect_equal(readLines(file.path(log_dir, "app_output.prev.log")), "previous run")
+})
+
+# ============================================================================
+# Readiness callbacks and on-demand starts
+# ============================================================================
+
+test_that("old readiness callbacks cannot remove or mark replacements ready", {
+  config <- ShinyServerConfig$new()
+  old <- list(is_alive = function() FALSE)
+  replacement <- list(is_alive = function() TRUE)
+  config$add_app_process("app", replacement)
+  config$set_app_starting("app")
+  pm <- ProcessManager$new(config)
+  expect_false(pm$check_app_ready("app", 3001, old))
+  expect_identical(config$get_app_process("app"), replacement)
+  expect_true(config$is_app_starting("app"))
+
+  old <- list(is_alive = function() TRUE, generation = 1)
+  config$add_app_process("app", old)
+  resolve_probe <- NULL
+  local_mocked_bindings(wait_for_backend = function(...) promises::promise(function(resolve, reject) {
+    resolve_probe <<- resolve
+  }))
+  result <- pm$check_app_ready("app", 3001, old)
+  config$add_app_process("app", replacement)
+  config$set_app_starting("app")
+  resolve_probe(TRUE)
+  expect_false(await_response(result))
+  expect_identical(config$get_app_process("app"), replacement)
+  expect_true(config$is_app_starting("app"))
+  config$remove_app_process("app")
+  expect_false(pm$check_app_ready("app", 3001, replacement))
+})
+
+test_that("removing a starting process allows the next on-demand launch", {
+  for (removal in c("health", "stop")) {
+    config <- ShinyServerConfig$new()
+    config$config <- list(apps = list(list(name = "app", port = 3001,
+      resident = FALSE, appstart_timeout = 60)))
+    old <- list(is_alive = function() FALSE)
+    config$add_app_process("app", old)
+    config$set_app_starting("app")
+    pm <- ProcessManager$new(config)
+    starts <- 0
+    replacement <- list(is_alive = function() TRUE)
+    assign("start_app", function(app_config) {
+      starts <<- starts + 1
+      config$add_app_process("app", replacement)
+      config$set_app_starting("app")
+      TRUE
+    }, envir = pm)
+
+    switch(removal, health = pm$health_check(), stop = pm$stop_app("app"))
+    expect_null(config$get_app_process("app"), info = removal)
+    expect_false(config$is_app_starting("app"), info = removal)
+    expect_false(pm$check_app_ready("app", 3001, old))
+    expect_true(pm$start_app_on_demand("app"))
+    expect_equal(starts, 1, info = removal)
+    expect_identical(config$get_app_process("app"), replacement)
+    # A delayed callback from the old process must not clear the new launch.
+    expect_false(pm$check_app_ready("app", 3001, old))
+    expect_true(config$is_app_starting("app"), info = removal)
+  }
+})
+
+# ============================================================================
+# Crash cleanup
+# ============================================================================
+
+test_that("crash cleanup terminates workers after their parent has exited", {
+  # Starts two real R processes for each action; too slow and timing-dependent
+  # for a loaded check machine
+  skip_on_cran()
+  check_cleanup <- function(action) {
+    marker <- tempfile()
+    pid_file <- tempfile()
+    parent <- callr::r_bg(function(marker, pid_file) {
+      child <- callr::r_bg(function(marker) {
+        repeat {
+          cat("tick\n", file = marker, append = TRUE)
+          Sys.sleep(.02)
+        }
+      }, args = list(marker = marker), supervise = FALSE)
+      writeLines(as.character(child$get_pid()), pid_file)
+      Sys.sleep(30)
+    }, args = list(marker = marker, pid_file = pid_file))
+    on.exit({
+      parent$kill_tree()
+      if (file.exists(pid_file)) try(tools::pskill(as.integer(readLines(pid_file))), silent = TRUE)
+      unlink(c(marker, pid_file))
+    }, add = TRUE)
+    deadline <- Sys.time() + 30
+    while ((!file.exists(marker) || !file.exists(pid_file)) && Sys.time() < deadline) Sys.sleep(.02)
+    expect_true(file.exists(marker), info = action)
+    parent$kill()
+    parent$wait()
+    expect_false(parent$is_alive())
+    config <- ShinyServerConfig$new()
+    config$config <- list(apps = list(list(name = "app", resident = FALSE)), restart_delay = 0)
+    config$add_app_process("app", parent)
+    config$set_app_starting("app")
+    pm <- ProcessManager$new(config)
+    assign("start_app", function(...) TRUE, envir = pm)
+    switch(action, health = pm$health_check(),
+      readiness = pm$check_app_ready("app", 3001, parent), restart = pm$restart_app("app"),
+      shutdown = pm$stop_all_apps(), on_demand = pm$start_app_on_demand("app"))
+    expect_null(config$get_app_process("app"), info = action)
+    Sys.sleep(.1)
+    size <- file.info(marker)$size
+    Sys.sleep(.15)
+    expect_equal(file.info(marker)$size, size, info = action)
+  }
+  for (action in c("health", "readiness", "restart", "shutdown", "on_demand")) check_cleanup(action)
+})
+
+test_that("crash cleanup retains ownership if descendant cleanup fails", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = FALSE)))
+  process <- list(is_alive = function() FALSE, kill_tree = function() stop("cleanup failed"))
+  config$add_app_process("app", process)
+  pm <- ProcessManager$new(config)
+  pm$health_check()
+  expect_identical(config$get_app_process("app"), process)
+  expect_false(pm$check_app_ready("app", 3001, process))
+  expect_identical(config$get_app_process("app"), process)
+  expect_false(pm$restart_app("app")$success)
+  expect_identical(config$get_app_process("app"), process)
+  assign("start_app", function(...) stop("must retain failed process"), envir = pm)
+  expect_false(pm$start_app_on_demand("app"))
+  expect_identical(config$get_app_process("app"), process)
+})
+
+test_that("failed termination retains the process and prevents replacement", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = TRUE)), restart_delay = 0)
+  process <- list(is_alive = function() TRUE)
+  config$add_app_process("app", process)
+  config$set_app_starting("app")
+  local_mocked_bindings(kill_process_safely = function(process) FALSE)
+  pm <- ProcessManager$new(config)
+  starts <- 0
+  assign("start_app", function(app_config) { starts <<- starts + 1; TRUE }, envir = pm)
+  expect_false(pm$stop_app("app")$success)
+  expect_identical(config$get_app_process("app"), process)
+  expect_true(config$is_app_starting("app"))
+  expect_false(pm$restart_app("app")$success)
+  expect_identical(config$get_app_process("app"), process)
+  expect_true(config$is_app_starting("app"))
+  expect_equal(starts, 0)
+})
+
+# ============================================================================
+# Requested restarts
+# ============================================================================
+
+test_that("a requested restart does not wait for restart_delay", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = TRUE)), restart_delay = 60)
+  alive <- TRUE
+  config$add_app_process("app", list(is_alive = function() alive, kill_tree = function() alive <<- FALSE))
+  pm <- ProcessManager$new(config)
+  starts <- 0
+  assign("start_app", function(app_config) { starts <<- starts + 1; TRUE }, envir = pm)
+  scheduled <- 0
+  local_mocked_bindings(later = function(...) scheduled <<- scheduled + 1, .package = "later")
+
+  result <- pm$restart_app("app")
+  expect_true(result$success)
+  expect_match(result$message, "restarted")
+  expect_false(alive)
+  expect_equal(starts, 1)
+  expect_equal(scheduled, 0)
+})
+
+test_that("a requested restart replaces the one a failure had scheduled", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = TRUE)), restart_delay = 0.05)
+  pm <- ProcessManager$new(config)
+  starts <- 0
+  assign("start_app", function(app_config) { starts <<- starts + 1; TRUE }, envir = pm)
+  pm$health_check()
+  expect_equal(starts, 0)
+  expect_true(pm$restart_app("app")$success)
+  expect_equal(starts, 1)
+  await_response(promises::promise(function(resolve, reject) later::later(function() resolve(TRUE), .1)))
+  expect_equal(starts, 1)
+})
+
+test_that("restarting an on-demand app stops it until it is next opened", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = FALSE)), restart_delay = 0)
+  alive <- TRUE
+  config$add_app_process("app", list(is_alive = function() alive, kill_tree = function() alive <<- FALSE))
+  closed <- 0
+  config$add_ws_connection("s", list(app_name = "app", ws = list(close = function() closed <<- closed + 1)))
+  pm <- ProcessManager$new(config)
+  assign("start_app", function(app_config) stop("An idle on-demand app must not be started"), envir = pm)
+
+  result <- pm$restart_app("app")
+  expect_true(result$success)
+  expect_match(result$message, "starts again when it is next opened")
+  expect_false(alive)
+  expect_equal(closed, 1)
+  expect_null(config$get_app_process("app"))
+  expect_equal(pm$get_app_status("app")$status, "dormant")
+})
+
+test_that("a restart that cannot start the app reports the reason", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = TRUE,
+    path = file.path(tempdir(), "tss-no-such-app"))), restart_delay = 0, log_dir = tempdir())
+  result <- ProcessManager$new(config)$restart_app("app")
+  expect_false(result$success)
+  expect_match(result$message, "App directory not found")
+  expect_null(config$get_app_process("app"))
+})
+
+# ============================================================================
+# Health checks and restart delays
+# ============================================================================
+
+test_that("restart delays yield and are cancelled by stop and shutdown", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = TRUE)), restart_delay = 0.05)
+  pm <- ProcessManager$new(config)
+  starts <- 0
+  assign("start_app", function(app_config) { starts <<- starts + 1; TRUE }, envir = pm)
+  tick <- FALSE
+  later::later(function() tick <<- TRUE, 0)
+  # A resident app without a process is restarted by the health check
+  pm$health_check()
+  expect_equal(starts, 0)
+  later::run_now(0)
+  expect_true(tick)
+  pm$health_check()
+  expect_equal(starts, 0)
+  await_response(promises::promise(function(resolve, reject) later::later(function() resolve(TRUE), .1)))
+  expect_equal(starts, 1)
+
+  pm$health_check()
+  pm$stop_app("app")
+  await_response(promises::promise(function(resolve, reject) later::later(function() resolve(TRUE), .1)))
+  expect_equal(starts, 1)
+  pm$health_check()
+  pm$stop_all_apps()
+  await_response(promises::promise(function(resolve, reject) later::later(function() resolve(TRUE), .1)))
+  expect_equal(starts, 1)
+})
+
+test_that("health checks delay crashed resident app restarts without duplicates", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = TRUE)), restart_delay = .05)
+  config$add_app_process("app", list(is_alive = function() FALSE))
+  pm <- ProcessManager$new(config)
+  starts <- 0
+  assign("start_app", function(app_config) { starts <<- starts + 1; TRUE }, envir = pm)
+  pm$health_check()
+  pm$health_check()
+  expect_equal(starts, 0)
+  await_response(promises::promise(function(resolve, reject) later::later(function() resolve(TRUE), .1)))
+  expect_equal(starts, 1)
+})
+
+test_that("health checks isolate startup errors and retry failed apps", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = lapply(c("bad", "next", "healthy"), function(name) list(name = name, resident = TRUE)),
+    restart_delay = 0)
+  healthy <- list(is_alive = function() TRUE)
+  config$add_app_process("healthy", healthy)
+  pm <- ProcessManager$new(config)
+  attempted <- character()
+  fail <- TRUE
+  assign("start_app", function(app_config) {
+    attempted <<- c(attempted, app_config$name)
+    if (app_config$name == "bad" && fail) stop("Resource temporarily unavailable")
+    config$add_app_process(app_config$name, list(is_alive = function() TRUE))
+    TRUE
+  }, envir = pm)
+  expect_no_error(pm$health_check())
+  expect_equal(attempted, c("bad", "next"))
+  expect_identical(config$get_app_process("healthy"), healthy)
+  fail <- FALSE
+  pm$health_check()
+  expect_equal(attempted, c("bad", "next", "bad"))
+  expect_true(config$get_app_process("bad")$is_alive())
+})
+
+test_that("health checks restart a missing resident app only after restart_delay", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = TRUE)), restart_delay = 60)
+  pm <- ProcessManager$new(config)
+  starts <- 0
+  assign("start_app", function(app_config) {
+    starts <<- starts + 1
+    TRUE
+  }, envir = pm)
+  scheduled <- list()
+  local_mocked_bindings(later = function(func, delay = 0, ...) {
+    scheduled[[length(scheduled) + 1]] <<- list(func = func, delay = delay)
+  }, .package = "later")
+  pm$health_check()
+  pm$health_check()
+  expect_equal(starts, 0)
+  # Later health checks keep the pending restart instead of postponing it
+  expect_length(scheduled, 1)
+  expect_equal(scheduled[[1]]$delay, 60)
+  scheduled[[1]]$func()
+  expect_equal(starts, 1)
+})
+
+# ============================================================================
+# Idle session cleanup
+# ============================================================================
+
+test_that("stale cleanup closes sockets and stops idle on-demand apps once", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = FALSE)))
+  pm <- ProcessManager$new(config)
+  killed <- 0
+  config$add_app_process("app", list(is_alive = function() TRUE))
+  local_mocked_bindings(kill_process_safely = function(process) { killed <<- killed + 1; TRUE })
+  callbacks <- list()
+  local_mocked_bindings(later = function(func, delay, ...) {
+    callbacks[[length(callbacks) + 1L]] <<- func
+  }, .package = "later")
+  cm <- ConnectionManager$new(config, pm)
+  client_closed <- 0
+  backend_closed <- 0
+  config$add_ws_connection("s", list(app_name = "app", last_activity = Sys.time() - 3600,
+    ws = list(close = function() {
+      client_closed <<- client_closed + 1
+      cm$remove_client_connection("s")
+    })))
+  config$add_backend_connection("s", list(app_name = "app", last_activity = Sys.time(),
+    ws = list(close = function() { backend_closed <<- backend_closed + 1 })))
+  expect_equal(pm$cleanup_stale_connections(), 1)
+  expect_equal(client_closed, 1)
+  expect_equal(backend_closed, 1)
+  # The idle app stops once the reconnect grace period passes
+  expect_equal(killed, 0)
+  expect_length(callbacks, 1)
+  callbacks[[1]]()
+  expect_equal(killed, 1)
+  expect_null(config$get_ws_connection("s"))
+  expect_null(config$get_backend_connection("s"))
+  expect_equal(config$get_app_connection_count("app"), 0)
+  cm$close_client_connection("s")
+  expect_equal(killed, 1)
+  expect_equal(client_closed, 1)
+})
+
+test_that("stale backends also close fresh client sockets", {
+  config <- ShinyServerConfig$new()
+  closed <- 0
+  config$add_ws_connection("s", list(app_name = "app", last_activity = Sys.time(),
+    ws = list(close = function() {closed <<- closed + 1})))
+  config$add_backend_connection("s", list(app_name = "app", last_activity = Sys.time() - 3600,
+    ws = list(close = function() NULL)))
+  expect_equal(ProcessManager$new(config)$cleanup_stale_connections(), 1)
+  expect_equal(closed, 1)
+  expect_null(config$get_ws_connection("s"))
+  expect_null(config$get_backend_connection("s"))
 })

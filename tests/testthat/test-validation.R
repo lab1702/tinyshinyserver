@@ -96,7 +96,7 @@ test_that("validate_path rejects dangerous control characters", {
 # ============================================================================
 
 test_that("validate_http_method accepts valid methods", {
-  methods <- c("GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS")
+  methods <- c("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
   for (method in methods) {
     result <- validate_http_method(method)
     expect_true(result$valid)
@@ -207,15 +207,19 @@ test_that("validate_app_name accepts valid names", {
 test_that("validate_app_name rejects null and invalid types", {
   result <- validate_app_name(NULL)
   expect_false(result$valid)
-  expect_match(result$error, "Invalid app name type")
+  expect_match(result$error, "App name must be a string")
 
   result <- validate_app_name(123)
   expect_false(result$valid)
-  expect_match(result$error, "Invalid app name type")
+  expect_match(result$error, "App name must be a string")
 
   result <- validate_app_name(c("app1", "app2"))
   expect_false(result$valid)
-  expect_match(result$error, "Invalid app name type")
+  expect_match(result$error, "App name must be a string")
+
+  result <- validate_app_name(NA_character_)
+  expect_false(result$valid)
+  expect_match(result$error, "App name must be a string")
 })
 
 test_that("validate_app_name rejects invalid characters", {

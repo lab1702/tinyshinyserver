@@ -19,7 +19,7 @@ Imports:
     ps,
     jsonlite,
     later (>= 1.4.0),
-    curl,
+    curl (>= 3.3),
     promises,
     glue,
     httpuv,

@@ -31,7 +31,8 @@ validate_path <- function(path, max_length = 1000) {
   return(list(valid = TRUE, sanitized = path))
 }
 
-validate_http_method <- function(method, allowed_methods = c("GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS")) {
+validate_http_method <- function(method,
+                                 allowed_methods = c("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")) {
   "Validate HTTP request methods"
 
   if (is.null(method) || !is.character(method) || length(method) != 1) {
@@ -138,8 +139,8 @@ validate_base_path <- function(base_path, max_length = 100) {
 validate_app_name <- function(app_name, max_length = 50) {
   "Validate application names"
 
-  if (is.null(app_name) || !is.character(app_name) || length(app_name) != 1) {
-    return(list(valid = FALSE, error = "Invalid app name type"))
+  if (is.null(app_name) || !is.character(app_name) || length(app_name) != 1 || is.na(app_name)) {
+    return(list(valid = FALSE, error = "App name must be a string"))
   }
 
   # Allow only alphanumeric, hyphen, underscore
@@ -200,11 +201,7 @@ create_validation_error <- function(error_message, status_code = 400) {
     valid = FALSE,
     error = error_message,
     status_code = status_code,
-    response = list(
-      status = status_code,
-      headers = list("Content-Type" = "application/json"),
-      body = jsonlite::toJSON(list(error = paste(status_code, "-", error_message)), auto_unbox = TRUE)
-    )
+    response = create_error_response(error_message, status_code)
   ))
 }
 

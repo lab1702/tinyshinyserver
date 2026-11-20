@@ -119,22 +119,9 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       # processes are removed by the health check above.
       schedule_cleanup <- function() {
         if (!is_shutting_down) {
-          tryCatch(
-            {
-              process_manager$cleanup_stale_connections()
-
-              # Validate connection count consistency and auto-fix errors
-              validation_result <- config$validate_connection_count_consistency(fix_errors = TRUE)
-              if (!validation_result$consistent) {
-                logger::log_warn("Connection count cache had inconsistencies, fixed {count} apps",
-                  count = length(validation_result$inconsistencies)
-                )
-              }
-            },
-            error = function(e) {
-              logger::log_error("Error during cleanup: {error}", error = e$message)
-            }
-          )
+          tryCatch(process_manager$cleanup_stale_connections(), error = function(e) {
+            logger::log_error("Error during cleanup: {error}", error = e$message)
+          })
 
           later::later(schedule_cleanup, config$CLEANUP_INTERVAL_SECONDS)
         }

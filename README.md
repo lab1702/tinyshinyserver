@@ -122,7 +122,7 @@ Apps receive ports in configuration order, starting from `starting_port`. Alloca
 | Resident (`"resident": true`) | At server startup; restarted after a process failure | At server shutdown or restart | Immediate access matters |
 | On-demand (`"resident": false`, default) | On the first HTTP request or WebSocket connection | When unused, as described below | Saving resources matters more than startup delay |
 
-On-demand apps stop 30 seconds after their last WebSocket connection closes, provided no new connection opens and no HTTP requests remain; the grace period lets a reloaded or newly opened page reconnect without restarting the app. If requests are in flight, shutdown waits for them to finish before the grace period applies. If a visit never opens a WebSocket session, the app stops after 30 seconds without HTTP activity. A failed on-demand app starts again on the next request.
+On-demand apps stop 30 seconds after their last WebSocket connection closes, provided no new connection opens and no HTTP requests remain; the grace period lets a reloaded or newly opened page reconnect without restarting the app. If requests are in flight, shutdown waits for them to finish before the grace period applies. If a visit never opens a WebSocket session, the app stops after 30 seconds without HTTP activity. An app that is still starting at that point is left to finish, for up to 10 minutes from its start, and stops 30 seconds after it is ready if it is still unused; a slow start, such as a Quarto render, is therefore not thrown away when the visitor's page stops waiting. (On platforms where the `ps` package cannot list a process's sockets, the server cannot tell that an app is still starting and stops it.) A failed on-demand app starts again on the next request.
 
 `appstart_timeout` controls how long a request waits for a starting app to become ready (default: 2 seconds, measured from app startup). If the app is still starting after that, the proxy returns HTTP 503 with a `Retry-After` header. A browser opening the app's page receives a page that reloads itself until the app is ready, for up to two minutes; scripts and other clients receive JSON. Increase this value for slow-starting apps; fractional seconds are supported.
 
@@ -130,7 +130,9 @@ The proxy forwards traffic to an app only when the app's own process is listenin
 
 The proxy applies these limits:
 
+- The proxy forwards `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, and `OPTIONS` requests. Other methods receive HTTP 405.
 - If a running app does not accept connections, the proxy returns HTTP 503. Once the app accepts a connection, a proxied HTTP request fails with HTTP 502 only if the app sends no data for 10 minutes; there is no limit on total transfer time.
+- A response reaches the browser once the app has finished sending it. A response that an app streams, such as server-sent events, is therefore not delivered piece by piece, and a download shows no progress until the proxy has received all of it.
 - Requests with query strings longer than 8,192 characters are rejected with HTTP 400.
 - Request bodies larger than `max_request_size_mb` (default: 100 MB), or sent with chunked transfer encoding, are rejected with HTTP 413 before they are read.
 - A WebSocket message from the browser larger than 1 MB closes the session. This check runs only after the whole message has been received, so it does not limit the memory that a single very large message uses; expose the proxy port only to trusted or authenticated clients.
@@ -332,6 +334,7 @@ The server limits its own memory use:
 
 - **Idle sessions**: A session whose WebSocket has carried no message in either direction for `idle_timeout_minutes` (default: 30) is closed, and the browser shows the app as disconnected. Raise the value, or set it to `0` to keep idle sessions open, for dashboards that people leave open without interacting.
 - **Queue limits**: Messages waiting for an app's WebSocket to open are limited to 100 per connection; when the queue is full, the oldest messages are dropped.
+- **Large responses**: An app response larger than 8 MB, such as a big download, is written to a file in R's temporary directory as it arrives and sent from there, then deleted. It needs that much free disk space for the duration of the request instead of the server's memory.
 - **Process cleanup**: Objects for exited app processes are removed at each health check.
 - **Log files**: App output is written directly to log files instead of being held in memory. One previous run's logs are kept per app.
 

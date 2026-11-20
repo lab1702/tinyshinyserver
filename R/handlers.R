@@ -77,7 +77,7 @@ route_http_request <- function(path, method, query_string, req, config, template
 
   # Static files (CSS, JS, images)
   if (startsWith(path, "/templates/")) {
-    return(handle_static_file(path, template_manager))
+    return(handle_static_file(path, template_manager, req$HTTP_IF_NONE_MATCH))
   }
 
   # Proxy requests to apps
@@ -138,13 +138,13 @@ handle_apps_api <- function(config, process_manager = NULL) {
   )
 }
 
-handle_static_file <- function(path, template_manager) {
+handle_static_file <- function(path, template_manager, if_none_match = NULL) {
   "Handle static file requests (CSS, JS, images)"
 
   # Remove /templates/ prefix
   file_path <- gsub("^/templates/", "", path)
 
-  return(template_manager$serve_static_file(file_path))
+  return(template_manager$serve_static_file(file_path, if_none_match))
 }
 
 # The route to an app, /proxy/<app name><path the app sees>, for HTTP requests
@@ -390,10 +390,19 @@ forward_request <- function(method, target_url, req, app_name, config, template_
         response_headers <- proxy_response_headers(
           response$headers, target_url, app_name, method, config$config$base_path %||% ""
         )
-        # httpuv sends raw bodies unchanged. Scanning or converting the bytes
-        # would briefly multiply a large download's memory use.
+        # A response that cannot have a body is sent without one. Given an
+        # empty body, httpuv compresses it for a client that accepts gzip and
+        # sends the result, which may not follow these responses.
+        status <- response$status_code
+        if (identical(method, "HEAD") || status < 200 || status %in% c(204L, 304L)) {
+          discard_response_body(response$content)
+          return(list(status = status, headers = response_headers, body = NULL))
+        }
+        # httpuv sends the body unchanged, from memory or from the file a
+        # large one was written to. Scanning or converting the bytes would
+        # briefly multiply a large download's memory use.
         list(
-          status = response$status_code,
+          status = status,
           headers = response_headers,
           body = response$content
         )
@@ -484,17 +493,86 @@ backend_fetch_error <- function(message, handle) {
   )
 }
 
+# An app's response is held in memory up to this size. A larger one is written
+# to a temporary file as it arrives and sent from there, so that a big
+# download does not occupy the memory of the process that serves every app.
+RESPONSE_SPOOL_BYTES <- 8 * 1024^2
+
+# Collects a response body from curl's data callback. finish() returns it in
+# a form httpuv sends: a raw vector, or a file that httpuv deletes once it has
+# been sent.
+response_body_collector <- function(limit = RESPONSE_SPOOL_BYTES) {
+  chunks <- list()
+  size <- 0
+  path <- NULL
+  writer <- NULL
+  list(
+    write = function(data, final = FALSE) {
+      if (length(data) == 0) {
+        return(invisible(NULL))
+      }
+      size <<- size + length(data)
+      if (is.null(writer) && size > limit) {
+        # curl's writer holds no R connection, of which a session has few
+        path <<- tempfile("tss-response-")
+        writer <<- curl::file_writer(path)
+        for (chunk in chunks) writer(chunk)
+        chunks <<- list()
+      }
+      if (is.null(writer)) chunks[[length(chunks) + 1L]] <<- data else writer(data)
+      invisible(NULL)
+    },
+    finish = function() {
+      if (is.null(writer)) {
+        return(if (length(chunks) > 0) unlist(chunks, use.names = FALSE) else raw())
+      }
+      writer(raw(), close = TRUE)
+      # The file now belongs to the response: a later discard() leaves it
+      spooled <- list(file = path, owned = TRUE)
+      writer <<- NULL
+      path <<- NULL
+      spooled
+    },
+    discard = function() {
+      chunks <<- list()
+      if (!is.null(writer)) {
+        writer(raw(), close = TRUE)
+        writer <<- NULL
+      }
+      if (!is.null(path)) {
+        unlink(path)
+        path <<- NULL
+      }
+    }
+  )
+}
+
+# Remove the file of a collected body that will not be sent
+discard_response_body <- function(body) {
+  if (is.list(body) && !is.null(body$file)) unlink(body$file)
+}
+
 # Drive libcurl without blocking: after each step, wait for the transfer's own
 # sockets, so other HTTP and WebSocket callbacks run in between and a transfer
 # continues as soon as it can. Polling on a timer instead sent one buffer per
 # tick, which capped uploads at a few megabytes per second. Each transfer has
 # its own pool and fresh easy handle; neither cookies nor authentication state
-# can survive into another request.
+# can survive into another request. The response's `content` is what
+# response_body_collector() returns.
 fetch_backend_async <- function(url, handle) {
   promises::promise(function(resolve, reject) {
     pool <- curl::new_pool()
+    body <- response_body_collector()
     curl::curl_fetch_multi(url, handle = handle, pool = pool,
-      done = resolve, fail = function(message) reject(backend_fetch_error(message, handle))
+      data = body$write,
+      done = function(response) {
+        response$content <- body$finish()
+        resolve(response)
+      },
+      fail = function(message) {
+        body$discard()
+        reject(backend_fetch_error(message, handle))
+      }
     )
     # later_fd() passes the sockets' readiness, which multi_run() finds itself
     pump <- function(...) {
@@ -514,6 +592,7 @@ fetch_backend_async <- function(url, handle) {
         }
       }, error = function(e) {
         curl::multi_cancel(handle)
+        body$discard()
         reject(e)
       })
     }

@@ -298,6 +298,26 @@ test_that("generate_management_page returns HTML with session info", {
   expect_no_match(result, "{{session_info}}", fixed = TRUE)
 })
 
+test_that("session information and templates are read once", {
+  temp_dir <- create_test_template_dir()
+  on.exit(cleanup_test_template_dir(temp_dir))
+
+  tm <- TemplateManager$new(temp_dir)
+  expect_length(tm$session_info, 0)
+  first <- tm$generate_management_page()
+  expect_match(tm$session_info, "R (version|Under development)", ignore.case = TRUE)
+
+  # Neither changes while the server runs, so later pages reuse both
+  tm$session_info <- "collected at start-up &amp; escaped"
+  unlink(file.path(temp_dir, "management_page.html"))
+  second <- tm$generate_management_page()
+  expect_match(second, "Management Dashboard")
+  expect_match(second, "collected at start-up &amp; escaped", fixed = TRUE)
+
+  # Another template manager reads the directory for itself
+  expect_error(TemplateManager$new(temp_dir)$generate_management_page(), "Template not found")
+})
+
 # ============================================================================
 # serve_static_file() Tests
 # ============================================================================
@@ -313,6 +333,41 @@ test_that("serve_static_file serves CSS files", {
   expect_equal(result$status, 200)
   expect_equal(result$headers[["Content-Type"]], "text/css")
   expect_match(result$body, "body")
+})
+
+test_that("serve_static_file lets browsers keep a file and answers 304 for an unchanged one", {
+  temp_dir <- create_test_template_dir()
+  on.exit(cleanup_test_template_dir(temp_dir))
+
+  tm <- TemplateManager$new(temp_dir)
+  result <- tm$serve_static_file("styles/main.css")
+  etag <- result$headers[["ETag"]]
+  expect_match(etag, "^\"[0-9]+-[0-9]+\"$")
+  expect_equal(result$headers[["Cache-Control"]], "max-age=300")
+
+  # A browser that holds this version is told so, in the forms the header takes
+  for (header in list(etag, paste0("W/", etag), paste0("\"other\", ", etag), "*")) {
+    unchanged <- tm$serve_static_file("styles/main.css", header)
+    expect_equal(unchanged$status, 304)
+    expect_equal(unchanged$headers[["ETag"]], etag)
+    # httpuv would send an empty body compressed, which may not follow a 304
+    expect_null(unchanged$body)
+  }
+
+  # Any other tag, or none, receives the file
+  for (header in list(NULL, "", "\"other\"", NA_character_, c(etag, etag))) {
+    expect_equal(tm$serve_static_file("styles/main.css", header)$status, 200)
+  }
+
+  # A changed file has a new tag
+  writeLines("body { margin: 0; padding: 0; }", file.path(temp_dir, "styles", "main.css"))
+  changed <- tm$serve_static_file("styles/main.css", etag)
+  expect_equal(changed$status, 200)
+  expect_false(identical(changed$headers[["ETag"]], etag))
+
+  # A file that is not served is not confirmed either
+  expect_equal(tm$serve_static_file("missing.css", "*")$status, 404)
+  expect_equal(tm$serve_static_file("../secret.css", "*")$status, 403)
 })
 
 test_that("serve_static_file returns 404 for missing files", {

@@ -434,26 +434,29 @@ test_that("remove_ws_connection rejects NULL session_id", {
   expect_false(config$remove_ws_connection(NULL))
 })
 
-test_that("remove_ws_connection prevents negative counts", {
+test_that("an app's connection count is the number of its tracked sessions", {
   config <- ShinyServerConfig$new()
 
-  # Add one connection
+  # Adding or removing a session twice cannot count it twice
   config$add_ws_connection("session1", list(app_name = "app1"))
+  config$add_ws_connection("session1", list(app_name = "app1"))
+  config$add_ws_connection("session2", list(app_name = "app1"))
+  expect_equal(config$get_app_connection_count("app1"), 2)
+  expect_setequal(config$app_sessions[["app1"]], c("session1", "session2"))
+
+  config$remove_ws_connection("session1")
+  config$remove_ws_connection("session1")
   expect_equal(config$get_app_connection_count("app1"), 1)
 
-  # Remove it
-  config$remove_ws_connection("session1")
+  # A session counts for the app it was last added for
+  config$add_ws_connection("session2", list(app_name = "app2"))
   expect_equal(config$get_app_connection_count("app1"), 0)
+  expect_equal(config$get_app_connection_count("app2"), 1)
 
-  # Manually add another connection directly to test edge case
-  config$add_ws_connection("session2", list(app_name = "app1"))
-
-  # Manually corrupt the count to test protection
-  assign("app1", -5, envir = config$app_connection_counts)
-
-  # Remove should use max(0, ...) to prevent negative
+  # An app with no connections leaves nothing behind
   config$remove_ws_connection("session2")
-  expect_gte(config$get_app_connection_count("app1"), 0)
+  expect_length(ls(config$app_sessions), 0)
+  expect_length(config$get_all_ws_connections(), 0)
 })
 
 test_that("get_all_ws_connections returns all connections", {
@@ -466,67 +469,6 @@ test_that("get_all_ws_connections returns all connections", {
   expect_equal(length(all_conns), 2)
   expect_true("session1" %in% names(all_conns))
   expect_true("session2" %in% names(all_conns))
-})
-
-# ============================================================================
-# validate_connection_count_consistency tests
-# ============================================================================
-
-test_that("validate_connection_count_consistency returns consistent when counts match", {
-  config <- ShinyServerConfig$new()
-
-  config$add_ws_connection("session1", list(app_name = "app1"))
-  config$add_ws_connection("session2", list(app_name = "app1"))
-  config$add_ws_connection("session3", list(app_name = "app2"))
-
-  result <- config$validate_connection_count_consistency(fix_errors = FALSE)
-  expect_true(result$consistent)
-  expect_equal(length(result$inconsistencies), 0)
-})
-
-test_that("validate_connection_count_consistency detects inconsistencies", {
-  config <- ShinyServerConfig$new()
-
-  # Add connections normally
-  config$add_ws_connection("session1", list(app_name = "app1"))
-  config$add_ws_connection("session2", list(app_name = "app1"))
-
-  # Manually corrupt the cache
-  assign("app1", 10, envir = config$app_connection_counts)
-
-  result <- config$validate_connection_count_consistency(fix_errors = FALSE)
-  expect_false(result$consistent)
-  expect_true("app1" %in% names(result$inconsistencies))
-  expect_equal(result$inconsistencies$app1$cached, 10)
-  expect_equal(result$inconsistencies$app1$actual, 2)
-})
-
-test_that("validate_connection_count_consistency fixes errors when requested", {
-  config <- ShinyServerConfig$new()
-
-  config$add_ws_connection("session1", list(app_name = "app1"))
-
-  # Corrupt the cache
-  assign("app1", 99, envir = config$app_connection_counts)
-
-  # Fix errors
-  result <- config$validate_connection_count_consistency(fix_errors = TRUE)
-  expect_false(result$consistent) # Was inconsistent
-
-  # Verify it was fixed
-  expect_equal(config$get_app_connection_count("app1"), 1)
-
-  # Run again - should be consistent now
-  result2 <- config$validate_connection_count_consistency(fix_errors = FALSE)
-  expect_true(result2$consistent)
-})
-
-test_that("validate_connection_count_consistency handles empty state", {
-  config <- ShinyServerConfig$new()
-
-  result <- config$validate_connection_count_consistency(fix_errors = FALSE)
-  expect_true(result$consistent)
-  expect_equal(result$total_apps_checked, 0)
 })
 
 # ============================================================================
@@ -1130,6 +1072,62 @@ test_that("unrecognized configuration fields are reported instead of silently dr
   expect_length(warnings, 0)
 })
 
+test_that("an unrecognized field that extends an option's name does not set that option", {
+  config <- ShinyServerConfig$new()
+  tmp_config <- tempfile(fileext = ".json")
+  on.exit(unlink(tmp_config), add = TRUE)
+  # `$` matches a list's names by prefix, so each renamed field could answer
+  # for the option it was renamed from, without being validated
+  settings <- list(
+    apps = list(list(name = "sales", path = "/tmp/sales", appstart_timeout_old = "soon", resident_was = TRUE)),
+    log_dir = "/tmp/logs", starting_port = 5001,
+    proxy_port_old = "not-a-port", management_port_old = 70000, title_draft = strrep("x", 500),
+    base_path_disabled = "\"><script>", health_check_interval_off = 0, log_level_was = "TRACE"
+  )
+  writeLines(jsonlite::toJSON(settings, auto_unbox = TRUE), tmp_config)
+
+  loaded <- config$read_config(tmp_config)
+  expect_length(config$ignored_fields, 8)
+  expect_equal(loaded$proxy_port, 3838)
+  expect_equal(loaded$management_port, 3839)
+  expect_equal(loaded$title, DEFAULT_SERVER_TITLE)
+  expect_equal(loaded$base_path, "")
+  expect_equal(loaded$health_check_interval, 10)
+  expect_equal(loaded$log_level, "INFO")
+  expect_equal(loaded$apps[[1]]$appstart_timeout, 2)
+  expect_false(loaded$apps[[1]]$resident)
+
+  # The fields are removed, so nothing that reads the configuration later
+  # can match them either
+  expect_setequal(names(loaded), KNOWN_CONFIG_FIELDS)
+  expect_setequal(names(loaded$apps[[1]]), KNOWN_APP_FIELDS)
+
+  # A reserved port named only by a renamed field does not count against the port range
+  result <- config$validate_config(list(
+    apps = list(list(name = "a", path = "/tmp/a")), log_dir = "/tmp/logs",
+    starting_port = 65535, proxy_port_old = 65535
+  ))
+  expect_true(result$valid)
+})
+
+test_that("app names in the configuration follow the rules for names in URLs", {
+  config <- ShinyServerConfig$new()
+  validate_name <- function(name) {
+    config$validate_config(list(
+      apps = list(list(name = name, path = "/tmp/a")), log_dir = "/tmp/logs", starting_port = 5001
+    ))
+  }
+  for (name in list("sales", "my-app_2", strrep("a", 50))) {
+    expect_true(validate_name(name)$valid)
+    expect_true(validate_app_name(name)$valid)
+  }
+  for (name in list("my app", "", strrep("a", 51), 7, c("a", "b"), NA_character_)) {
+    result <- validate_name(name)
+    expect_false(result$valid)
+    expect_identical(result$error, paste0("App 1: ", validate_app_name(name)$error))
+  }
+})
+
 test_that("load_config trims the configured title", {
   config <- ShinyServerConfig$new()
   tmp_config <- tempfile(fileext = ".json")
@@ -1141,4 +1139,120 @@ test_that("load_config trims the configured title", {
   with_mocked_bindings(is_port_in_use = function(host, port) FALSE, {
     expect_equal(config$load_config(tmp_config)$title, "Acme Analytics")
   })
+})
+
+# ============================================================================
+# Ports and app names
+# ============================================================================
+
+test_that("configuration rejects fractional and non-finite ports before allocation", {
+  config <- ShinyServerConfig$new()
+  base <- list(apps = list(list(name = "app", path = tempdir())), log_dir = tempdir(),
+    starting_port = 3001, proxy_port = 3838, management_port = 3839)
+  for (field in c("starting_port", "proxy_port", "management_port")) {
+    for (value in list(3001.5, NA_real_, NaN, Inf, -Inf, NULL, "3001", c(3001, 3002))) {
+      candidate <- base
+      candidate[field] <- list(value)
+      result <- config$validate_config(candidate)
+      expect_false(result$valid, info = field)
+      expect_match(result$error, paste0("Invalid ", field))
+    }
+  }
+  expect_true(config$validate_config(base)$valid)
+  expect_false(validate_port(3001.5)$valid)
+})
+
+test_that("port-range capacity excludes only reserved ports in that range", {
+  config <- ShinyServerConfig$new()
+  conf <- list(apps = list(list(name = "app", path = tempdir())), log_dir = tempdir(),
+    starting_port = 65535, proxy_port = 3838, management_port = 3839)
+  expect_true(config$validate_config(conf)$valid)
+  config$config <- conf
+  local_mocked_bindings(is_port_in_use = function(...) FALSE)
+  config$assign_app_ports()
+  expect_equal(config$config$apps[[1]]$port, 65535)
+  conf$management_port <- 65535
+  expect_false(config$validate_config(conf)$valid)
+  conf$starting_port <- 65534
+  conf$proxy_port <- 65535
+  expect_true(config$validate_config(conf)$valid)
+})
+
+test_that("duplicate names fail configuration validation before any app starts", {
+  config <- ShinyServerConfig$new()
+  data <- list(apps = list(list(name = "app", path = "/tmp/one"), list(name = "app", path = "/tmp/two")),
+    log_dir = "/tmp", starting_port = 3001)
+  result <- config$validate_config(data)
+  expect_false(result$valid)
+  expect_match(result$error, "Duplicate app name: app", fixed = TRUE)
+  # Names differing only in case would share log files on Windows and macOS
+  data$apps[[2]]$name <- "App"
+  result <- config$validate_config(data)
+  expect_false(result$valid)
+  expect_match(result$error, "Duplicate app name: App", fixed = TRUE)
+  data$apps[[2]]$name <- "other"
+  expect_true(config$validate_config(data)$valid)
+})
+
+test_that("port assignments reach the server log", {
+  path <- tempfile(fileext = ".json")
+  log_dir <- tempfile("tss-logs")
+  on.exit({
+    logger::log_appender(logger::appender_console, namespace = "tinyshinyserver")
+    unlink(c(path, log_dir), recursive = TRUE)
+  }, add = TRUE)
+  writeLines(jsonlite::toJSON(list(apps = list(list(name = "app", path = "/tmp")),
+    log_dir = log_dir, starting_port = 3001), auto_unbox = TRUE), path)
+  local_mocked_bindings(is_port_in_use = function(...) FALSE)
+  TinyShinyServer$new(path)
+  log <- readLines(file.path(log_dir, "server.log"))
+  expect_true(any(grepl("App 'app' -> port 3001", log, fixed = TRUE)))
+})
+
+# ============================================================================
+# Idle timeout, log level and unusable apps
+# ============================================================================
+
+test_that("idle_timeout_minutes defaults to 30 and accepts zero", {
+  expect_equal(read_test_config()$idle_timeout_minutes, 30)
+  expect_equal(read_test_config(idle_timeout_minutes = 0)$idle_timeout_minutes, 0)
+  expect_equal(read_test_config(idle_timeout_minutes = 0.5)$idle_timeout_minutes, 0.5)
+  for (value in list(-1, "30", c(1, 2))) {
+    expect_error(read_test_config(idle_timeout_minutes = value),
+      "idle_timeout_minutes must be a single non-negative finite number of minutes")
+  }
+})
+
+test_that("log_level defaults to INFO and is normalized to upper case", {
+  expect_equal(read_test_config()$log_level, "INFO")
+  expect_equal(read_test_config(log_level = "debug")$log_level, "DEBUG")
+  expect_equal(read_test_config(log_level = "WARN")$log_level, "WARN")
+  for (value in list("TRACE", "", 3, c("INFO", "DEBUG"))) {
+    expect_error(read_test_config(log_level = value), "log_level must be one of: DEBUG, INFO, WARN, ERROR")
+  }
+})
+
+test_that("the new options are known configuration fields", {
+  expect_length(unrecognized_config_fields(list(idle_timeout_minutes = 0, log_level = "DEBUG", apps = list())), 0)
+})
+
+test_that("on-demand apps that cannot start are reported when the configuration is loaded", {
+  log_dir <- tempfile("tss-logging")
+  app_dir <- make_test_app_dir()
+  on.exit(restore_test_logging(log_dir), add = TRUE)
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  setup_logging(log_dir, "INFO")
+  config <- ShinyServerConfig$new()
+  missing <- file.path(tempdir(), "tss-no-such-app")
+  config$config <- list(apps = list(
+    list(name = "good", path = app_dir, resident = FALSE),
+    list(name = "ghost", path = missing, resident = FALSE),
+    # A resident app reports the problem itself when it is started
+    list(name = "resident-ghost", path = missing, resident = TRUE)
+  ))
+  config$log_unusable_apps()
+
+  warnings <- grep("cannot start", readLines(file.path(log_dir, "server.log")), value = TRUE)
+  expect_length(warnings, 1)
+  expect_match(warnings, "On-demand app ghost cannot start: App directory not found")
 })

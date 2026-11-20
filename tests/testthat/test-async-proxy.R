@@ -131,7 +131,7 @@ test_that("async proxy preserves methods, binary uploads, content types and HEAD
   on.exit(httpuv::stopServer(backend$server), add = TRUE)
   config <- proxy_test_config(backend$port)
   payload <- as.raw(c(0, 1, 128, 255))
-  for (method in c("POST", "PUT", "DELETE")) {
+  for (method in c("POST", "PUT", "PATCH", "DELETE")) {
     response <- await_response(forward_request(method, backend$url,
       list(HTTP_X_TEST = "legitimate", HTTP_CONTENT_TYPE = "application/custom",
         rook.input = list(read = function() payload)), "app", config))
@@ -145,7 +145,7 @@ test_that("async proxy preserves methods, binary uploads, content types and HEAD
   }
   response <- await_response(forward_request("HEAD", backend$url, list(), "app", config))
   expect_equal(response$status, 201)
-  expect_length(response$body, 0)
+  expect_null(response$body)
   expect_equal(tail(observed, 1)[[1]]$method, "HEAD")
   response <- await_response(forward_request("OPTIONS", backend$url, list(), "app", config))
   expect_equal(response$status, 201)
@@ -237,6 +237,115 @@ José,Zürich
   expect_equal(response$status, 200)
   expect_identical(response$body, charToRaw(csv))
   expect_identical(response$headers[["content-type"]], "text/csv; charset=utf-8")
+})
+
+test_that("a large app response is written to a file instead of held in memory", {
+  size <- RESPONSE_SPOOL_BYTES + 4096
+  payload <- as.raw(seq_len(size) %% 251)
+  backend <- start_test_http_server(function(req) {
+    list(status = 200L, headers = list("Content-Type" = "application/octet-stream"),
+      body = if (req$PATH_INFO == "/large") payload else payload[seq_len(RESPONSE_SPOOL_BYTES)])
+  })
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  config <- proxy_test_config(backend$port)
+
+  # Up to the limit the body stays in memory
+  response <- await_response(forward_request("GET", paste0(backend$url, "/small"), list(), "app", config), timeout = 30)
+  expect_identical(response$body, payload[seq_len(RESPONSE_SPOOL_BYTES)])
+
+  # Above it, httpuv sends the file and then deletes it
+  response <- await_response(forward_request("GET", paste0(backend$url, "/large"), list(), "app", config), timeout = 30)
+  expect_equal(response$status, 200)
+  expect_named(response$body, c("file", "owned"))
+  on.exit(unlink(response$body$file), add = TRUE)
+  expect_true(response$body$owned)
+  expect_identical(readBin(response$body$file, "raw", size + 1), payload)
+
+  # A response that cannot have a body leaves no file behind
+  files <- function() list.files(tempdir(), pattern = "^tss-response-")
+  before <- files()
+  response <- await_response(forward_request("HEAD", paste0(backend$url, "/large"), list(), "app", config), timeout = 30)
+  expect_null(response$body)
+  expect_setequal(files(), before)
+})
+
+test_that("a collected response body is a raw vector or a file, and a failed one leaves nothing", {
+  body <- response_body_collector(limit = 10)
+  body$write(as.raw(1:4))
+  body$write(raw())
+  body$write(as.raw(5:10), final = TRUE)
+  expect_identical(body$finish(), as.raw(1:10))
+  expect_identical(response_body_collector()$finish(), raw())
+
+  body <- response_body_collector(limit = 10)
+  for (chunk in list(as.raw(1:6), as.raw(7:12), as.raw(13:20))) body$write(chunk)
+  spooled <- body$finish()
+  on.exit(unlink(spooled$file), add = TRUE)
+  expect_identical(readBin(spooled$file, "raw", 100), as.raw(1:20))
+  expect_true(spooled$owned)
+
+  # A transfer that fails part-way removes what it had written
+  body <- response_body_collector(limit = 10)
+  body$write(as.raw(1:20))
+  path <- environment(body$write)$path
+  expect_true(file.exists(path))
+  body$discard()
+  expect_false(file.exists(path))
+
+  # A finished body belongs to the response and outlives a late discard()
+  body <- response_body_collector(limit = 10)
+  body$write(as.raw(1:20))
+  kept <- body$finish()
+  body$discard()
+  expect_identical(readBin(kept$file, "raw", 100), as.raw(1:20))
+  discard_response_body(kept)
+  expect_false(file.exists(kept$file))
+
+  discard_response_body(as.raw(1:3))
+  discard_response_body(spooled)
+  expect_false(file.exists(spooled$file))
+})
+
+test_that("a failed transfer discards a partly received large response", {
+  backend <- start_test_http_server(function(req) {
+    list(status = 200L, headers = list("Content-Type" = "application/octet-stream"), body = raw(4e6))
+  })
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+
+  # Write to a file almost at once, and note where
+  collector <- response_body_collector
+  paths <- character()
+  local_mocked_bindings(response_body_collector = function(...) {
+    body <- collector(limit = 1024)
+    write <- body$write
+    body$write <- function(data, final = FALSE) {
+      write(data, final)
+      paths <<- union(paths, environment(write)$path)
+    }
+    body
+  })
+
+  # A transfer too slow to finish before its time limit fails part-way
+  handle <- new_backend_handle(max_recv_speed_large = 200000, timeout_ms = 1000, accept_encoding = "identity")
+  expect_error(await_response(fetch_backend_async(backend$url, handle), timeout = 30))
+  expect_length(paths, 1)
+  expect_false(file.exists(paths))
+})
+
+test_that("responses that cannot have a body are sent without one", {
+  backend <- start_test_http_server(function(req) {
+    list(status = as.integer(sub("^/", "", req$PATH_INFO)), headers = list(ETag = "\"v1\""), body = NULL)
+  })
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  config <- proxy_test_config(backend$port)
+  for (status in c(204L, 304L)) {
+    response <- await_response(forward_request("GET", paste0(backend$url, "/", status), list(), "app", config))
+    expect_equal(response$status, status)
+    expect_equal(response$headers$etag, "\"v1\"")
+    # An empty body would be compressed and sent after a response that has none
+    expect_true("body" %in% names(response))
+    expect_null(response$body)
+  }
 })
 
 test_that("proxied responses carry no second Date and no invented Content-Type", {
@@ -706,6 +815,7 @@ test_that("idle shutdown waits for every concurrent HTTP response", {
 })
 
 test_that("the proxy never forwards to another program holding an app's port", {
+  skip_on_cran() # Starts an R process
   skip_if_not(ps::ps_is_supported())
   hits <- 0
   backend <- start_test_http_server(function(req) {
@@ -814,4 +924,51 @@ test_that("an oversized request body is rejected before the app is called", {
   expect_false(called)
   expect_equal(post(512)$status_code, 200)
   expect_true(called)
+})
+
+# ============================================================================
+# Response headers
+# ============================================================================
+
+test_that("backend-local redirects preserve paths queries and fragments", {
+  rewrite <- function(location) {
+    raw <- charToRaw(paste0("HTTP/1.1 302 Found\r\nLocation: ", location, "\r\n\r\n"))
+    proxy_response_headers(raw, "http://127.0.0.1:3001/", "app", "GET")$location
+  }
+  for (authority in c("http://127.0.0.1:3001", "//127.0.0.1:3001")) {
+    for (suffix in c("", "?foo=1", "#section", "/next?x=a%2Fb#section", "//nested/path")) {
+      path <- if (startsWith(suffix, "/")) suffix else paste0("/", suffix)
+      expect_equal(rewrite(paste0(authority, suffix)), paste0("/proxy/app", path))
+    }
+  }
+  for (location in c("//example.com/next", "https://example.com/?foo=1", "http://127.0.0.1:3002/next",
+    "http://127.0.0.1:3001.example.com/next", "../next?x=1", "?foo=1", "#section")) {
+    expect_equal(rewrite(location), location)
+  }
+  expect_equal(rewrite("/next?foo=1#section"), "/proxy/app/next?foo=1#section")
+})
+
+test_that("response headers preserve duplicates and remove transfer framing", {
+  headers <- charToRaw(paste0("HTTP/1.1 200 OK\r\n",
+    "Content-Disposition: attachment; filename=report.csv\r\n",
+    "Cache-Control: private, no-store\r\nETag: abc\r\n",
+    "Set-Cookie: a=1; Path=/; HttpOnly\r\nSet-Cookie: b=2; Path=/folder; Domain=127.0.0.1\r\n",
+    "Connection: keep-alive, X-Internal\r\nX-Internal: hidden\r\n",
+    "Transfer-Encoding: chunked\r\nContent-Length: 99\r\n\r\n"))
+  result <- proxy_response_headers(headers, "http://127.0.0.1:3001/download", "app", "GET")
+  expect_equal(result$`content-disposition`, "attachment; filename=report.csv")
+  expect_equal(result$`cache-control`, "private, no-store")
+  expect_equal(result$etag, "abc")
+  expect_equal(unname(unlist(result[names(result) == "set-cookie"])),
+    c("a=1; Path=/proxy/app/; HttpOnly", "b=2; Path=/proxy/app/folder"))
+  expect_false(any(c("connection", "x-internal", "transfer-encoding", "content-length") %in% names(result)))
+  expect_equal(proxy_response_headers(headers, "http://127.0.0.1:3001/", "app", "HEAD")$`content-length`, "99")
+})
+
+test_that("cookies with no path get an app-scoped default path", {
+  headers <- charToRaw("HTTP/1.1 200 OK\r\nSet-Cookie: session=abc; HttpOnly\r\n\r\n")
+  result <- proxy_response_headers(headers, "http://127.0.0.1:3001/", "app", "GET")
+  expect_equal(result$`set-cookie`, "session=abc; HttpOnly; Path=/proxy/app/")
+  nested <- proxy_response_headers(headers, "http://127.0.0.1:3001/folder/page?x=1", "app", "GET")
+  expect_equal(nested$`set-cookie`, "session=abc; HttpOnly; Path=/proxy/app/folder")
 })

@@ -3,12 +3,31 @@
 
 DEFAULT_SERVER_TITLE <- "Tiny Shiny Server"
 
+# How long a browser may reuse a style sheet or script without asking again.
+# The files change only when the package is upgraded.
+STATIC_FILE_MAX_AGE_SECONDS <- 300
+
+# Whether an If-None-Match request header names the entity tag of a file
+etag_matches <- function(if_none_match, etag) {
+  if (!is.character(if_none_match) || length(if_none_match) != 1 || is.na(if_none_match)) {
+    return(FALSE)
+  }
+  # A cache between the browser and the server may have marked the tag weak
+  candidates <- sub("^W/", "", trimws(strsplit(if_none_match, ",", fixed = TRUE)[[1]]))
+  any(candidates %in% c(etag, "*"))
+}
+
 # Template Manager Class
 TemplateManager <- setRefClass("TemplateManager",
   fields = list(
     template_dir = "character",
     base_url = "character",
-    server_title = "character"
+    server_title = "character",
+    # Templates and the session information are read once: neither changes
+    # while the server runs, and every page is built on the thread that also
+    # proxies the apps
+    template_cache = "environment",
+    session_info = "character"
   ),
   methods = list(
     initialize = function(template_directory = "templates", base_url_path = "",
@@ -16,6 +35,8 @@ TemplateManager <- setRefClass("TemplateManager",
       template_dir <<- template_directory
       base_url <<- base_url_path %||% ""
       server_title <<- title %||% DEFAULT_SERVER_TITLE
+      template_cache <<- new.env(parent = emptyenv())
+      session_info <<- character()
     },
     title_html = function() {
       "The server title, escaped for HTML and immune to later template substitution"
@@ -25,20 +46,23 @@ TemplateManager <- setRefClass("TemplateManager",
       "Load a template file and return its content"
 
       template_path <- file.path(template_dir, paste0(template_name, ".html"))
+      cached <- template_cache[[template_path]]
+      if (!is.null(cached)) {
+        return(cached)
+      }
 
       if (!file.exists(template_path)) {
         stop("Template not found: ", template_path)
       }
 
-      tryCatch(
-        {
-          content <- readLines(template_path, encoding = "UTF-8", warn = FALSE)
-          return(paste(content, collapse = "\n"))
-        },
+      content <- tryCatch(
+        paste(readLines(template_path, encoding = "UTF-8", warn = FALSE), collapse = "\n"),
         error = function(e) {
           stop("Error reading template: ", e$message)
         }
       )
+      assign(template_path, content, envir = template_cache)
+      content
     },
     render_template = function(template_name, variables = list()) {
       "Render a template with variable substitution"
@@ -72,14 +96,13 @@ TemplateManager <- setRefClass("TemplateManager",
     generate_management_page = function() {
       "Generate the management page HTML"
 
-      # Capture session information: R version, platform, and operating system
-      session_info_output <- capture.output(sessionInfo())
-      session_info_text <- paste(head(session_info_output, 3), collapse = "\n")
-      # Escape HTML characters
-      session_info_text <- html_escape(session_info_text)
+      # R version, platform, and operating system, escaped for HTML
+      if (length(session_info) == 0) {
+        session_info <<- html_escape(paste(head(capture.output(sessionInfo()), 3), collapse = "\n"))
+      }
 
       return(render_template("management_page", list(
-        session_info = session_info_text,
+        session_info = session_info,
         title = title_html()
       )))
     },
@@ -129,8 +152,8 @@ TemplateManager <- setRefClass("TemplateManager",
 
       return(cards_html)
     },
-    serve_static_file = function(file_path) {
-      "Serve a static file (CSS, JS, images)"
+    serve_static_file = function(file_path, if_none_match = NULL) {
+      "Serve a static file (CSS, JS, images), or HTTP 304 for a copy the browser already holds"
 
       # Security check - explicitly reject directory traversal attempts
       # Check for ".." as a path component before normalization
@@ -182,6 +205,18 @@ TemplateManager <- setRefClass("TemplateManager",
         ))
       }
 
+      # Let browsers keep the file. Without these headers they fetch it again
+      # for every page, including each reload of the starting page. A 304
+      # has no body element: httpuv would send an empty body compressed.
+      info <- file.info(normalized_path)
+      cache_headers <- list(
+        "Cache-Control" = paste0("max-age=", STATIC_FILE_MAX_AGE_SECONDS),
+        "ETag" = sprintf('"%.0f-%.0f"', info$size, as.numeric(info$mtime))
+      )
+      if (etag_matches(if_none_match, cache_headers$ETag)) {
+        return(list(status = 304L, headers = cache_headers, body = NULL))
+      }
+
       # Determine content type
       file_ext <- tools::file_ext(normalized_path)
       content_type <- switch(tolower(file_ext),
@@ -202,7 +237,7 @@ TemplateManager <- setRefClass("TemplateManager",
         {
           if (content_type %in% c("image/png", "image/jpeg", "image/gif", "image/x-icon")) {
             # Binary file
-            content <- readBin(normalized_path, "raw", file.info(normalized_path)$size)
+            content <- readBin(normalized_path, "raw", info$size)
           } else {
             # Text file
             content <- paste(readLines(normalized_path, encoding = "UTF-8", warn = FALSE), collapse = "\n")
@@ -210,7 +245,7 @@ TemplateManager <- setRefClass("TemplateManager",
 
           return(list(
             status = 200,
-            headers = list("Content-Type" = content_type),
+            headers = c(list("Content-Type" = content_type), cache_headers),
             body = content
           ))
         },

@@ -38,11 +38,10 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     app_processes = "list",
     ws_connections = "list",
     backend_connections = "list",
-    # Connection count cache: Maintains O(1) lookup performance
-    # Rationale: Direct iteration is O(n) - at 100 connections this is 90x slower
-    # Complexity: Adds defensive checks to add/remove operations
-    # Validation: validate_connection_count_consistency() detects/fixes corruption
-    app_connection_counts = "environment",
+    # The session IDs of each app's open WebSocket connections. An app's
+    # connection count is the size of its set, so a session that is added or
+    # removed twice cannot be counted twice.
+    app_sessions = "environment",
     # When each session last carried a message. Kept apart from the connection
     # lists so that a message does not rewrite them.
     session_activity = "environment",
@@ -62,7 +61,10 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     CLEANUP_INTERVAL_SECONDS = "numeric",
     MAX_MESSAGE_SIZE = "numeric",
     APP_STARTUP_TIMEOUT_SECONDS = "numeric",
-    HTTP_SESSION_GRACE_SECONDS = "numeric"
+    HTTP_SESSION_GRACE_SECONDS = "numeric",
+    # How long an on-demand app that nobody is waiting for may keep starting
+    # before the idle check stops it
+    ON_DEMAND_START_LIMIT_SECONDS = "numeric"
   ),
   methods = list(
     initialize = function() {
@@ -73,12 +75,13 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       MAX_MESSAGE_SIZE <<- 1048576
       APP_STARTUP_TIMEOUT_SECONDS <<- 30
       HTTP_SESSION_GRACE_SECONDS <<- 30
+      ON_DEMAND_START_LIMIT_SECONDS <<- 600
 
       # Initialize runtime state
       app_processes <<- list()
       ws_connections <<- list()
       backend_connections <<- list()
-      app_connection_counts <<- new.env(hash = TRUE, parent = emptyenv())
+      app_sessions <<- new.env(hash = TRUE, parent = emptyenv())
       session_activity <<- new.env(hash = TRUE, parent = emptyenv())
       active_http_requests <<- new.env(hash = TRUE, parent = emptyenv())
       pending_session_checks <<- new.env(hash = TRUE, parent = emptyenv())
@@ -129,6 +132,13 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       # A misspelled option would otherwise be dropped without a trace. The
       # server log may not be open yet, so log_ignored_fields() reports these.
       ignored_fields <<- unrecognized_config_fields(parsed_config)
+
+      # Remove those fields, so that they have no effect: `$` matches a list's
+      # names by prefix, and "proxy_port_old" would answer for proxy_port.
+      new_config <- new_config[intersect(names(new_config), KNOWN_CONFIG_FIELDS)]
+      new_config$apps <- lapply(new_config$apps, function(app) {
+        app[intersect(names(app), KNOWN_APP_FIELDS)]
+      })
 
       # Set defaults for optional fields
       new_config$proxy_port <- new_config$proxy_port %||% 3838
@@ -193,7 +203,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     reset_app_state = function() {
       "Forget per-app runtime state after all apps have stopped"
 
-      app_connection_counts <<- new.env(hash = TRUE, parent = emptyenv())
+      # app_sessions needs no reset: closing each connection emptied it
       pending_session_checks <<- new.env(hash = TRUE, parent = emptyenv())
       app_startup_state <<- new.env(hash = TRUE, parent = emptyenv())
       verified_backends <<- new.env(hash = TRUE, parent = emptyenv())
@@ -254,9 +264,10 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         }
       }
 
-      # Check if there's enough port range for all apps
+      # Check if there's enough port range for all apps. `[[` matches the
+      # optional names exactly, where `$` would accept "proxy_port_old".
       num_apps <- length(config$apps)
-      reserved_ports <- unique(c(config$proxy_port %||% 3838, config$management_port %||% 3839))
+      reserved_ports <- unique(c(config[["proxy_port"]] %||% 3838, config[["management_port"]] %||% 3839))
       reserved_ports <- reserved_ports[reserved_ports >= config$starting_port & reserved_ports <= 65535]
 
       # Only reserved ports in the remaining allocation range consume capacity.
@@ -304,17 +315,10 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
           }
         }
 
-        # Validate app name
-        if (!is.character(app$name) || length(app$name) != 1) {
-          return(list(valid = FALSE, error = paste("App", i, "name must be a string")))
-        }
-
-        if (!grepl("^[a-zA-Z0-9_-]+$", app$name)) {
-          return(list(valid = FALSE, error = paste("App", i, "name contains invalid characters")))
-        }
-
-        if (nchar(app$name) > 50) {
-          return(list(valid = FALSE, error = paste("App", i, "name too long")))
+        # The rules that request routing applies to the name in a URL
+        name_validation <- validate_app_name(app$name)
+        if (!name_validation$valid) {
+          return(list(valid = FALSE, error = paste0("App ", i, ": ", name_validation$error)))
         }
 
         # Names that differ only in case would share log files on
@@ -427,65 +431,29 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       TRUE
     },
     add_ws_connection = function(session_id, connection_info) {
-      "Add a WebSocket connection to tracking with cache management
+      "Track a WebSocket connection. Adding a session again replaces its details."
 
-      Defensive programming notes:
-      - Checks if connection already exists to prevent double-counting
-      - Uses max(0, ...) to prevent negative counts from corruption
-      - Only increments cache on NEW connections, not updates
-      - Logs cache operations for debugging race conditions
-      "
-
-      # Validate input
       if (is.null(session_id) || is.null(connection_info)) {
         logger::log_error("add_ws_connection called with NULL session_id or connection_info")
         return(FALSE)
       }
 
-      new_app_name <- connection_info$app_name
-
-      # Check if this is a new connection or an update (critical for cache consistency)
-      is_new_connection <- !(session_id %in% names(ws_connections))
-
-      if (is_new_connection) {
-        # New connection: add to tracking and increment count
-        ws_connections[[session_id]] <<- connection_info
-
-        if (!is.null(new_app_name)) {
-          # Defensive: max(0, ...) prevents negative counts
-          current <- if (exists(new_app_name, envir = app_connection_counts)) {
-            max(0, get(new_app_name, envir = app_connection_counts))
-          } else {
-            0
-          }
-          new_count <- current + 1
-          assign(new_app_name, new_count, envir = app_connection_counts)
-          logger::log_debug("Cache: Added NEW connection for {app_name}, session={session_id}, count: {old} -> {new}",
-            app_name = new_app_name, session_id = session_id, old = current, new = new_count
-          )
-        }
-      } else {
-        # Existing connection: update info but DO NOT change count
-        # This prevents cache inconsistencies from repeated updates
-        logger::log_debug("Cache: Updated existing connection for session={session_id}, count unchanged",
-          session_id = session_id
+      # A session belongs to one app at a time
+      forget_app_session(session_id)
+      ws_connections[[session_id]] <<- connection_info
+      app_name <- connection_info$app_name
+      if (!is.null(app_name) && nzchar(app_name)) {
+        assign(app_name, union(app_sessions[[app_name]], session_id), envir = app_sessions)
+        logger::log_debug("Session {session_id} tracked for {app_name}: {count} open",
+          session_id = session_id, app_name = app_name, count = get_app_connection_count(app_name)
         )
-        ws_connections[[session_id]] <<- connection_info
       }
 
       return(TRUE)
     },
     remove_ws_connection = function(session_id) {
-      "Remove a WebSocket connection from tracking with idempotent cache management
+      "Stop tracking a WebSocket connection. Returns FALSE for a session that is not tracked."
 
-      Defensive programming notes:
-      - Idempotent: safe to call multiple times with same session_id
-      - Prevents double-decrement by checking existence first
-      - Uses max(0, ...) to ensure count never goes negative
-      - Returns FALSE if connection doesn't exist (for caller awareness)
-      "
-
-      # Validate input
       if (is.null(session_id)) {
         logger::log_error("remove_ws_connection called with NULL session_id")
         return(FALSE)
@@ -495,53 +463,31 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         rm(list = session_id, envir = session_activity)
       }
 
-      # IDEMPOTENT: Check if connection actually exists before removing
-      # Critical: prevents double-decrement in concurrent/callback scenarios
+      # Close callbacks may ask again for a session that has already gone
       if (!(session_id %in% names(ws_connections))) {
-        logger::log_debug("Cache: Connection {session_id} already removed, idempotent return",
-          session_id = session_id
-        )
         return(FALSE)
       }
 
-      # Get connection info before removing (needed for cache update)
-      conn_info <- ws_connections[[session_id]]
-
-      # Safety check for NULL connection info
-      if (is.null(conn_info)) {
-        logger::log_warn("Cache: Connection {session_id} has NULL info, removing entry only",
-          session_id = session_id
-        )
-        ws_connections[[session_id]] <<- NULL
-        return(FALSE)
-      }
-
-      app_name <- conn_info$app_name
-
-      # Remove the connection from tracking first
+      forget_app_session(session_id)
       ws_connections[[session_id]] <<- NULL
-
-      # Update connection count cache if we have a valid app_name
-      if (!is.null(app_name) && app_name != "") {
-        current <- if (exists(app_name, envir = app_connection_counts)) {
-          get(app_name, envir = app_connection_counts)
-        } else {
-          logger::log_warn("Cache: No count found for {app_name}, initializing to 0",
-            app_name = app_name
-          )
-          0
-        }
-
-        # Ensure we never go negative
-        new_count <- max(0, current - 1)
-        assign(app_name, new_count, envir = app_connection_counts)
-
-        logger::log_debug("Cache: Removed connection for {app_name}, session={session_id}, count: {old} -> {new}",
-          app_name = app_name, session_id = session_id, old = current, new = new_count
-        )
-      }
-
       return(TRUE)
+    },
+    forget_app_session = function(session_id) {
+      "Take a tracked session out of its app's set of open connections"
+
+      app_name <- ws_connections[[session_id]]$app_name
+      if (is.null(app_name) || !nzchar(app_name)) {
+        return(invisible(NULL))
+      }
+      remaining <- setdiff(app_sessions[[app_name]], session_id)
+      logger::log_debug("Session {session_id} no longer tracked for {app_name}: {count} open",
+        session_id = session_id, app_name = app_name, count = length(remaining)
+      )
+      if (length(remaining) > 0) {
+        assign(app_name, remaining, envir = app_sessions)
+      } else if (exists(app_name, envir = app_sessions, inherits = FALSE)) {
+        rm(list = app_name, envir = app_sessions)
+      }
     },
     get_ws_connection = function(session_id) {
       "Get WebSocket connection info by session ID"
@@ -583,74 +529,8 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       return(app_processes)
     },
     get_app_connection_count = function(app_name) {
-      "Get cached connection count for an app (O(1) lookup)"
-      if (exists(app_name, envir = app_connection_counts)) {
-        return(get(app_name, envir = app_connection_counts))
-      }
-      return(0)
-    },
-    validate_connection_count_consistency = function(fix_errors = TRUE) {
-      "Validate and optionally fix connection count cache consistency
-
-      This function exists because:
-      1. Cache bugs have occurred in the past (race conditions, double counting)
-      2. Provides safety net for detecting corruption early
-      3. Auto-fix capability prevents prolonged inconsistency
-      4. Called periodically by cleanup scheduler in tss_main.R
-
-      Performance: O(n) iteration - only runs periodically, not on hot path
-      "
-
-      # Count actual connections per app
-      actual_counts <- list()
-      for (session_id in names(ws_connections)) {
-        conn <- ws_connections[[session_id]]
-        if (!is.null(conn) && !is.null(conn$app_name)) {
-          app_name <- conn$app_name
-          actual_counts[[app_name]] <- (actual_counts[[app_name]] %||% 0) + 1
-        }
-      }
-
-      # Compare with cache
-      inconsistencies <- list()
-      all_app_names <- unique(c(names(actual_counts), ls(envir = app_connection_counts)))
-
-      for (app_name in all_app_names) {
-        actual <- actual_counts[[app_name]] %||% 0
-        cached <- if (exists(app_name, envir = app_connection_counts)) {
-          get(app_name, envir = app_connection_counts)
-        } else {
-          0
-        }
-
-        if (actual != cached) {
-          inconsistencies[[app_name]] <- list(
-            cached = cached,
-            actual = actual,
-            difference = cached - actual
-          )
-
-          logger::log_error("Connection count INCONSISTENCY for {app_name}: cached={cached}, actual={actual}, diff={diff}",
-            app_name = app_name, cached = cached, actual = actual, diff = cached - actual
-          )
-
-          # Fix if requested
-          if (fix_errors) {
-            assign(app_name, actual, envir = app_connection_counts)
-            logger::log_info("Fixed connection count for {app_name}: {cached} -> {actual}",
-              app_name = app_name, cached = cached, actual = actual
-            )
-          }
-        }
-      }
-
-      # Return validation result
-      is_consistent <- length(inconsistencies) == 0
-      return(list(
-        consistent = is_consistent,
-        inconsistencies = inconsistencies,
-        total_apps_checked = length(all_app_names)
-      ))
+      "The number of open WebSocket connections for an app"
+      length(app_sessions[[app_name]])
     },
     assign_app_ports = function() {
       "Auto-assign ports to apps starting from starting_port"

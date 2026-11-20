@@ -145,11 +145,16 @@ process_usage <- function(process) {
   if (!is_process_alive(process)) return(list())
   usage <- list()
   usage$memory_bytes <- process_memory_bytes(process)
-  usage$uptime_seconds <- tryCatch(
+  usage$uptime_seconds <- process_uptime_seconds(process)
+  usage
+}
+
+# Seconds since a process started, or NULL when that cannot be read
+process_uptime_seconds <- function(process) {
+  tryCatch(
     as.numeric(difftime(Sys.time(), process$get_start_time(), units = "secs")),
     error = function(e) NULL
   )
-  usage
 }
 
 kill_process_safely <- function(process) {

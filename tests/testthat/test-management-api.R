@@ -89,7 +89,7 @@ test_that("route_management_request routes /templates/ to static files", {
   config <- ShinyServerConfig$new()
 
   mock_tm <- list(
-    serve_static_file = function(path) {
+    serve_static_file = function(path, if_none_match = NULL) {
       create_html_response(paste("Static:", path))
     }
   )
@@ -654,4 +654,67 @@ test_that("API rejects overly long paths", {
   result <- handle_management_request(req, config, pm, list())
 
   expect_equal(result$status, 400)
+})
+
+# ============================================================================
+# Host checks, framing and session activity
+# ============================================================================
+
+test_that("management server rejects non-loopback Host headers", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(log_dir = tempfile())
+  dir.create(config$config$log_dir)
+  on.exit(unlink(config$config$log_dir, recursive = TRUE), add = TRUE)
+  restarts <- 0
+  pm <- list(get_app_status = function(name) list(status = "running"),
+    restart_app = function(name) { restarts <<- restarts + 1; list(success = TRUE) },
+    get_all_app_status = function() list())
+  for (host in c("evil.example:3839", "evil.example", "127.0.0.1.evil.example:3839",
+                 "manage.myapp.example.com", "[::2]:3839")) {
+    for (req in list(
+      list(PATH_INFO = "/api/apps/app/restart", REQUEST_METHOD = "POST", HTTP_HOST = host,
+        HTTP_X_TINYSHINYSERVER_REQUEST = "management"),
+      list(PATH_INFO = "/api/shutdown", REQUEST_METHOD = "POST", HTTP_HOST = host,
+        HTTP_X_TINYSHINYSERVER_REQUEST = "management"),
+      list(PATH_INFO = "/api/apps", REQUEST_METHOD = "GET", HTTP_HOST = host)
+    )) {
+      expect_equal(handle_management_request(req, config, pm, NULL)$status, 403)
+    }
+  }
+  expect_equal(restarts, 0)
+  expect_false(config$shutdown_requested)
+  for (host in list(NULL, "127.0.0.1:3839", "localhost:3839", "LOCALHOST", "[::1]:3839", "127.0.0.1")) {
+    req <- list(PATH_INFO = "/api/apps/app/restart", REQUEST_METHOD = "POST", HTTP_HOST = host,
+      HTTP_X_TINYSHINYSERVER_REQUEST = "management")
+    expect_equal(handle_management_request(req, config, pm, NULL)$status, 200)
+  }
+  expect_equal(restarts, 6)
+})
+
+test_that("management responses cannot be framed", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list())
+  pm <- list(get_all_app_status = function() list())
+  for (req in list(
+    list(PATH_INFO = "/api/apps", REQUEST_METHOD = "GET", HTTP_HOST = "127.0.0.1:3839"),
+    list(PATH_INFO = "/missing", REQUEST_METHOD = "GET"),
+    list(PATH_INFO = "/api/apps", REQUEST_METHOD = "GET", HTTP_HOST = "evil.example")
+  )) {
+    response <- handle_management_request(req, config, pm, NULL)
+    expect_equal(response$headers[["X-Frame-Options"]], "DENY")
+    expect_equal(response$headers[["Content-Security-Policy"]], "frame-ancestors 'none'")
+  }
+})
+
+test_that("the management API reports a session's latest message as its last activity", {
+  config <- ShinyServerConfig$new()
+  opened <- as.POSIXct("2026-01-02 03:04:05", tz = "UTC")
+  config$add_ws_connection("s", list(app_name = "app", client_ip = "127.0.0.1", user_agent = "test",
+    created_at = opened, last_activity = opened))
+  connection <- function() jsonlite::fromJSON(handle_management_connections_api(config)$body)$s
+
+  expect_equal(connection()$last_activity, format(opened, "%Y-%m-%d %H:%M:%S"))
+  assign("s", opened + 90, envir = config$session_activity)
+  expect_equal(connection()$last_activity, format(opened + 90, "%Y-%m-%d %H:%M:%S"))
+  expect_equal(connection()$connected_at, format(opened, "%Y-%m-%d %H:%M:%S"))
 })

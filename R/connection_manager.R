@@ -270,9 +270,28 @@ ConnectionManager <- setRefClass("ConnectionManager",
         if (!identical(config$get_app_process(app_name), process) ||
             (config$active_http_requests[[app_name]] %||% 0L) > 0L ||
             config$get_app_connection_count(app_name) > 0L) return(FALSE)
+        # A slow start, such as a Quarto render, is not thrown away because
+        # the visitor's page stopped waiting: look again after another grace
+        # period, and stop the app then if it is ready and still unused.
+        if (is_still_starting(app_name, process)) {
+          schedule_session_check(app_name)
+          return(FALSE)
+        }
         maybe_stop_idle_app(app_name)
       }, grace_seconds)
       TRUE
+    },
+    is_still_starting = function(app_name, process) {
+      "Whether an unused on-demand app has yet to listen on its port and may be given more time"
+
+      # Where ps cannot list sockets, every live process counts as verified,
+      # so an app that is still starting is stopped as before
+      if (!is_process_alive(process) || config$app_backend_verified(app_name)) {
+        return(FALSE)
+      }
+      # An app that never listens is not kept for ever
+      uptime <- process_uptime_seconds(process)
+      !is.null(uptime) && uptime < config$ON_DEMAND_START_LIMIT_SECONDS
     },
     cancel_session_check = function(app_name) {
       "Withdraw an app's pending idle check and its timer"
@@ -291,7 +310,6 @@ ConnectionManager <- setRefClass("ConnectionManager",
         return(FALSE)
       }
 
-      # Get connection count from cache (O(1) - now reliable after cache simplification)
       ws_count <- config$get_app_connection_count(app_name)
 
       logger::log_debug("WebSocket connections for {app_name}: {count}", app_name = app_name, count = ws_count)

@@ -136,6 +136,18 @@
 
 * A WebSocket message no longer rewrites the server's records of every connected session, so busy sessions cost less as the number of sessions grows. Exited app processes are removed by the health check alone; the five-minute cleanup repeated that work.
 
+* A configuration field whose name begins with an option's name, such as `proxy_port_old` or `title_draft`, no longer sets that option. Such a field was used, without validation, when the option itself was absent, because R matches list names by prefix. Unrecognized fields are now removed from the configuration as well as reported.
+
+* An app response larger than 8 MB is written to a temporary file as it arrives and sent from there, instead of being held in the server's memory, so a large download no longer occupies the memory of the process that serves every app. This requires `curl` 3.3 or later.
+
+* Proxied responses that cannot have a body, HTTP 204 and 304 and the response to a `HEAD` request, are sent without one. For a client that accepts gzip, a compressed empty body followed them, which is not allowed and could make the client drop the connection.
+
+* The proxy now forwards `PATCH` requests to apps. It answered them with HTTP 405.
+
+* An on-demand app that is still starting is no longer stopped as unused 30 seconds after the last request. It is left to finish, for up to 10 minutes from its start, and stops after the usual 30 seconds once it is ready if nobody has opened it. A slow start, such as a Quarto render that takes longer than the two minutes for which the visitor's page reloads, is no longer thrown away and begun again on the next visit.
+
+* The pages' style sheet and script are sent with `Cache-Control` and `ETag` headers, so browsers reuse them instead of fetching them again for every page, including each reload of the page shown while an app starts. The management dashboard's R version and operating system are read once instead of on every page load.
+
 ## Package
 
 * The package now requires R 4.1.0 or later, as its `promises` and `quarto` dependencies already do.

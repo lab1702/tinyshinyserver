@@ -98,7 +98,7 @@ route_management_request <- function(path, method, req, config, process_manager,
 
   # Static files for management interface
   if (startsWith(path, "/templates/")) {
-    return(template_manager$serve_static_file(gsub("^/templates/", "", path)))
+    return(handle_static_file(path, template_manager, req$HTTP_IF_NONE_MATCH))
   }
 
   # 404 for unknown paths
@@ -249,15 +249,7 @@ handle_app_restart <- function(path, process_manager) {
 
       result <- process_manager$restart_app(app_name)
 
-      if (result$success) {
-        return(create_json_response(result))
-      } else {
-        return(list(
-          status = 500,
-          headers = list("Content-Type" = "application/json"),
-          body = jsonlite::toJSON(result, auto_unbox = TRUE)
-        ))
-      }
+      return(create_json_response(result, status = if (result$success) 200 else 500))
     },
     error = function(e) {
       logger::log_error("Error restarting app {app_name}: {error}", app_name = app_name, error = e$message)

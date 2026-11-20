@@ -225,3 +225,151 @@ test_that("kill_process_safely returns TRUE for dead process", {
   result <- kill_process_safely(dead_process)
   expect_true(result)
 })
+
+# ============================================================================
+# Process termination
+# ============================================================================
+
+test_that("termination reports a process that survives kill attempts", {
+  kills <- 0
+  waits <- numeric()
+  process <- list(is_alive = function() TRUE,
+    kill = function() { kills <<- kills + 1 }, kill_tree = function() { kills <<- kills + 1 },
+    wait = function(timeout) { waits <<- c(waits, timeout) })
+  expect_false(kill_process_safely(process))
+  expect_equal(kills, 2)
+  expect_equal(waits, 1000)
+})
+
+test_that("termination waits for exit after kill signals are delivered", {
+  alive <- TRUE
+  events <- character()
+  process <- list(
+    is_alive = function() alive,
+    kill_tree = function() { events <<- c(events, "tree") },
+    kill = function() { events <<- c(events, "kill") },
+    wait = function(timeout) {
+      expect_equal(timeout, 1000)
+      events <<- c(events, "wait")
+      alive <<- FALSE
+    }
+  )
+  expect_true(kill_process_safely(process))
+  expect_false(alive)
+  expect_identical(events, c("tree", "kill", "wait"))
+})
+
+test_that("termination tolerates tree members exiting before they are signalled", {
+  alive <- TRUE
+  process <- list(
+    is_alive = function() alive,
+    kill_tree = function() stop(structure(class = c("no_such_process", "ps_error", "error", "condition"),
+      list(message = "Failed to send signal to some processes: 4002", call = NULL))),
+    kill = function() NULL,
+    wait = function(timeout) alive <<- FALSE
+  )
+  expect_true(kill_process_safely(process))
+  expect_false(alive)
+})
+
+test_that("termination stops the app's own process where ps cannot list processes", {
+  # processx's kill_tree() only raises an error on such platforms
+  local_mocked_bindings(ps_is_supported = function() FALSE, .package = "ps")
+  alive <- TRUE
+  process <- list(
+    is_alive = function() alive,
+    kill_tree = function() stop("kill_tree is not supported on this platform"),
+    kill = function() alive <<- FALSE,
+    wait = function(timeout) NULL
+  )
+  expect_true(kill_process_safely(process))
+  expect_false(alive)
+})
+
+test_that("termination stops a real child worker as well as its parent", {
+  # Starts two real R processes; see the crash cleanup test above
+  skip_on_cran()
+  marker <- tempfile()
+  child_pid_file <- tempfile()
+  parent <- callr::r_bg(function(marker, child_pid_file) {
+    child <- callr::r_bg(function(marker) {
+      repeat {
+        cat("tick\n", file = marker, append = TRUE)
+        Sys.sleep(.02)
+      }
+    }, args = list(marker = marker), supervise = FALSE)
+    writeLines(as.character(child$get_pid()), child_pid_file)
+    Sys.sleep(30)
+  }, args = list(marker = marker, child_pid_file = child_pid_file))
+  on.exit({
+    parent$kill_tree()
+    if (file.exists(child_pid_file)) try(tools::pskill(as.integer(readLines(child_pid_file))), silent = TRUE)
+    unlink(c(marker, child_pid_file))
+  }, add = TRUE)
+  deadline <- Sys.time() + 30
+  while ((!file.exists(marker) || !file.exists(child_pid_file)) && Sys.time() < deadline) Sys.sleep(.02)
+  expect_true(file.exists(marker))
+  expect_true(kill_process_safely(parent))
+  expect_false(parent$is_alive())
+  Sys.sleep(.1)
+  size <- file.info(marker)$size
+  Sys.sleep(.15)
+  expect_equal(file.info(marker)$size, size)
+})
+
+# ============================================================================
+# Logging
+# ============================================================================
+
+test_that("setup_logging leaves the caller's logger configuration alone", {
+  global_threshold <- logger::log_threshold()
+  global_appender <- logger::log_appender()
+  log_dir <- tempfile("tss-logging")
+  on.exit({
+    logger::log_threshold(logger::INFO, namespace = "tinyshinyserver")
+    logger::log_appender(logger::appender_console, namespace = "tinyshinyserver")
+    unlink(log_dir, recursive = TRUE)
+  }, add = TRUE)
+  setup_logging(log_dir, "INFO")
+  expect_identical(logger::log_threshold(), global_threshold)
+  expect_identical(logger::log_appender(), global_appender)
+  # Package log calls still reach the server log
+  expect_true(any(grepl("Logging system initialized", readLines(file.path(log_dir, "server.log")))))
+})
+
+test_that("setup_logging rejects a log_dir where the server log cannot be written", {
+  blocker <- tempfile("tss-blocker")
+  on.exit(unlink(blocker), add = TRUE)
+  # A directory cannot be created below a regular file
+  writeLines("", blocker)
+  expect_error(setup_logging(file.path(blocker, "logs"), "INFO"), "Cannot write the server log")
+})
+
+test_that("package log messages use glue whatever the global formatter", {
+  log_dir <- tempfile("tss-logging")
+  on.exit({
+    logger::log_formatter(logger::formatter_glue, namespace = "tinyshinyserver")
+    logger::log_appender(logger::appender_console, namespace = "tinyshinyserver")
+    unlink(log_dir, recursive = TRUE)
+  }, add = TRUE)
+  logger::log_formatter(logger::formatter_sprintf, namespace = "tinyshinyserver")
+  setup_logging(log_dir, "INFO")
+  log <- readLines(file.path(log_dir, "server.log"))
+  expect_true(any(grepl("file output to .*server\\.log", log)))
+  expect_false(any(grepl("{log_file}", log, fixed = TRUE)))
+})
+
+test_that("the configured log level reaches the server log", {
+  log_dir <- tempfile("tss-logging")
+  on.exit(restore_test_logging(log_dir), add = TRUE)
+  config <- ShinyServerConfig$new()
+  debug_lines <- function() grep("Session (quiet|detailed) tracked for app", readLines(file.path(log_dir, "server.log")))
+
+  setup_logging(log_dir, "INFO")
+  config$add_ws_connection("quiet", list(app_name = "app"))
+  expect_length(debug_lines(), 0)
+
+  setup_logging(log_dir, "DEBUG")
+  config$add_ws_connection("detailed", list(app_name = "app"))
+  expect_length(debug_lines(), 1)
+})

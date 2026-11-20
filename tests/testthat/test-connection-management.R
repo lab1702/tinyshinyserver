@@ -1,5 +1,6 @@
 # Test for connection management functions
-# Tests for WebSocket and backend connection management in ShinyServerConfig
+# Tests for WebSocket and backend connection management in ShinyServerConfig,
+# and for the ConnectionManager's idle checks of on-demand apps
 
 # ============================================================================
 # WebSocket Connection Management Tests
@@ -117,20 +118,6 @@ test_that("remove_ws_connection handles NULL session_id", {
   expect_false(result)
 })
 
-test_that("remove_ws_connection never goes negative", {
-  config <- ShinyServerConfig$new()
-
-  # Manually corrupt the cache to test defensive programming
-  assign("app1", -5, envir = config$app_connection_counts)
-
-  # Add and remove a connection
-  config$add_ws_connection("s1", list(app_name = "app1", ws = NULL))
-  config$remove_ws_connection("s1")
-
-  # Should be 0, not negative
-  expect_equal(config$get_app_connection_count("app1"), 0)
-})
-
 test_that("get_ws_connection returns NULL for non-existent session", {
   config <- ShinyServerConfig$new()
 
@@ -241,7 +228,7 @@ test_that("get_all_app_processes returns all processes", {
 })
 
 # ============================================================================
-# Connection Count Cache Tests
+# Connection Count Tests
 # ============================================================================
 
 test_that("get_app_connection_count returns 0 for new app", {
@@ -251,7 +238,7 @@ test_that("get_app_connection_count returns 0 for new app", {
   expect_equal(count, 0)
 })
 
-test_that("connection count cache tracks multiple apps independently", {
+test_that("connection counts track multiple apps independently", {
   config <- ShinyServerConfig$new()
 
   # Add connections for app1
@@ -266,36 +253,16 @@ test_that("connection count cache tracks multiple apps independently", {
   expect_equal(config$get_app_connection_count("app3"), 0)
 })
 
-test_that("validate_connection_count_consistency detects inconsistencies", {
-  config <- ShinyServerConfig$new()
-
-  # Add connections normally
-  config$add_ws_connection("s1", list(app_name = "app1", ws = NULL))
-  config$add_ws_connection("s2", list(app_name = "app1", ws = NULL))
-
-  # Manually corrupt the cache
-  assign("app1", 999, envir = config$app_connection_counts)
-
-  # Validate and fix
-  result <- config$validate_connection_count_consistency(fix_errors = TRUE)
-
-  expect_false(result$consistent)
-  expect_true("app1" %in% names(result$inconsistencies))
-
-  # After fix, cache should be corrected
-  expect_equal(config$get_app_connection_count("app1"), 2)
-})
-
-test_that("validate_connection_count_consistency passes for consistent state", {
+test_that("a session re-added for another app is counted for that app only", {
   config <- ShinyServerConfig$new()
 
   config$add_ws_connection("s1", list(app_name = "app1", ws = NULL))
-  config$add_ws_connection("s2", list(app_name = "app1", ws = NULL))
+  config$add_ws_connection("s1", list(app_name = "app2", ws = NULL))
 
-  result <- config$validate_connection_count_consistency(fix_errors = FALSE)
-
-  expect_true(result$consistent)
-  expect_equal(length(result$inconsistencies), 0)
+  expect_equal(config$get_app_connection_count("app1"), 0)
+  expect_equal(config$get_app_connection_count("app2"), 1)
+  config$remove_ws_connection("s1")
+  expect_equal(config$get_app_connection_count("app2"), 0)
 })
 
 # ============================================================================
@@ -345,4 +312,232 @@ test_that("Config handles startup timeout correctly", {
 
   # State should be cleared after timeout detection
   expect_null(config$get_app_startup_state("timeout_app"))
+})
+
+# ============================================================================
+# Idle Check Tests
+# ============================================================================
+
+test_that("HTTP-only launches stop after a cancellable session grace period", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", port = 3001, resident = FALSE)))
+  process <- list(generation = 1)
+  stops <- 0
+  pm <- list(start_app_on_demand = function(...) {
+    config$add_app_process("app", process)
+    TRUE
+  }, stop_app_immediately = function(...) { stops <<- stops + 1; TRUE })
+  cm <- ConnectionManager$new(config, pm)
+  callbacks <- list()
+  delays <- numeric()
+  local_mocked_bindings(later = function(func, delay, ...) {
+    callbacks[[length(callbacks) + 1L]] <<- func
+    delays <<- c(delays, delay)
+  }, .package = "later")
+  local_mocked_bindings(forward_request = function(...) create_html_response("page"))
+  expect_equal(handle_proxy_request("/proxy/app/", "GET", "", list(), config, pm, cm)$status, 200)
+  expect_equal(stops, 0)
+  expect_equal(delays, 30)
+  callbacks[[1]]()
+  expect_equal(stops, 1)
+
+  cm$begin_http_request("app")
+  cm$end_http_request("app")
+  stale <- tail(callbacks, 1)[[1]]
+  cm$begin_http_request("app")
+  stale()
+  expect_equal(stops, 1)
+  cm$end_http_request("app")
+  stale <- tail(callbacks, 1)[[1]]
+  cm$add_client_connection("s", list(), "app", "127.0.0.1", "test")
+  stale()
+  expect_equal(stops, 1)
+  # Closing the last session waits for a reconnect before stopping
+  cm$remove_client_connection("s")
+  expect_equal(stops, 1)
+  expect_equal(tail(delays, 1), 30)
+  tail(callbacks, 1)[[1]]()
+  expect_equal(stops, 2)
+
+  cm$begin_http_request("app")
+  cm$end_http_request("app")
+  stale <- tail(callbacks, 1)[[1]]
+  config$add_app_process("app", list(generation = 2))
+  stale()
+  expect_equal(stops, 2)
+  config$config$apps[[1]]$resident <- TRUE
+  n <- length(callbacks)
+  cm$begin_http_request("app")
+  cm$end_http_request("app")
+  expect_length(callbacks, n)
+})
+
+test_that("a superseded idle check withdraws its timer", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = FALSE)))
+  config$add_app_process("app", list(generation = 1))
+  stops <- 0
+  cm <- ConnectionManager$new(config, list(stop_app_immediately = function(...) stops <<- stops + 1))
+  timers <- list()
+  cancelled <- 0
+  local_mocked_bindings(later = function(func, delay, ...) {
+    timers[[length(timers) + 1L]] <<- func
+    function() cancelled <<- cancelled + 1
+  }, .package = "later")
+
+  # Each finished request asks for a check; only the latest timer stays queued
+  for (i in 1:5) {
+    cm$begin_http_request("app")
+    cm$end_http_request("app")
+  }
+  expect_length(timers, 5)
+  expect_equal(cancelled, 4)
+
+  # A timer that fires anyway after being superseded does nothing
+  timers[[1]]()
+  expect_equal(stops, 0)
+  timers[[5]]()
+  expect_equal(stops, 1)
+
+  # A new session withdraws the pending check as well
+  cm$end_http_request("app")
+  cm$add_client_connection("s", list(), "app", "127.0.0.1", "test")
+  expect_equal(cancelled, 5)
+  expect_null(config$pending_session_checks[["app"]])
+})
+
+test_that("idle checks cannot stop busy, reconnected or replacement apps", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = FALSE)))
+  old <- list(generation = 1)
+  replacement <- list(generation = 2)
+  config$add_app_process("app", old)
+  stops <- 0
+  checks <- list()
+  local_mocked_bindings(later = function(func, delay, ...) {
+    checks[[length(checks) + 1L]] <<- func
+  }, .package = "later")
+  cm <- ConnectionManager$new(config, list(stop_app_immediately = function(app_name) stops <<- stops + 1))
+
+  # A request in flight keeps the app alive
+  cm$begin_http_request("app")
+  cm$maybe_stop_idle_app("app")
+  expect_equal(stops, 0)
+
+  # So does a browser session that opened before the request finished
+  cm$add_client_connection("s", list(), "app", "127.0.0.1", "test")
+  cm$end_http_request("app")
+  expect_length(checks, 0)
+
+  # A check scheduled for the old process cannot stop its replacement
+  cm$begin_http_request("app")
+  cm$remove_client_connection("s")
+  config$add_app_process("app", replacement)
+  cm$end_http_request("app")
+  expect_length(checks, 2)
+  checks[[1]]()
+  expect_equal(stops, 0)
+
+  # The replacement's own check reclaims it once it is idle
+  checks[[2]]()
+  expect_equal(stops, 1)
+})
+
+test_that("a new page can connect after the last old session closes during HTTP", {
+  for (reconnect in c(FALSE, TRUE)) {
+    config <- ShinyServerConfig$new()
+    config$config <- list(apps = list(list(name = "app", resident = FALSE)))
+    config$add_app_process("app", list(generation = 1))
+    stops <- 0
+    cm <- ConnectionManager$new(config, list(stop_app_immediately = function(...) stops <<- stops + 1))
+    callback <- NULL
+    delays <- numeric()
+    local_mocked_bindings(later = function(func, delay, ...) {
+      callback <<- func
+      delays <<- c(delays, delay)
+    }, .package = "later")
+    cm$add_client_connection("old", list(), "app", "127.0.0.1", "test")
+    cm$begin_http_request("app")
+    cm$remove_client_connection("old")
+    expect_equal(stops, 0)
+    cm$end_http_request("app")
+    expect_equal(stops, 0)
+    expect_equal(unique(delays), 30)
+    if (reconnect) cm$add_client_connection("new", list(), "app", "127.0.0.1", "test")
+    callback()
+    expect_equal(stops, if (reconnect) 0 else 1)
+  }
+})
+
+test_that("reloading an on-demand page does not stop its app between pages", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = FALSE)))
+  config$add_app_process("app", list(generation = 1))
+  stops <- 0
+  cm <- ConnectionManager$new(config, list(stop_app_immediately = function(...) stops <<- stops + 1))
+  callbacks <- list()
+  local_mocked_bindings(later = function(func, delay, ...) {
+    callbacks[[length(callbacks) + 1L]] <<- func
+  }, .package = "later")
+  cm$add_client_connection("old", list(), "app", "127.0.0.1", "test")
+  # The new page's document completes before the old page unloads
+  cm$begin_http_request("app")
+  cm$end_http_request("app")
+  cm$remove_client_connection("old")
+  expect_equal(stops, 0)
+  cm$add_client_connection("new", list(), "app", "127.0.0.1", "test")
+  for (callback in callbacks) callback()
+  expect_equal(stops, 0)
+  # Once the last page really leaves, the app stops after the grace period
+  cm$remove_client_connection("new")
+  expect_equal(stops, 0)
+  tail(callbacks, 1)[[1]]()
+  expect_equal(stops, 1)
+})
+
+test_that("an unused on-demand app that is still starting is left to finish", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", port = 3001, resident = FALSE)))
+  starting <- list(is_alive = function() TRUE, get_start_time = function() Sys.time() - 150)
+  config$add_app_process("app", starting)
+  stops <- 0
+  checks <- list()
+  delays <- numeric()
+  local_mocked_bindings(later = function(func, delay, ...) {
+    checks[[length(checks) + 1L]] <<- func
+    delays <<- c(delays, delay)
+  }, .package = "later")
+  listening <- FALSE
+  local_mocked_bindings(process_owns_port = function(process, port) listening)
+  cm <- ConnectionManager$new(config, list(stop_app_immediately = function(app_name) stops <<- stops + 1))
+
+  # The visitor's page has given up, but the app has yet to listen on its
+  # port: a slow start is not thrown away, and the app is checked again
+  cm$schedule_session_check("app", 45)
+  checks[[1]]()
+  expect_equal(stops, 0)
+  expect_equal(delays, c(45, config$HTTP_SESSION_GRACE_SECONDS))
+
+  # Once it is ready and still unused, it is stopped
+  listening <- TRUE
+  checks[[2]]()
+  expect_equal(stops, 1)
+
+  # An app that never listens is not kept for ever
+  listening <- FALSE
+  stuck <- list(is_alive = function() TRUE,
+    get_start_time = function() Sys.time() - config$ON_DEMAND_START_LIMIT_SECONDS - 1)
+  config$add_app_process("app", stuck)
+  cm$schedule_session_check("app")
+  tail(checks, 1)[[1]]()
+  expect_equal(stops, 2)
+
+  # Nor is one whose process has exited, or whose start time cannot be read
+  for (process in list(
+    list(is_alive = function() FALSE, get_start_time = function() Sys.time()),
+    list(is_alive = function() TRUE)
+  )) {
+    config$add_app_process("app", process)
+    expect_false(cm$is_still_starting("app", process))
+  }
 })

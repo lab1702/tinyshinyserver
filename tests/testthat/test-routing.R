@@ -67,7 +67,7 @@ create_mock_template_manager <- function() {
     generate_landing_page = function(config) {
       return("<html><body>Landing Page</body></html>")
     },
-    serve_static_file = function(file_path) {
+    serve_static_file = function(file_path, if_none_match = NULL) {
       if (file_path == "style.css") {
         return(list(
           status = 200,
@@ -388,9 +388,11 @@ test_that("handle_static_file returns 404 for missing files", {
 test_that("handle_static_file strips /templates/ prefix", {
   # Track what file_path is passed to serve_static_file
   received_path <- NULL
+  received_tag <- NULL
   template_manager <- list(
-    serve_static_file = function(file_path) {
+    serve_static_file = function(file_path, if_none_match = NULL) {
       received_path <<- file_path
+      received_tag <<- if_none_match
       list(status = 200, headers = list("Content-Type" = "text/css"), body = "test")
     }
   )
@@ -398,6 +400,15 @@ test_that("handle_static_file strips /templates/ prefix", {
   handle_static_file("/templates/styles/main.css", template_manager)
 
   expect_equal(received_path, "styles/main.css")
+  expect_null(received_tag)
+
+  # The browser's entity tag reaches the template manager from both servers
+  req <- list(HTTP_IF_NONE_MATCH = "\"tag\"")
+  route_http_request("/templates/styles/main.css", "GET", "", req, ShinyServerConfig$new(), template_manager, NULL)
+  expect_equal(received_tag, "\"tag\"")
+  received_tag <- NULL
+  route_management_request("/templates/styles/main.css", "GET", req, ShinyServerConfig$new(), list(), template_manager)
+  expect_equal(received_tag, "\"tag\"")
 })
 
 # ============================================================================
@@ -646,4 +657,67 @@ test_that("forward_request honors each app's startup grace period", {
       }
     )
   }
+})
+
+# ============================================================================
+# Proxy routing safeguards
+# ============================================================================
+
+test_that("malformed proxy prefixes never start apps or form backend URLs", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = FALSE)))
+  pm <- list(start_app_on_demand = function(...) stop("must not start"))
+  local_mocked_bindings(forward_request = function(...) stop("must not forward"))
+  for (path in c("/proxy//app/path", "/proxy///app/path", "//proxy/app/path")) {
+    expect_equal(handle_proxy_request(path, "GET", "", list(), config, pm)$status, 400)
+  }
+})
+
+test_that("root redirect does not launch a dormant app", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = FALSE)))
+  manager <- list(start_app_on_demand = function(...) stop("must not start"))
+  response <- handle_proxy_request("/proxy/app", "GET", "x=1", list(), config, manager)
+  expect_equal(response$status, 308)
+  expect_equal(response$headers$Location, "/proxy/app/?x=1")
+})
+
+test_that("HTTP accounting releases rejected and synchronous responses", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", port = 3001, resident = TRUE)))
+  cm <- ConnectionManager$new(config)
+  failure <- FALSE
+  local_mocked_bindings(forward_request = function(...) {
+    if (failure) return(promises::promise(function(resolve, reject) reject(simpleError("failure"))))
+    create_503_response("starting")
+  })
+  expect_equal(handle_proxy_request("/proxy/app/", "GET", "", list(), config, connection_manager = cm)$status, 503)
+  expect_equal(config$active_http_requests$app, 0)
+  failure <- TRUE
+  expect_error(await_response(handle_proxy_request("/proxy/app/", "GET", "", list(), config, connection_manager = cm)), "failure")
+  expect_equal(config$active_http_requests$app, 0)
+})
+
+test_that("a loopback proxy rejects rebound Host names", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", port = 1, resident = FALSE)))
+  pm <- list(start_app_on_demand = function(...) stop("must not start"))
+  closed <- 0
+  for (host in c("attacker.example:3838", "attacker.example", "127.0.0.1.attacker.example")) {
+    req <- list(PATH_INFO = "/proxy/app/", REQUEST_METHOD = "GET", HTTP_HOST = host)
+    expect_equal(handle_http_request(req, config, NULL, NULL, pm)$status, 403)
+    ws <- list(request = list(PATH_INFO = "/proxy/app/websocket/", HTTP_HOST = host,
+      HTTP_ORIGIN = paste0("http://", host)),
+      close = function() closed <<- closed + 1,
+      onMessage = function(...) stop("Rebound socket must not register callbacks"))
+    handle_websocket_connection(ws, config, ConnectionManager$new(config), pm)
+  }
+  expect_equal(closed, 3)
+  expect_length(config$get_all_ws_connections(), 0)
+  req <- list(PATH_INFO = "/health", REQUEST_METHOD = "GET", HTTP_HOST = "localhost:3838")
+  expect_equal(handle_http_request(req, config, NULL, NULL, pm)$status, 200)
+  # A proxy deliberately bound to all interfaces serves any host name
+  config$config$proxy_host <- "0.0.0.0"
+  req <- list(PATH_INFO = "/health", REQUEST_METHOD = "GET", HTTP_HOST = "server.internal:3838")
+  expect_equal(handle_http_request(req, config, NULL, NULL, pm)$status, 200)
 })
