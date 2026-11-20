@@ -451,10 +451,12 @@ test_that("handle_app_restart returns 404 for an unknown app", {
 })
 
 test_that("handle_app_restart does not restart dormant apps", {
+  app_dir <- make_test_app_dir()
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
   config <- ShinyServerConfig$new()
   config$config <- list(
     apps = list(
-      list(name = "app1", path = "/path", port = 3001, resident = FALSE)
+      list(name = "app1", path = app_dir, port = 3001, resident = FALSE)
     )
   )
   pm <- ProcessManager$new(config)
@@ -465,6 +467,39 @@ test_that("handle_app_restart does not restart dormant apps", {
   body <- jsonlite::fromJSON(result$body)
   expect_false(body$success)
   expect_match(body$message, "dormant")
+})
+
+test_that("handle_app_restart does not restart an on-demand app that cannot start", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(
+    apps = list(
+      list(name = "app1", path = tempfile("tss-missing"), port = 3001, resident = FALSE)
+    )
+  )
+  pm <- ProcessManager$new(config)
+  assign("restart_app", function(app_name) stop("An app that cannot start must not be restarted"), envir = pm)
+
+  result <- handle_app_restart("/api/apps/app1/restart", pm)
+
+  expect_equal(result$status, 200)
+  body <- jsonlite::fromJSON(result$body)
+  expect_false(body$success)
+  expect_match(body$message, "cannot start")
+})
+
+test_that("an unexpected management error is answered with HTTP 500 and no detail", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list())
+  req <- list(PATH_INFO = "/api/status", REQUEST_METHOD = "GET", QUERY_STRING = "", HTTP_HOST = "localhost:3839")
+
+  local_mocked_bindings(route_management_request = function(...) stop("cannot open C:/srv/secret/file"))
+  result <- handle_management_request(req, config, ProcessManager$new(config), NULL)
+
+  expect_equal(result$status, 500)
+  expect_match(result$body, "Internal Server Error")
+  expect_no_match(as.character(result$body), "secret")
+  # The error answer is still protected from framing
+  expect_equal(result$headers[["X-Frame-Options"]], "DENY")
 })
 
 test_that("handle_app_restart restarts running app", {

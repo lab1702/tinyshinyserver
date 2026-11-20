@@ -22,6 +22,12 @@ reject_large_request_body <- function(req, max_bytes) {
 handle_http_request <- function(req, config, template_manager, connection_manager, process_manager = NULL) {
   "Main HTTP request handler with routing"
 
+  respond_safely(answer_http_request(req, config, template_manager, connection_manager, process_manager))
+}
+
+answer_http_request <- function(req, config, template_manager, connection_manager, process_manager = NULL) {
+  "Validate and route a proxy request"
+
   if (!is_allowed_proxy_host(req, config)) {
     return(create_error_response("Invalid Host header", 403))
   }
@@ -172,6 +178,19 @@ parse_proxy_path <- function(path) {
   list(valid = TRUE, app_name = app_name, backend_path = substring(rest, nchar(app_name) + 1L))
 }
 
+# Start an on-demand app that a request or WebSocket has arrived for, unless it
+# is already running. FALSE when the app could not be started.
+ensure_on_demand_app_started <- function(app_config, config, process_manager, trigger) {
+  app_name <- app_config$name
+  if (app_config$resident || is.null(process_manager) || is_process_alive(config$get_app_process(app_name))) {
+    return(TRUE)
+  }
+  logger::log_info("Starting non-resident app {app_name} on demand for {trigger}",
+    app_name = app_name, trigger = trigger
+  )
+  isTRUE(process_manager$start_app_on_demand(app_name))
+}
+
 handle_proxy_request <- function(path, method, query_string, req, config, process_manager = NULL,
                                  connection_manager = NULL, template_manager = NULL) {
   "Handle proxy requests to Shiny apps"
@@ -193,16 +212,8 @@ handle_proxy_request <- function(path, method, query_string, req, config, proces
     return(create_redirect_response(paste0(config$config$base_path, path, "/"), query_string))
   }
 
-  # Start app on demand if it's non-resident and not running
-  if (!app_config$resident && !is.null(process_manager)) {
-    process <- config$get_app_process(app_name)
-    if (is.null(process) || !is_process_alive(process)) {
-      logger::log_info("Starting non-resident app {app_name} on demand for HTTP request", app_name = app_name)
-      success <- process_manager$start_app_on_demand(app_name)
-      if (!success) {
-        return(create_error_response("Failed to start app on demand", 502))
-      }
-    }
+  if (!ensure_on_demand_app_started(app_config, config, process_manager, "HTTP request")) {
+    return(create_error_response("Failed to start app on demand", 502))
   }
 
   # Only the routing prefix is removed; the backend path is passed on verbatim.
@@ -327,9 +338,16 @@ forward_request <- function(method, target_url, req, app_name, config, template_
     body <- NULL
     if (!method %in% c("GET", "HEAD", "OPTIONS")) {
       if (!is.null(req$rook.input)) body <- req$rook.input$read()
-      content_type <- req$CONTENT_TYPE %||% req$HTTP_CONTENT_TYPE
-      if (!is.null(body) && length(body) > 0 && !is.null(content_type)) {
-        headers[["Content-Type"]] <- content_type
+      # A body is passed on when the client sent one, or declared an empty one
+      # with "Content-Length: 0". It keeps the client's Content-Type: libcurl
+      # gives a body without one "application/x-www-form-urlencoded", which a
+      # header with an empty value prevents.
+      declared <- length(req$CONTENT_LENGTH %||% req$HTTP_CONTENT_LENGTH) > 0
+      if (length(body) > 0 || declared) {
+        body <- body %||% raw()
+        headers[["Content-Type"]] <- req$CONTENT_TYPE %||% req$HTTP_CONTENT_TYPE %||% ""
+      } else {
+        body <- NULL
       }
     }
 
@@ -383,7 +401,7 @@ forward_request <- function(method, target_url, req, app_name, config, template_
         curl::handle_setopt(handle, expect_100_timeout_ms = 1000)
       }
       curl::handle_setheaders(handle, .list = headers)
-      if (!is.null(body) && length(body) > 0) {
+      if (!is.null(body)) {
         curl::handle_setopt(handle, postfields = body)
       }
       promises::then(fetch_backend_async(target_url, handle), function(response) {
@@ -719,18 +737,10 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
     return()
   }
 
-  # Start app on demand if it's non-resident and not running
-  if (!app_config$resident && !is.null(process_manager)) {
-    process <- config$get_app_process(app_name)
-    if (is.null(process) || !is_process_alive(process)) {
-      logger::log_info("Starting non-resident app {app_name} on demand for WebSocket connection", app_name = app_name)
-      success <- process_manager$start_app_on_demand(app_name)
-      if (!success) {
-        logger::log_error("Failed to start app {app_name} on demand for WebSocket", app_name = app_name)
-        ws$close()
-        return()
-      }
-    }
+  if (!ensure_on_demand_app_started(app_config, config, process_manager, "WebSocket connection")) {
+    logger::log_error("Failed to start app {app_name} on demand for WebSocket", app_name = app_name)
+    ws$close()
+    return()
   }
 
   # Check if app is still starting up

@@ -31,6 +31,36 @@ test_that("WebSocket proxy preserves document paths and query strings", {
   }
 })
 
+test_that("the INFO log names an app's socket without its query string", {
+  backend <- start_test_http_server(function(req) handle_health_check(), on_ws = function(ws) {
+    ws$send(ws$request$QUERY_STRING)
+  })
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  config <- proxy_test_config(backend$port)
+  cm <- ConnectionManager$new(config)
+  proxy <- start_test_http_server(function(req) handle_health_check(),
+    on_ws = function(ws) handle_websocket_connection(ws, config, cm))
+  on.exit(httpuv::stopServer(proxy$server), add = TRUE)
+
+  logged <- character()
+  logger::log_threshold("INFO", namespace = "tinyshinyserver")
+  logger::log_appender(function(lines) logged <<- c(logged, lines), namespace = "tinyshinyserver")
+  on.exit(logger::log_appender(logger::appender_console, namespace = "tinyshinyserver"), add = TRUE)
+
+  client <- websocket::WebSocket$new(paste0(sub("^http", "ws", proxy$url), "/proxy/app/websocket/?token=secret"))
+  on.exit(client$close(), add = TRUE, after = FALSE)
+  response <- promises::promise(function(resolve, reject) {
+    client$onMessage(function(event) resolve(event$data))
+    client$onError(function(event) reject(simpleError(event$message)))
+  })
+  # The app still receives the query string
+  expect_identical(await_response(response), "?token=secret")
+
+  expect_true(any(grepl(paste0("Connecting to backend: ws://127.0.0.1:", backend$port, "/websocket/ for app app"),
+    logged, fixed = TRUE)))
+  expect_false(any(grepl("secret", logged, fixed = TRUE)))
+})
+
 test_that("an app that speaks first reaches a browser that never sends", {
   backend <- start_test_http_server(function(req) handle_health_check(), on_ws = function(ws) {
     ws$send(paste0("hello from ", ws$request$PATH_INFO))
@@ -117,6 +147,39 @@ test_that("proxy cookies belong only to the current browser request", {
   expect_equal(rawToChar(responses$alice$body), "session=alice")
   expect_equal(rawToChar(responses$bob$body), "session=bob")
   expect_equal(rawToChar(responses$guest$body), "NONE")
+})
+
+test_that("a forwarded body keeps the client's Content-Type, or lack of one, and an empty one its length", {
+  observed <- NULL
+  backend <- start_test_http_server(function(req) {
+    observed <<- list(type = req$HTTP_CONTENT_TYPE, length = req$HTTP_CONTENT_LENGTH,
+      body = req$rook.input$read())
+    create_html_response("ok")
+  })
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  config <- proxy_test_config(backend$port)
+  send <- function(method, body, ...) {
+    req <- list(rook.input = list(read = function() body), ...)
+    expect_equal(await_response(forward_request(method, backend$url, req, "app", config))$status, 200)
+    observed
+  }
+
+  # libcurl labels a body that has no type as a URL-encoded form
+  untyped <- send("POST", charToRaw("abc"))
+  expect_null(untyped$type)
+  expect_equal(untyped$length, "3")
+  expect_identical(untyped$body, charToRaw("abc"))
+
+  # A declared empty body arrives as one, with its type
+  empty <- send("POST", raw(), CONTENT_LENGTH = "0", CONTENT_TYPE = "application/json")
+  expect_equal(empty$type, "application/json")
+  expect_equal(empty$length, "0")
+  expect_null(send("PUT", raw(), CONTENT_LENGTH = "0")$type)
+
+  # A request without a body gains neither header
+  bodiless <- send("DELETE", raw())
+  expect_null(bodiless$type)
+  expect_null(bodiless$length)
 })
 
 test_that("async proxy preserves methods, binary uploads, content types and HEAD", {

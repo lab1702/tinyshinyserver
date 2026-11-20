@@ -118,8 +118,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
 
       # Read with explicit UTF-8 encoding
       config_text <- readLines(file, encoding = "UTF-8", warn = FALSE)
-      parsed_config <- jsonlite::fromJSON(paste(config_text, collapse = "
-"), simplifyDataFrame = FALSE)
+      parsed_config <- jsonlite::fromJSON(paste(config_text, collapse = "\n"), simplifyDataFrame = FALSE)
 
       # Validate configuration
       validation_result <- validate_config(parsed_config)
@@ -390,7 +389,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     get_sorted_apps = function() {
       "Get apps sorted alphabetically by name"
 
-      config$apps[order(sapply(config$apps, function(app) app$name))]
+      sort_apps_by_name(config$apps)
     },
     get_proxy_host = function() {
       "Get proxy host, converting localhost to 127.0.0.1 for httpuv compatibility"
@@ -670,13 +669,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       # on-demand app would only show it to its first visitor
       for (app in config$apps) {
         if (isTRUE(app$resident)) next
-        problem <- tryCatch(
-          {
-            detect_app_type(normalizePath(app$path, mustWork = FALSE))
-            NULL
-          },
-          error = function(e) conditionMessage(e)
-        )
+        problem <- app_start_problem(app)
         if (!is.null(problem)) {
           logger::log_warn("On-demand app {name} cannot start: {problem}", name = app$name, problem = problem)
         }

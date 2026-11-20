@@ -6,6 +6,25 @@
   if (is.null(x)) y else x
 }
 
+# Apps in alphabetical order of their names, as the pages and the API list them
+sort_apps_by_name <- function(apps) {
+  apps[order(vapply(apps, function(app) app$name, character(1)))]
+}
+
+# Evaluate a request handler's response, answering an error that the handler
+# did not anticipate with HTTP 500 and no detail. httpuv would otherwise send
+# the client the R error message, which can name files on the server; the
+# message goes to the server log instead.
+respond_safely <- function(response) {
+  tryCatch(response, error = function(e) {
+    tryCatch(
+      logger::log_error("Unexpected error while answering a request: {error}", error = conditionMessage(e)),
+      error = function(e) NULL
+    )
+    create_error_response("Internal Server Error", 500)
+  })
+}
+
 # Helper functions for connection tracking
 get_client_ip <- function(req) {
   "Extract client IP address from request headers"

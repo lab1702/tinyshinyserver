@@ -122,11 +122,8 @@ TemplateManager <- setRefClass("TemplateManager",
         return("<p>No applications configured</p>")
       }
 
-      # Sort apps alphabetically by name
-      sorted_apps <- apps[order(sapply(apps, function(app) app$name))]
-
       cards_html <- ""
-      for (app_config in sorted_apps) {
+      for (app_config in sort_apps_by_name(apps)) {
         # HTML escape app name for security
         safe_name <- html_escape(app_config$name)
 
@@ -184,9 +181,17 @@ TemplateManager <- setRefClass("TemplateManager",
         ))
       }
 
-      # For existing files, normalize and verify the path stays within template directory
-      # Using mustWork=TRUE since we've confirmed the file exists
-      normalized_path <- normalizePath(full_path, mustWork = TRUE)
+      # For existing files, normalize and verify the path stays within template directory.
+      # A Windows device name such as "nul" exists as a file, but it cannot be
+      # normalized and is not a file of the template directory.
+      normalized_path <- tryCatch(normalizePath(full_path, mustWork = TRUE), error = function(e) NULL)
+      if (is.null(normalized_path)) {
+        return(list(
+          status = 404,
+          headers = list("Content-Type" = "text/plain"),
+          body = "File not found"
+        ))
+      }
 
       # On Windows, use case-insensitive comparison and normalize slashes
       if (.Platform$OS.type == "windows") {
@@ -250,10 +255,12 @@ TemplateManager <- setRefClass("TemplateManager",
           ))
         },
         error = function(e) {
+          # The message names the file's location on the server
+          logger::log_error("Error reading static file: {error}", error = conditionMessage(e))
           return(list(
             status = 500,
             headers = list("Content-Type" = "text/plain"),
-            body = paste("Error reading file:", e$message)
+            body = "Error reading file"
           ))
         }
       )

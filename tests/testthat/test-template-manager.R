@@ -395,6 +395,21 @@ test_that("serve_static_file returns 404 for directories", {
   }
 })
 
+test_that("serve_static_file returns 404 for device names", {
+  temp_dir <- create_test_template_dir()
+  on.exit(cleanup_test_template_dir(temp_dir))
+
+  tm <- TemplateManager$new(temp_dir)
+
+  # On Windows "nul" exists in every directory but cannot be normalized; the
+  # error used to reach the client with the directory's full path
+  for (path in c("nul", "NUL", "styles/nul", "con", "aux")) {
+    result <- tm$serve_static_file(path)
+    expect_equal(result$status, 404, info = path)
+    expect_equal(result$body, "File not found", info = path)
+  }
+})
+
 test_that("serve_static_file prevents directory traversal", {
   temp_dir <- create_test_template_dir()
   on.exit(cleanup_test_template_dir(temp_dir))

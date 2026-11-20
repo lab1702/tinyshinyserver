@@ -230,14 +230,17 @@
                         );
 
                         const actions = element("div", "app-actions");
-                        if (app.status !== "dormant") {
+                        if (app.status === "dormant") {
+                            // Dormant (on-demand, stopped) apps start automatically when opened
+                            actions.append(element("div", "app-info", "Starts automatically when opened"));
+                        } else if (app.status === "unavailable") {
+                            // An on-demand app whose directory cannot be served
+                            actions.append(element("div", "app-info", "Cannot start - see server.log for the reason"));
+                        } else {
                             const button = element("button", "restart-btn", "Restart");
                             button.type = "button";
                             button.addEventListener("click", () => restartApp(button, app.name));
                             actions.append(button);
-                        } else {
-                            // Dormant (on-demand, stopped) apps start automatically when opened
-                            actions.append(element("div", "app-info", "Starts automatically when opened"));
                         }
 
                         card.append(header, details, actions);

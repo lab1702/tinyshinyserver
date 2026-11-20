@@ -134,6 +134,7 @@ The proxy applies these limits:
 - If a running app does not accept connections, the proxy returns HTTP 503. Once the app accepts a connection, a proxied HTTP request fails with HTTP 502 only if the app sends no data for 10 minutes; there is no limit on total transfer time.
 - A response reaches the browser once the app has finished sending it. A response that an app streams, such as server-sent events, is therefore not delivered piece by piece, and a download shows no progress until the proxy has received all of it.
 - Requests with query strings longer than 8,192 characters are rejected with HTTP 400.
+- Requests with a path longer than 1,000 characters, counted with the `/proxy/{app_name}` prefix, or with a `..` path segment, are rejected with HTTP 400.
 - Request bodies larger than `max_request_size_mb` (default: 100 MB), or sent with chunked transfer encoding, are rejected with HTTP 413 before they are read.
 - A WebSocket message from the browser larger than 1 MB closes the session. This check runs only after the whole message has been received, so it does not limit the memory that a single very large message uses; expose the proxy port only to trusted or authenticated clients.
 - WebSocket messages from an app to the browser may be up to 2 GB.
@@ -251,11 +252,11 @@ The landing page and management dashboard refresh their status every 5 seconds. 
 | Landing page | http://localhost:3838 | App links, status, and connection counts |
 | Management dashboard | http://localhost:3839 | Server uptime and memory use, app modes, process IDs, ports, paths, memory use and uptime, connection details, R version and operating system, restarts, configuration reloads, and server shutdown |
 
-App status is **running**, **dormant** (an on-demand app that is not running), **stopped**, or **crashed**. Running and dormant apps can be opened from the landing page; opening a dormant app starts it. Tiles for stopped or crashed apps are disabled, and all tiles are disabled when the server is unreachable.
+App status is **running**, **dormant** (an on-demand app that is not running), **unavailable** (an on-demand app whose directory cannot be served; `server.log` gives the reason), **stopped**, or **crashed**. Running and dormant apps can be opened from the landing page; opening a dormant app starts it. Tiles for unavailable, stopped, or crashed apps are disabled, and all tiles are disabled when the server is unreachable.
 
 Memory figures are the resident memory (RSS) of the server's own R process and of each app's R process. Processes that an app starts itself, such as Pandoc or a database driver's helper, are not included. An app's uptime restarts from zero whenever its process starts again. Memory shows as N/A on platforms where the `ps` package cannot read it.
 
-The management dashboard lists active WebSocket connections with their client IP addresses, user agents, connection times, and last activity. Running, stopped, and crashed apps can be restarted; dormant apps start when accessed. Restarting an app disconnects its users. A resident app starts again at once, without waiting for `restart_delay`. An on-demand app stops and starts again when it is next opened.
+The management dashboard lists active WebSocket connections with their client IP addresses, user agents, connection times, and last activity. Running, stopped, and crashed apps can be restarted; dormant apps start when accessed, and an unavailable app becomes dormant once its directory can be served. Restarting an app disconnects its users. A resident app starts again at once, without waiting for `restart_delay`. An on-demand app stops and starts again when it is next opened.
 
 **Reload Config & Restart All** reads the configuration file again, stops every app, and disconnects all users. It then assigns app ports from the new configuration and starts the resident apps; on-demand apps start when next opened. The file is checked first, so an invalid file, a `log_dir` where the server log cannot be written, or a change to `proxy_host`, `proxy_port`, or `management_port`, is reported without stopping anything; those three settings take effect only when the server restarts. If an app cannot be stopped, the previous configuration stays in effect and its stopped resident apps start again. The dashboard reports whether the reload succeeded once it finishes.
 
@@ -275,7 +276,7 @@ These endpoints are served on the management port (default: 3839). POST requests
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/status` | GET | System overview: app and connection counts, `uptime_seconds`, `server_memory_bytes`, `apps_memory_bytes` (total of running apps), and the outcome of the latest configuration reload |
-| `/api/apps` | GET | Detailed application status, including `memory_bytes` and `uptime_seconds` for running apps |
+| `/api/apps` | GET | Detailed application status, including `pid`, `memory_bytes`, and `uptime_seconds` for running apps |
 | `/api/connections` | GET | Active connection details |
 | `/api/apps/{name}/restart` | POST | Restart the named application |
 | `/api/reload` | POST | Reload the configuration file and restart all applications |
@@ -310,7 +311,7 @@ Point each app's `path` at a directory containing one of these entry points:
 
 Detection prefers standard Shiny files, then R Markdown, then Quarto. File extensions are case-sensitive. For document apps, the first matching file in alphabetical order is used; keep one entry document per directory to make the choice explicit.
 
-An app whose directory is missing, or contains none of these entry points, is not started. The reason is written to `server.log`: when a resident app is started, and for on-demand apps when the configuration is loaded and again when someone opens the app.
+An app whose directory is missing, or contains none of these entry points, is not started. The reason is written to `server.log`: when a resident app is started, and for on-demand apps when the configuration is loaded and again when someone opens the app. Until the directory is fixed, such an on-demand app is shown as **unavailable** and its landing page tile is disabled.
 
 A Quarto document is rendered before it is served, which can take many seconds. To keep on-demand starts and restarts fast, the server renders it only when the rendered page (`{name}.html`, next to the `.qmd`) is missing or older than another file in the app directory. Changes outside that directory, such as an upgraded package, are not noticed; delete the `.html` file to force a render at the next start.
 

@@ -37,10 +37,12 @@ test_that("get_app_status returns NULL for unknown app", {
 })
 
 test_that("get_app_status returns 'dormant' for non-resident app without process", {
+  app_dir <- make_test_app_dir()
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
   config <- ShinyServerConfig$new()
   config$config <- list(
     apps = list(
-      list(name = "app1", path = "/path/to/app1", port = 3001, resident = FALSE)
+      list(name = "app1", path = app_dir, port = 3001, resident = FALSE)
     )
   )
   pm <- ProcessManager$new(config)
@@ -53,6 +55,51 @@ test_that("get_app_status returns 'dormant' for non-resident app without process
   expect_equal(status$port, 3001)
   expect_equal(status$connections, 0)
   expect_null(status$pid)
+})
+
+test_that("an on-demand app whose directory cannot be served is unavailable until it can", {
+  app_dir <- tempfile("tss-app")
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(
+    list(name = "ondemand", path = app_dir, port = 3001, resident = FALSE),
+    list(name = "resident", path = app_dir, port = 3002, resident = TRUE)
+  ))
+  pm <- ProcessManager$new(config)
+
+  # A missing directory, then one without an entry point
+  expect_equal(pm$get_app_status("ondemand")$status, "unavailable")
+  dir.create(app_dir)
+  expect_equal(pm$get_app_status("ondemand")$status, "unavailable")
+  # A resident app in the same state is reported as before
+  expect_equal(pm$get_app_status("resident")$status, "stopped")
+
+  writeLines("# placeholder", file.path(app_dir, "app.R"))
+  expect_equal(pm$get_app_status("ondemand")$status, "dormant")
+})
+
+test_that("an app that is not running has no pid field, which JSON would show as {}", {
+  app_dir <- make_test_app_dir()
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(
+    list(name = "dormant", path = app_dir, port = 3001, resident = FALSE),
+    list(name = "stopped", path = app_dir, port = 3002, resident = TRUE),
+    list(name = "crashed", path = app_dir, port = 3003, resident = TRUE),
+    list(name = "running", path = app_dir, port = 3004, resident = TRUE)
+  ))
+  config$add_app_process("crashed", list(get_pid = function() 111, is_alive = function() FALSE))
+  config$add_app_process("running", list(get_pid = function() 222, is_alive = function() TRUE))
+  pm <- ProcessManager$new(config)
+
+  for (name in c("dormant", "stopped", "crashed")) {
+    expect_false("pid" %in% names(pm$get_app_status(name)), info = name)
+  }
+  expect_equal(pm$get_app_status("running")$pid, 222)
+
+  body <- handle_management_apps_api(pm)$body
+  expect_no_match(as.character(body), "{}", fixed = TRUE)
+  expect_equal(jsonlite::fromJSON(body)$running$pid, 222)
 })
 
 test_that("get_app_status returns 'stopped' for resident app without process", {
@@ -1410,8 +1457,10 @@ test_that("a requested restart replaces the one a failure had scheduled", {
 })
 
 test_that("restarting an on-demand app stops it until it is next opened", {
+  app_dir <- make_test_app_dir()
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
   config <- ShinyServerConfig$new()
-  config$config <- list(apps = list(list(name = "app", resident = FALSE)), restart_delay = 0)
+  config$config <- list(apps = list(list(name = "app", path = app_dir, resident = FALSE)), restart_delay = 0)
   alive <- TRUE
   config$add_app_process("app", list(is_alive = function() alive, kill_tree = function() alive <<- FALSE))
   closed <- 0

@@ -134,6 +134,8 @@
                 setCardEnabled(linkElement, cardElement, true, "Start and open " + app.name + " (on-demand app)", "Start app");
               } else if (app.status === "stopped") {
                 setCardEnabled(linkElement, cardElement, false, "App is stopped - use the management interface to start it", "Unavailable");
+              } else if (app.status === "unavailable") {
+                setCardEnabled(linkElement, cardElement, false, "App cannot start - see the server log for the reason", "Unavailable");
               } else if (app.status === "crashed") {
                 setCardEnabled(linkElement, cardElement, false, "App has crashed - use the management interface to restart it", "Unavailable");
               } else {

@@ -7,7 +7,7 @@ handle_management_request <- function(req, config, process_manager, template_man
 
   # Management pages carry one-click restart controls, so never allow them
   # to be framed by another site
-  response <- handle_management_request_unframed(req, config, process_manager, template_manager)
+  response <- respond_safely(handle_management_request_unframed(req, config, process_manager, template_manager))
   response$headers[["X-Frame-Options"]] <- "DENY"
   response$headers[["Content-Security-Policy"]] <- "frame-ancestors 'none'"
   response
@@ -244,6 +244,12 @@ handle_app_restart <- function(path, process_manager) {
         return(create_json_response(list(
           success = FALSE,
           message = "Cannot restart dormant app. Dormant apps start automatically when accessed."
+        )))
+      }
+      if (app_status$status == "unavailable") {
+        return(create_json_response(list(
+          success = FALSE,
+          message = "Cannot restart an app that cannot start. See server.log for the reason."
         )))
       }
 

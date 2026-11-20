@@ -28,6 +28,10 @@
 
 * Requests to apps no longer follow the `http_proxy` and `ALL_PROXY` environment variables. Where R was configured to use a proxy and `no_proxy` did not list `127.0.0.1`, app requests, with their cookies and bodies, were sent to that proxy, and every app answered HTTP 502 or 503.
 
+* An unexpected error while answering a request is now answered with HTTP 500 and no detail, and the error is written to `server.log`. The client used to receive the R error message; on Windows, a request for `/templates/nul` returned the server's installation path that way, and now returns HTTP 404. An error reading a page's style sheet or script no longer names the file either.
+
+* The INFO message that records a WebSocket connection to an app no longer includes the connection's query string, which can carry a token. The full address is logged at DEBUG.
+
 ## Web pages
 
 * The landing page and management dashboard have a new design. They follow the system light or dark theme by default and have a theme toggle; an explicit choice is remembered in the browser until it is switched back to match the system.
@@ -57,6 +61,10 @@
 * The new `log_level` configuration option chooses the least severe messages written to `server.log` (default: "INFO"). The package's DEBUG messages, which could not be turned on before, record each request's routing and the connection bookkeeping, and the first 100 characters of every WebSocket message.
 
 * Restarting an app from the management dashboard or with `POST /api/apps/{name}/restart` no longer waits for `restart_delay`, which left a healthy app answering HTTP 503 for 5 seconds by default; the delay now applies only to restarts after a failure. Restarting an on-demand app stops it until it is next opened, instead of starting it with nobody connected and stopping it again half a minute later.
+
+* An on-demand app whose directory is missing, or holds no supported entry point, now has the status **unavailable** in `/api/apps`, on the landing page, and on the management dashboard, instead of **dormant**. Its landing page tile is disabled; it used to invite a click that could only fail with HTTP 502. The status returns to dormant as soon as the directory can be served.
+
+* The management API's `/api/apps` leaves out `pid` for an app that is not running. It returned `"pid": {}`.
 
 ## Apps and logging
 
@@ -147,6 +155,8 @@
 * An on-demand app that is still starting is no longer stopped as unused 30 seconds after the last request. It is left to finish, for up to 10 minutes from its start, and stops after the usual 30 seconds once it is ready if nobody has opened it. A slow start, such as a Quarto render that takes longer than the two minutes for which the visitor's page reloads, is no longer thrown away and begun again on the next visit.
 
 * The pages' style sheet and script are sent with `Cache-Control` and `ETag` headers, so browsers reuse them instead of fetching them again for every page, including each reload of the page shown while an app starts. The management dashboard's R version and operating system are read once instead of on every page load.
+
+* A request body that the client sent without a `Content-Type` now reaches the app without one; the proxy labelled it `application/x-www-form-urlencoded`. A request with `Content-Length: 0` now reaches the app with that header and its `Content-Type`, which were both dropped.
 
 ## Package
 

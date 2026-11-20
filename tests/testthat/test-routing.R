@@ -195,11 +195,14 @@ test_that("handle_landing_page handles template errors", {
 # ============================================================================
 
 test_that("handle_apps_api returns app status without process manager", {
+  app_dir <- make_test_app_dir()
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
   config <- ShinyServerConfig$new()
   config$config <- list(
     apps = list(
       list(name = "app1", path = "/path/to/app1", port = 3001, resident = TRUE),
-      list(name = "app2", path = "/path/to/app2", port = 3002, resident = FALSE)
+      list(name = "app2", path = app_dir, port = 3002, resident = FALSE),
+      list(name = "app3", path = "/path/to/app3", port = 3003, resident = FALSE)
     )
   )
 
@@ -225,6 +228,9 @@ test_that("handle_apps_api returns app status without process manager", {
   expect_equal(body$app2$status, "dormant")
   expect_false(body$app2$resident)
   expect_null(body$app2$port)
+
+  # The landing page does not offer an on-demand app that could not start
+  expect_equal(body$app3$status, "unavailable")
 })
 
 test_that("handle_apps_api sorts apps alphabetically", {
@@ -317,6 +323,21 @@ test_that("handle_http_request routes valid requests", {
   expect_equal(result$status, 200)
   body <- jsonlite::fromJSON(result$body)
   expect_equal(body$status, "healthy")
+})
+
+test_that("an unexpected error is answered with HTTP 500 and no detail", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list())
+  req <- list(PATH_INFO = "/health", REQUEST_METHOD = "GET", QUERY_STRING = "")
+
+  # httpuv would send the client the R error message
+  local_mocked_bindings(route_http_request = function(...) stop("cannot open C:/srv/secret/file"))
+  result <- handle_http_request(req, config, create_mock_template_manager(), create_mock_connection_manager())
+
+  expect_equal(result$status, 500)
+  expect_equal(result$headers$`Content-Type`, "application/json")
+  expect_match(result$body, "Internal Server Error")
+  expect_no_match(as.character(result$body), "secret")
 })
 
 test_that("handle_http_request rejects overly long paths", {

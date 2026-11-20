@@ -394,7 +394,8 @@ button {
   color: var(--success);
 }
 
-.status-stopped {
+.status-stopped,
+.status-unavailable {
   background: var(--danger-soft);
   color: var(--danger);
 }

@@ -49,8 +49,12 @@ ConnectionManager <- setRefClass("ConnectionManager",
         backend_query <- paste0("?", backend_query)
       }
       backend_url <- paste0("ws://127.0.0.1:", app_config$port, backend_path, backend_query)
-      logger::log_info("Connecting to backend: {backend_url} for app {app_name}",
-        backend_url = backend_url, app_name = app_name
+      # The query string can carry a token, so only DEBUG records it
+      logger::log_info("Connecting to backend: ws://127.0.0.1:{port}{path} for app {app_name}",
+        port = app_config$port, path = backend_path, app_name = app_name
+      )
+      logger::log_debug("Backend URL for app {app_name}: {backend_url}",
+        app_name = app_name, backend_url = backend_url
       )
 
       # Create WebSocket connection to backend. An app's session reads its

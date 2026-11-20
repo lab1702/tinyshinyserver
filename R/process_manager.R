@@ -35,6 +35,17 @@ detect_app_type <- function(app_path) {
   stop("No app.R, ui.R and server.R, .Rmd, or .qmd file found in ", app_path, call. = FALSE)
 }
 
+# Why an app's directory cannot be served, or NULL when it can
+app_start_problem <- function(app_config) {
+  tryCatch(
+    {
+      detect_app_type(normalizePath(app_config$path, mustWork = FALSE))
+      NULL
+    },
+    error = function(e) conditionMessage(e)
+  )
+}
+
 # quarto_serve() renders a document before serving it, which takes many
 # seconds on every start, including each start of an on-demand app. The
 # rendered page stays valid while it is newer than every other file in the
@@ -578,8 +589,10 @@ ProcessManager <- setRefClass("ProcessManager",
       status <- if (is.null(process)) {
         if (app_config$resident) {
           "stopped" # Resident app should be running
-        } else {
+        } else if (is.null(app_start_problem(app_config))) {
           "dormant" # Non-resident app is normally stopped
+        } else {
+          "unavailable" # Opening the app could not start it
         }
       } else if (is_process_alive(process)) {
         "running"
@@ -587,15 +600,20 @@ ProcessManager <- setRefClass("ProcessManager",
         "crashed"
       }
 
-      return(list(
+      app_status <- list(
         name = app_name,
         status = status,
         resident = app_config$resident,
         port = app_config$port,
         path = app_config$path,
-        connections = config$get_app_connection_count(app_name),
-        pid = if (!is.null(process) && is_process_alive(process)) process$get_pid() else NULL
-      ))
+        connections = config$get_app_connection_count(app_name)
+      )
+      # Only a running app has a process ID. It is left out otherwise,
+      # because jsonlite writes NULL as {}.
+      if (status == "running") {
+        app_status$pid <- process$get_pid()
+      }
+      return(app_status)
     },
     get_all_app_status = function() {
       "Get status of all apps"
