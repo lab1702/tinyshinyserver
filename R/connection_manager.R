@@ -196,7 +196,6 @@ ConnectionManager <- setRefClass("ConnectionManager",
     },
     add_client_connection = function(session_id, ws, app_name, client_ip, user_agent) {
       "Add a new client WebSocket connection"
-      assign(app_name, NULL, envir = config$deferred_idle_stops)
       assign(app_name, NULL, envir = config$pending_session_checks)
 
       config$add_ws_connection(session_id, list(
@@ -249,28 +248,6 @@ ConnectionManager <- setRefClass("ConnectionManager",
         }
       }
     },
-    get_connection_stats = function() {
-      "Get connection statistics"
-
-      ws_connections <- config$get_all_ws_connections()
-      backend_connections <- config$get_all_backend_connections()
-
-      # Build connections_by_app from cached counts (much faster than iterating)
-      app_connections <- list()
-      for (app_config in config$config$apps) {
-        app_name <- app_config$name
-        count <- config$get_app_connection_count(app_name)
-        if (count > 0) {
-          app_connections[[app_name]] <- count
-        }
-      }
-
-      return(list(
-        total_ws_connections = length(ws_connections),
-        total_backend_connections = length(backend_connections),
-        connections_by_app = app_connections
-      ))
-    },
     begin_http_request = function(app_name) {
       assign(app_name, NULL, envir = config$pending_session_checks)
       count <- config$active_http_requests[[app_name]] %||% 0L
@@ -279,15 +256,9 @@ ConnectionManager <- setRefClass("ConnectionManager",
     end_http_request = function(app_name) {
       count <- max(0L, (config$active_http_requests[[app_name]] %||% 0L) - 1L)
       assign(app_name, count, envir = config$active_http_requests)
-      pending <- config$deferred_idle_stops[[app_name]]
-      if (count == 0L && !is.null(pending)) {
-        assign(app_name, NULL, envir = config$deferred_idle_stops)
-        # Completion of an old request must never stop a replacement process.
-        if (identical(config$get_app_process(app_name), pending$process)) {
-          # The response may be a new page whose WebSocket has not opened yet.
-          schedule_session_check(app_name)
-        }
-      } else if (count == 0L) {
+      # The response may be a new page whose WebSocket has not opened yet, so
+      # the app is only checked for idleness after the usual grace period.
+      if (count == 0L) {
         schedule_session_check(app_name)
       }
     },
@@ -327,11 +298,11 @@ ConnectionManager <- setRefClass("ConnectionManager",
       if (ws_count == 0 && !is.null(process_manager)) {
         app_config <- config$get_app_config(app_name)
         if (!is.null(app_config) && !app_config$resident) {
+          # A request in flight keeps the app alive; end_http_request()
+          # schedules the next idle check when the last one finishes.
           if ((config$active_http_requests[[app_name]] %||% 0L) > 0L) {
-            assign(app_name, list(process = config$get_app_process(app_name)), envir = config$deferred_idle_stops)
             return(TRUE)
           }
-          assign(app_name, NULL, envir = config$deferred_idle_stops)
           logger::log_info("No WebSocket connections remain for non-resident app {app_name}, stopping immediately", app_name = app_name)
           process_manager$stop_app_immediately(app_name)
         }

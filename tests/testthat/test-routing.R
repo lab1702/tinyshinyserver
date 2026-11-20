@@ -518,6 +518,70 @@ test_that("forward_request returns 503 for starting apps", {
   expect_true("Retry-After" %in% names(result$headers))
 })
 
+test_that("a browser opening an app that is not ready gets a page that reloads itself", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list())
+  config$set_app_starting("testapp")
+  local_mocked_bindings(wait_for_backend = function(url, wait_seconds) promises::promise_resolve(FALSE))
+  tm <- create_template_manager(base_url = "/shiny")
+  url <- "http://127.0.0.1:3001/"
+  browser <- list(HTTP_ACCEPT = "text/html,application/xhtml+xml,*/*;q=0.8", template_manager = tm)
+
+  page <- await_response(forward_request("GET", url, browser, "testapp", config))
+  expect_equal(page$status, 503)
+  expect_equal(page$headers[["Retry-After"]], "2")
+  expect_equal(page$headers[["Content-Type"]], "text/html")
+  expect_match(page$body, "<h1>testapp</h1>", fixed = TRUE)
+  expect_match(page$body, "var retryMs = 2 * 1000;", fixed = TRUE)
+  expect_match(page$body, "window.location.reload()", fixed = TRUE)
+  expect_match(page$body, 'href="/shiny/templates/styles/main.css"', fixed = TRUE)
+
+  # Scripts, other clients and other methods keep the JSON answer
+  others <- list(
+    list(method = "GET", req = list(HTTP_ACCEPT = "*/*", template_manager = tm)),
+    list(method = "GET", req = list(template_manager = tm)),
+    list(method = "GET", req = list(HTTP_ACCEPT = "text/html")),
+    list(method = "POST", req = browser),
+    list(method = "GET", req = list(HTTP_ACCEPT = "text/html", template_manager = list(
+      generate_starting_page = function(...) stop("Template error")
+    )))
+  )
+  for (case in others) {
+    json <- await_response(forward_request(case$method, url, case$req, "testapp", config))
+    expect_equal(json$status, 503)
+    expect_equal(json$headers[["Content-Type"]], "application/json")
+    expect_match(json$body, "starting up")
+  }
+
+  # The one-off notice that startup is taking long must not end the reloading
+  assign("testapp", list(
+    state = "starting", started_at = Sys.time() - (config$APP_STARTUP_TIMEOUT_SECONDS + 5)
+  ), envir = config$app_startup_state)
+  late <- forward_request("GET", url, browser, "testapp", config)
+  expect_equal(late$status, 502)
+  expect_equal(late$headers[["Content-Type"]], "text/html")
+  expect_match(late$body, "window.location.reload()", fixed = TRUE)
+})
+
+test_that("handle_http_request passes the template manager to proxied requests", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "testapp", path = "/path", port = 3001, resident = TRUE)))
+  seen <- NULL
+  local_mocked_bindings(forward_request = function(method, target_url, req, app_name, config) {
+    seen <<- req$template_manager
+    create_html_response("proxied")
+  })
+  req <- new.env()
+  req$REQUEST_METHOD <- "GET"
+  req$PATH_INFO <- "/proxy/testapp/page"
+  req$QUERY_STRING <- ""
+  req$HTTP_HOST <- "127.0.0.1:3838"
+  tm <- create_mock_template_manager()
+  result <- handle_http_request(req, config, tm, ConnectionManager$new(config))
+  expect_equal(result$status, 200)
+  expect_identical(seen, tm)
+})
+
 test_that("forward_request returns 502 for timed out startups", {
   config <- ShinyServerConfig$new()
   config$config <- list(apps = list())

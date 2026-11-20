@@ -169,34 +169,6 @@ validate_app_name <- function(app_name, max_length = 50) {
   return(list(valid = TRUE, sanitized = app_name))
 }
 
-validate_ip_address <- function(ip) {
-  "Validate IP addresses"
-
-  if (is.null(ip) || !is.character(ip) || length(ip) != 1) {
-    return(list(valid = FALSE, error = "Invalid IP type"))
-  }
-
-  # Check for localhost and known safe IPs
-  safe_ips <- c("127.0.0.1", "::1", "localhost", "unknown")
-  if (ip %in% safe_ips) {
-    return(list(valid = TRUE, sanitized = ip))
-  }
-
-  # Basic IPv4 validation
-  ipv4_pattern <- "^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
-  if (grepl(ipv4_pattern, ip)) {
-    return(list(valid = TRUE, sanitized = ip))
-  }
-
-  # Basic IPv6 validation (simplified)
-  ipv6_pattern <- "^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$|^::1$|^::$"
-  if (grepl(ipv6_pattern, ip)) {
-    return(list(valid = TRUE, sanitized = ip))
-  }
-
-  return(list(valid = FALSE, error = "Invalid IP address format"))
-}
-
 validate_port <- function(port) {
   "Validate port numbers"
 
@@ -219,40 +191,6 @@ validate_port <- function(port) {
   return(list(valid = TRUE, sanitized = as.integer(port)))
 }
 
-validate_session_id <- function(session_id) {
-  "Validate session IDs"
-
-  if (is.null(session_id) || !is.character(session_id) || length(session_id) != 1) {
-    return(list(valid = FALSE, error = "Invalid session ID type"))
-  }
-
-  # Session IDs should be hexadecimal strings (SHA-256 output)
-  if (!grepl("^[a-fA-F0-9]{64}$", session_id)) {
-    return(list(valid = FALSE, error = "Invalid session ID format"))
-  }
-
-  return(list(valid = TRUE, sanitized = session_id))
-}
-
-validate_json_input <- function(json_string) {
-  "Validate JSON input strings"
-
-  if (is.null(json_string) || !is.character(json_string) || length(json_string) != 1) {
-    return(list(valid = FALSE, error = "Invalid JSON input type"))
-  }
-
-  # Try to parse JSON
-  tryCatch(
-    {
-      parsed <- jsonlite::fromJSON(json_string, simplifyDataFrame = FALSE)
-      return(list(valid = TRUE, sanitized = json_string, parsed = parsed))
-    },
-    error = function(e) {
-      return(list(valid = FALSE, error = paste("Invalid JSON:", e$message)))
-    }
-  )
-}
-
 html_escape <- function(text) {
   "Escape HTML characters for safe display"
 
@@ -265,24 +203,6 @@ html_escape <- function(text) {
   text <- gsub(">", "&gt;", text)
   text <- gsub("\"", "&quot;", text)
   text <- gsub("'", "&#39;", text)
-
-  return(text)
-}
-
-sanitize_for_logging <- function(text, max_length = 100) {
-  "Sanitize text for safe logging"
-
-  if (is.null(text) || !is.character(text)) {
-    return("(null)")
-  }
-
-  # Truncate if too long
-  if (nchar(text) > max_length) {
-    text <- paste0(substring(text, 1, max_length), "...")
-  }
-
-  # Remove potentially dangerous characters
-  text <- gsub("[\001-\037\177]", "?", text)
 
   return(text)
 }

@@ -84,89 +84,6 @@ test_that("generate_session_id handles missing request fields", {
 })
 
 # ============================================================================
-# format_bytes() tests
-# ============================================================================
-
-test_that("format_bytes formats bytes correctly", {
-  expect_equal(format_bytes(0), "0 B")
-  expect_equal(format_bytes(500), "500 B")
-  expect_equal(format_bytes(1024), "1 KB")
-  expect_equal(format_bytes(1536), "1.5 KB")
-  expect_equal(format_bytes(1048576), "1 MB")
-  expect_equal(format_bytes(1572864), "1.5 MB")
-  expect_equal(format_bytes(1073741824), "1 GB")
-})
-
-test_that("format_bytes handles negative values", {
-  result <- format_bytes(-1024)
-  expect_match(result, "KB")
-})
-
-# ============================================================================
-# format_duration() tests
-# ============================================================================
-
-test_that("format_duration formats seconds correctly", {
-  expect_equal(format_duration(0), "0s")
-  expect_equal(format_duration(30), "30s")
-  expect_equal(format_duration(60), "1m 0s")
-  expect_equal(format_duration(90), "1m 30s")
-  expect_equal(format_duration(3600), "1h 0m 0s")
-  expect_equal(format_duration(3661), "1h 1m 1s")
-  expect_equal(format_duration(86400), "24h 0m 0s")
-  expect_equal(format_duration(90061), "25h 1m 1s")
-})
-
-test_that("format_duration handles zero and negative values", {
-  expect_equal(format_duration(0), "0s")
-  result <- format_duration(-60)
-  expect_true(is.character(result))
-})
-
-# ============================================================================
-# safe_file_read() / safe_file_write() tests
-# ============================================================================
-
-test_that("safe_file_write and safe_file_read work together", {
-  temp_file <- tempfile(fileext = ".txt")
-
-  write_result <- safe_file_write(temp_file, "Hello, World!")
-
-  expect_true(write_result$success)
-
-  read_result <- safe_file_read(temp_file)
-
-  expect_true(read_result$success)
-  expect_equal(read_result$content, "Hello, World!")
-
-  unlink(temp_file)
-})
-
-test_that("safe_file_read handles non-existent files", {
-  result <- safe_file_read("/nonexistent/path/to/file.txt")
-
-  expect_false(result$success)
-  expect_true("error" %in% names(result))
-})
-
-test_that("safe_file_write handles invalid paths", {
-  skip_on_cran()
-  # Use a device path that cannot be written as a regular file
-  # On Windows, CON, NUL, PRN are reserved device names
-
-  # On Unix, /dev/null cannot have subdirectories
-  if (.Platform$OS.type == "windows") {
-    invalid_path <- "CON/subdir/file.txt"
-  } else {
-    invalid_path <- "/dev/null/subdir/file.txt"
-  }
-  result <- safe_file_write(invalid_path, "content")
-
-  expect_false(result$success)
-  expect_true("error" %in% names(result))
-})
-
-# ============================================================================
 # create_json_response() tests
 # ============================================================================
 
@@ -245,24 +162,6 @@ test_that("create_503_response defaults to 3 seconds", {
   result <- create_503_response("Unavailable")
 
   expect_equal(result$headers$`Retry-After`, "3")
-})
-
-# ============================================================================
-# is_valid_url() tests
-# ============================================================================
-
-test_that("is_valid_url validates HTTP URLs", {
-  expect_true(is_valid_url("http://example.com"))
-  expect_true(is_valid_url("https://example.com"))
-  expect_true(is_valid_url("http://example.com/path"))
-  expect_true(is_valid_url("https://example.com:8080/path?query=1"))
-})
-
-test_that("is_valid_url rejects invalid URLs", {
-  expect_false(is_valid_url("not a url"))
-  expect_false(is_valid_url("ftp://example.com"))
-  expect_false(is_valid_url(""))
-  expect_false(is_valid_url("javascript:alert(1)"))
 })
 
 # ============================================================================

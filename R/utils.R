@@ -114,85 +114,6 @@ check_log_dir <- function(log_dir) {
   if (writable) NULL else paste("Cannot write the server log to", log_file)
 }
 
-# Memory and resource management
-format_bytes <- function(bytes) {
-  "Format byte counts into human-readable strings"
-
-  if (is.null(bytes) || !is.numeric(bytes)) {
-    return("N/A")
-  }
-
-  units <- c("B", "KB", "MB", "GB", "TB")
-  size <- abs(bytes)
-  unit_index <- 1
-
-  while (size >= 1024 && unit_index < length(units)) {
-    size <- size / 1024
-    unit_index <- unit_index + 1
-  }
-
-  return(paste(round(size, 1), units[unit_index]))
-}
-
-format_duration <- function(seconds) {
-  "Format duration in seconds to human-readable string"
-
-  if (is.null(seconds) || !is.numeric(seconds)) {
-    return("N/A")
-  }
-
-  hours <- floor(seconds / 3600)
-  minutes <- floor((seconds %% 3600) / 60)
-  secs <- floor(seconds %% 60)
-
-  if (hours > 0) {
-    return(sprintf("%dh %dm %ds", hours, minutes, secs))
-  } else if (minutes > 0) {
-    return(sprintf("%dm %ds", minutes, secs))
-  } else {
-    return(sprintf("%ds", secs))
-  }
-}
-
-# File operations
-safe_file_read <- function(file_path, encoding = "UTF-8") {
-  "Safely read file with error handling"
-
-  tryCatch(
-    {
-      if (!file.exists(file_path)) {
-        return(list(success = FALSE, error = paste("File not found:", file_path)))
-      }
-
-      content <- readLines(file_path, encoding = encoding, warn = FALSE)
-      return(list(success = TRUE, content = content))
-    },
-    error = function(e) {
-      return(list(success = FALSE, error = paste("Error reading file:", e$message)))
-    }
-  )
-}
-
-safe_file_write <- function(file_path, content, encoding = "UTF-8") {
-  "Safely write file with error handling"
-
-  tryCatch(
-    {
-      # Ensure directory exists
-      dir_path <- dirname(file_path)
-      if (!dir.exists(dir_path)) {
-        dir.create(dir_path, recursive = TRUE)
-      }
-
-      writeLines(content, file_path, useBytes = FALSE)
-      return(list(success = TRUE))
-    },
-    error = function(e) {
-      return(list(success = FALSE, error = paste("Error writing file:", e$message)))
-    }
-  )
-}
-
 # Process management helpers
 is_process_alive <- function(process) {
   "Check if a process is still running"
@@ -334,39 +255,6 @@ create_503_response <- function(message, retry_after_seconds = 3) {
       message = "Please retry this request after the specified delay"
     ), auto_unbox = TRUE)
   ))
-}
-
-# Configuration helpers
-load_template <- function(template_path, variables = list()) {
-  "Load HTML template and replace variables"
-
-  template_result <- safe_file_read(template_path)
-  if (!template_result$success) {
-    return(list(success = FALSE, error = template_result$error))
-  }
-
-  html <- paste(template_result$content, collapse = "\n")
-
-  # Simple variable replacement
-  for (var_name in names(variables)) {
-    placeholder <- paste0("{{", var_name, "}}")
-    html <- gsub(placeholder, variables[[var_name]], html, fixed = TRUE)
-  }
-
-  return(list(success = TRUE, html = html))
-}
-
-# Validation helpers
-is_valid_url <- function(url) {
-  "Basic URL validation"
-
-  if (is.null(url) || !is.character(url)) {
-    return(FALSE)
-  }
-
-  # Simple URL pattern matching
-  url_pattern <- "^https?://[a-zA-Z0-9.-]+(?:\\.[a-zA-Z]{2,})?(?::[0-9]+)?(?:/[^\\s]*)?$"
-  return(grepl(url_pattern, url))
 }
 
 # Network utilities

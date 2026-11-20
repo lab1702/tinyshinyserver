@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>{{app_name}} - {{title}}</title>
+  <script src="{{base_url}}/templates/scripts/theme.js"></script>
+  <link rel="stylesheet" href="{{base_url}}/templates/styles/main.css">
+</head>
+<body>
+  <main class="container">
+    <div class="header">
+      <h1>{{app_name}}</h1>
+      <p id="startStatus" role="status">This application is starting.</p>
+    </div>
+    <div class="info">
+      <p>
+        <span id="startHint">This page reloads automatically until the application is ready.</span>
+        <a href="{{base_url}}/">Back to all applications</a>
+      </p>
+    </div>
+  </main>
+
+  <script>
+    // Reload until the app answers, but stop after two minutes: a tab left
+    // open on an app that cannot start would otherwise restart it forever.
+    (function () {
+      var retryMs = {{retry_seconds}} * 1000;
+      var giveUpMs = 120000;
+      var key = "tss-starting:" + window.location.pathname;
+      var now = Date.now();
+      var wait = null;
+
+      function stopReloading(message) {
+        document.getElementById("startStatus").textContent = message;
+        document.getElementById("startHint").textContent = "Reload the page to try again.";
+      }
+
+      try {
+        wait = JSON.parse(window.sessionStorage.getItem(key));
+      } catch (e) {
+        wait = null;
+      }
+      // A reload that closely follows the last one continues the same wait
+      if (!wait || now - wait.last > retryMs + 10000) {
+        wait = { first: now };
+      }
+      wait.last = now;
+
+      if (now - wait.first >= giveUpMs) {
+        try {
+          window.sessionStorage.removeItem(key);
+        } catch (e) {
+          // Nothing was stored
+        }
+        stopReloading("This application is still not ready.");
+        return;
+      }
+
+      try {
+        window.sessionStorage.setItem(key, JSON.stringify(wait));
+      } catch (e) {
+        // Without storage the wait cannot be limited, so do not reload
+        stopReloading("This application is not ready yet.");
+        return;
+      }
+      window.setTimeout(function () {
+        window.location.reload();
+      }, retryMs);
+    })();
+  </script>
+</body>
+</html>

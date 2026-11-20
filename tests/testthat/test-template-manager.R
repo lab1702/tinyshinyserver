@@ -299,71 +299,6 @@ test_that("generate_management_page returns HTML with session info", {
 })
 
 # ============================================================================
-# create_error_page() Tests
-# ============================================================================
-
-test_that("create_error_page creates error HTML", {
-  tm <- TemplateManager$new("templates", "/base")
-
-  result <- tm$create_error_page(404, "Page not found")
-
-  expect_match(result, "<title>Error 404</title>")
-  expect_match(result, "Error 404")
-  expect_match(result, "Page not found")
-  expect_match(result, "/base/templates/styles/main.css")
-})
-
-test_that("create_error_page includes details when provided", {
-  tm <- TemplateManager$new("templates")
-
-  result <- tm$create_error_page(500, "Server error", "Check logs for details")
-
-  expect_match(result, "Server error")
-  expect_match(result, "Check logs for details")
-})
-
-test_that("create_error_page escapes HTML in message", {
-  tm <- TemplateManager$new("templates")
-
-  result <- tm$create_error_page(400, "<script>alert('xss')</script>")
-
-  # Script tags should be escaped
-  expect_no_match(result, "<script>")
-  expect_match(result, "&lt;script&gt;")
-})
-
-# ============================================================================
-# create_success_page() Tests
-# ============================================================================
-
-test_that("create_success_page creates success HTML", {
-  tm <- TemplateManager$new("templates", "/api")
-
-  result <- tm$create_success_page("Success!", "Operation completed")
-
-  expect_match(result, "<title>Success!</title>")
-  expect_match(result, "Operation completed")
-  expect_match(result, "/api/templates/styles/main.css")
-})
-
-test_that("create_success_page includes details when provided", {
-  tm <- TemplateManager$new("templates")
-
-  result <- tm$create_success_page("Done", "Task completed", "You may close this window")
-
-  expect_match(result, "You may close this window")
-})
-
-test_that("create_success_page escapes HTML in content", {
-  tm <- TemplateManager$new("templates")
-
-  result <- tm$create_success_page("<b>Title</b>", "<i>Message</i>")
-
-  expect_no_match(result, "<b>Title</b>")
-  expect_match(result, "&lt;b&gt;Title&lt;/b&gt;")
-})
-
-# ============================================================================
 # serve_static_file() Tests
 # ============================================================================
 
@@ -450,58 +385,32 @@ test_that("serve_static_file handles nested paths", {
 })
 
 # ============================================================================
-# get_available_templates() Tests
-# ============================================================================
-
-test_that("get_available_templates lists templates", {
-  temp_dir <- create_test_template_dir()
-  on.exit(cleanup_test_template_dir(temp_dir))
-
-  tm <- TemplateManager$new(temp_dir)
-
-  templates <- tm$get_available_templates()
-
-  expect_true("test" %in% templates)
-  expect_true("landing_page" %in% templates)
-  expect_true("management_page" %in% templates)
-})
-
-test_that("get_available_templates returns empty for missing directory", {
-  tm <- TemplateManager$new("/nonexistent/directory")
-
-  templates <- tm$get_available_templates()
-
-  expect_equal(length(templates), 0)
-})
-
-test_that("get_available_templates excludes non-HTML files", {
-  temp_dir <- create_test_template_dir()
-  on.exit(cleanup_test_template_dir(temp_dir))
-
-  # Add non-HTML file
-  writeLines("test", file.path(temp_dir, "readme.txt"))
-
-  tm <- TemplateManager$new(temp_dir)
-
-  templates <- tm$get_available_templates()
-
-  expect_false("readme" %in% templates)
-})
-
-# ============================================================================
 # Integration Tests with Package Templates
 # ============================================================================
 
 test_that("factory works with package templates", {
-  # Use package templates if available
   tm <- create_template_manager()
 
   expect_true(inherits(tm, "TemplateManager"))
 
-  # Should have at least some templates
-  templates <- tm$get_available_templates()
-  # This may be empty in test environment, which is fine
-  expect_true(is.character(templates))
+  # Every page the server renders has a template in the package
+  for (template in c("landing_page", "management_page", "starting_page")) {
+    expect_true(nzchar(tm$load_template(template)), info = template)
+  }
+})
+
+test_that("generate_starting_page renders a page that reloads itself for the app", {
+  tm <- create_template_manager(base_url = "/shiny", title = "My <Server>")
+  html <- tm$generate_starting_page("sales", retry_seconds = 3)
+
+  expect_match(html, "<h1>sales</h1>", fixed = TRUE)
+  expect_match(html, "<title>sales - My &lt;Server&gt;</title>", fixed = TRUE)
+  expect_match(html, "var retryMs = 3 * 1000;", fixed = TRUE)
+  expect_match(html, 'src="/shiny/templates/scripts/theme.js"', fixed = TRUE)
+  expect_match(html, 'href="/shiny/"', fixed = TRUE)
+  # The reload stops after a while, so a forgotten tab cannot restart an app forever
+  expect_match(html, "giveUpMs", fixed = TRUE)
+  expect_no_match(html, "{{", fixed = TRUE)
 })
 
 test_that("landing and management pages show the configured title escaped", {

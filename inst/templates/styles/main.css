@@ -790,7 +790,7 @@ button {
   color: var(--text-muted);
 }
 
-/* ---------- Message pages (errors, success, shutdown) ---------- */
+/* ---------- Message pages (app starting, shutdown) ---------- */
 
 .header {
   max-width: 560px;

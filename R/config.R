@@ -16,10 +16,8 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     # Rationale: Direct iteration is O(n) - at 100 connections this is 90x slower
     # Complexity: Adds defensive checks to add/remove operations
     # Validation: validate_connection_count_consistency() detects/fixes corruption
-    # Benchmark: tests/benchmark_connection_count.R shows performance gains
     app_connection_counts = "environment",
     active_http_requests = "environment",
-    deferred_idle_stops = "environment",
     pending_session_checks = "environment",
     app_startup_state = "environment", # Track app startup progress (starting/ready)
     verified_backends = "environment", # Process generations confirmed to own their app port
@@ -59,7 +57,6 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       backend_connections <<- list()
       app_connection_counts <<- new.env(hash = TRUE, parent = emptyenv())
       active_http_requests <<- new.env(hash = TRUE, parent = emptyenv())
-      deferred_idle_stops <<- new.env(hash = TRUE, parent = emptyenv())
       pending_session_checks <<- new.env(hash = TRUE, parent = emptyenv())
       app_startup_state <<- new.env(hash = TRUE, parent = emptyenv())
       verified_backends <<- new.env(hash = TRUE, parent = emptyenv())
@@ -167,7 +164,6 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       "Forget per-app runtime state after all apps have stopped"
 
       app_connection_counts <<- new.env(hash = TRUE, parent = emptyenv())
-      deferred_idle_stops <<- new.env(hash = TRUE, parent = emptyenv())
       pending_session_checks <<- new.env(hash = TRUE, parent = emptyenv())
       app_startup_state <<- new.env(hash = TRUE, parent = emptyenv())
       verified_backends <<- new.env(hash = TRUE, parent = emptyenv())

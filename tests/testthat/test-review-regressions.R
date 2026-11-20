@@ -206,7 +206,6 @@ test_that("unknown WebSocket apps are rejected without retaining state", {
   expect_equal(closed, 10)
   expect_length(config$get_all_ws_connections(), 0)
   expect_length(ls(config$app_connection_counts), 0)
-  expect_length(ls(config$deferred_idle_stops), 0)
   expect_length(ls(config$pending_session_checks), 0)
 })
 
@@ -563,25 +562,41 @@ test_that("HTTP accounting releases rejected and synchronous responses", {
   expect_equal(config$active_http_requests$app, 0)
 })
 
-test_that("deferred shutdown cannot stop reconnected or replacement apps", {
+test_that("idle checks cannot stop busy, reconnected or replacement apps", {
   config <- ShinyServerConfig$new()
   config$config <- list(apps = list(list(name = "app", resident = FALSE)))
   old <- list(generation = 1)
   replacement <- list(generation = 2)
   config$add_app_process("app", old)
   stops <- 0
+  checks <- list()
+  local_mocked_bindings(later = function(func, delay, ...) {
+    checks[[length(checks) + 1L]] <<- func
+  }, .package = "later")
   cm <- ConnectionManager$new(config, list(stop_app_immediately = function(app_name) stops <<- stops + 1))
+
+  # A request in flight keeps the app alive
   cm$begin_http_request("app")
   cm$maybe_stop_idle_app("app")
+  expect_equal(stops, 0)
+
+  # So does a browser session that opened before the request finished
   cm$add_client_connection("s", list(), "app", "127.0.0.1", "test")
   cm$end_http_request("app")
-  expect_equal(stops, 0)
+  expect_length(checks, 0)
+
+  # A check scheduled for the old process cannot stop its replacement
   cm$begin_http_request("app")
   cm$remove_client_connection("s")
   config$add_app_process("app", replacement)
   cm$end_http_request("app")
+  expect_length(checks, 2)
+  checks[[1]]()
   expect_equal(stops, 0)
-  expect_null(config$deferred_idle_stops$app)
+
+  # The replacement's own check reclaims it once it is idle
+  checks[[2]]()
+  expect_equal(stops, 1)
 })
 
 test_that("root redirect does not launch a dormant app", {
@@ -842,6 +857,39 @@ test_that("the event loop stops when the management API requests shutdown", {
   local_mocked_bindings(service = function(...) stop("Loop must stop before servicing"), .package = "httpuv")
   server$run_event_loop()
   expect_true(server$is_shutting_down)
+})
+
+test_that("an event-loop error shuts the server down once", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(log_dir = tempdir())
+  local_mocked_bindings(create_server_config = function(...) config, setup_logging = function(...) NULL)
+  server <- TinyShinyServer$new()
+  stops <- 0
+  server$field("process_manager", list(stop_all_apps = function() stops <<- stops + 1))
+  local_mocked_bindings(service = function(...) stop("loop failure"), .package = "httpuv")
+  expect_no_error(server$run_event_loop())
+  expect_equal(stops, 1)
+  expect_true(server$shutdown_complete)
+  # A completed shutdown does nothing when start() calls it again on exit
+  server$shutdown()
+  expect_equal(stops, 1)
+})
+
+test_that("a shutdown that was interrupted runs again", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(log_dir = tempdir())
+  local_mocked_bindings(create_server_config = function(...) config, setup_logging = function(...) NULL)
+  server <- TinyShinyServer$new()
+  attempts <- 0
+  server$field("process_manager", list(stop_all_apps = function() {
+    attempts <<- attempts + 1
+    if (attempts == 1) stop("interrupted while stopping apps")
+  }))
+  expect_error(server$shutdown(), "interrupted while stopping apps")
+  expect_false(server$shutdown_complete)
+  server$shutdown()
+  expect_equal(attempts, 2)
+  expect_true(server$shutdown_complete)
 })
 
 test_that("start_app supervises app processes", {

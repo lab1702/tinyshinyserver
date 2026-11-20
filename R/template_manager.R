@@ -83,6 +83,15 @@ TemplateManager <- setRefClass("TemplateManager",
         title = title_html()
       )))
     },
+    generate_starting_page = function(app_name, retry_seconds = 2) {
+      "Generate the page a browser shows, and reloads, until an app is ready"
+
+      return(render_template("starting_page", list(
+        app_name = html_escape(app_name),
+        retry_seconds = retry_seconds,
+        title = title_html()
+      )))
+    },
     generate_app_cards = function(apps) {
       "Generate HTML for app cards"
 
@@ -119,66 +128,6 @@ TemplateManager <- setRefClass("TemplateManager",
       }
 
       return(cards_html)
-    },
-    create_error_page = function(error_code, error_message, details = NULL) {
-      "Create a standardized error page"
-
-      error_html <- sprintf(
-        '
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Error %1$d</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light dark">
-  <script src="%2$s/templates/scripts/theme.js"></script>
-  <link rel="stylesheet" href="%2$s/templates/styles/main.css">
-</head>
-<body>
-  <div class="container">
-    <div class="header">
-      <h1>Error %1$d</h1>
-      <p>%3$s</p>
-    </div>
-    %4$s
-  </div>
-</body>
-</html>',
-        error_code, base_url, html_escape(error_message),
-        if (!is.null(details)) paste0('<div class="info"><p>', html_escape(details), "</p></div>") else ""
-      )
-
-      return(error_html)
-    },
-    create_success_page = function(title, message, details = NULL) {
-      "Create a standardized success page"
-
-      success_html <- sprintf(
-        '
-<!DOCTYPE html>
-<html>
-<head>
-  <title>%1$s</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light dark">
-  <script src="%2$s/templates/scripts/theme.js"></script>
-  <link rel="stylesheet" href="%2$s/templates/styles/main.css">
-</head>
-<body>
-  <div class="container">
-    <div class="header">
-      <h1>%1$s</h1>
-      <p>%3$s</p>
-    </div>
-    %4$s
-  </div>
-</body>
-</html>',
-        html_escape(title), base_url, html_escape(message),
-        if (!is.null(details)) paste0('<div class="info"><p>', html_escape(details), "</p></div>") else ""
-      )
-
-      return(success_html)
     },
     serve_static_file = function(file_path) {
       "Serve a static file (CSS, JS, images)"
@@ -273,18 +222,6 @@ TemplateManager <- setRefClass("TemplateManager",
           ))
         }
       )
-    },
-    get_available_templates = function() {
-      "Get list of available templates"
-
-      if (!dir.exists(template_dir)) {
-        return(character(0))
-      }
-
-      template_files <- list.files(template_dir, pattern = "\\.html$", recursive = FALSE)
-      template_names <- gsub("\\.html$", "", template_files)
-
-      return(template_names)
     }
   )
 )

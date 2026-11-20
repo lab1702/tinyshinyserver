@@ -52,6 +52,7 @@ handle_http_request <- function(req, config, template_manager, connection_manage
   # Attach managers to request for routing
   req$process_manager <- process_manager
   req$connection_manager <- connection_manager
+  req$template_manager <- template_manager
 
   # Route handling
   return(route_http_request(path, method, query_string, req, config, template_manager, connection_manager))
@@ -270,6 +271,35 @@ forward_request <- function(method, target_url, req, app_name, config) {
     create_error_response("Bad Gateway", 502)
   }
 
+  # The proxy's own answers that mean "try again shortly". A browser opening
+  # the app's page cannot act on a JSON error or a Retry-After header, so it
+  # receives a page that reloads itself, with the same status and headers;
+  # every other client receives the JSON.
+  retry_seconds <- 2
+  for_browser <- function(response) {
+    template_manager <- req$template_manager
+    opens_page <- identical(method, "GET") &&
+      grepl("text/html", req$HTTP_ACCEPT %||% "", fixed = TRUE)
+    if (is.null(template_manager) || !opens_page) {
+      return(response)
+    }
+    page <- tryCatch(
+      template_manager$generate_starting_page(app_name, retry_seconds),
+      error = function(e) {
+        logger::log_error("Error generating the starting page: {error}", error = conditionMessage(e))
+        NULL
+      }
+    )
+    if (!is.null(page)) {
+      response$body <- page
+      response$headers[["Content-Type"]] <- "text/html"
+    }
+    response
+  }
+  unavailable <- function(message) {
+    for_browser(create_503_response(message, retry_seconds))
+  }
+
   tryCatch({
     startup_state <- config$get_app_startup_state(app_name)
     app_config <- config$get_app_config(app_name)
@@ -279,13 +309,12 @@ forward_request <- function(method, target_url, req, app_name, config) {
     starting <- !is.null(startup_state)
     if (starting) {
       if (startup_state$state == "timeout") {
-        return(create_error_response("App startup timed out", 502))
+        # Reported once; the app's process is still running and may yet answer
+        return(for_browser(create_error_response("App startup timed out", 502)))
       }
       wait_seconds <- max(0, grace_period - startup_state$elapsed)
       if (wait_seconds == 0) {
-        return(create_503_response(
-          sprintf("App '%s' is starting up, please retry", app_name), 2
-        ))
+        return(unavailable(sprintf("App '%s' is starting up, please retry", app_name)))
       }
     }
 
@@ -328,7 +357,7 @@ forward_request <- function(method, target_url, req, app_name, config) {
 
     response <- promises::then(backend_ready, function(ready) {
       if (!identical(config$get_app_process(app_name), request_process)) {
-        return(create_503_response(sprintf("App '%s' restarted, please retry", app_name), 2))
+        return(unavailable(sprintf("App '%s' restarted, please retry", app_name)))
       }
       if (ready && !config$app_backend_verified(app_name)) {
         logger::log_warn("Not forwarding to app {app_name}: its process does not own port {port}",
@@ -342,7 +371,7 @@ forward_request <- function(method, target_url, req, app_name, config) {
         } else {
           sprintf("App '%s' is not ready", app_name)
         }
-        return(create_503_response(message, 2))
+        return(unavailable(message))
       }
       if (starting) config$set_app_ready(app_name)
       # Bound stalled transfers rather than total time, so slow downloads and
@@ -391,7 +420,7 @@ forward_request <- function(method, target_url, req, app_name, config) {
         if (exists(app_name, envir = config$verified_backends, inherits = FALSE)) {
           rm(list = app_name, envir = config$verified_backends)
         }
-        create_503_response(sprintf("App '%s' is not ready", app_name), 2)
+        unavailable(sprintf("App '%s' is not ready", app_name))
       })
     })
     promises::then(response, onRejected = proxy_error)

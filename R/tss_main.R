@@ -15,6 +15,7 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
     proxy_server = "ANY",
     management_server = "ANY",
     is_shutting_down = "logical",
+    shutdown_complete = "logical", # A shutdown that was interrupted runs again
     cleanup_in_progress = "logical"
   ),
   methods = list(
@@ -37,6 +38,7 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       proxy_server <<- NULL
       management_server <<- NULL
       is_shutting_down <<- FALSE
+      shutdown_complete <<- FALSE
       cleanup_in_progress <<- FALSE
 
       logger::log_info("Tiny Shiny Server initialized")
@@ -44,10 +46,10 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
     start = function() {
       "Start the complete server system"
 
-      # Cover failures before run_event_loop installs its own shutdown guard.
-      on.exit({
-        if (!is_shutting_down) shutdown()
-      }, add = TRUE)
+      # Cover failures before run_event_loop installs its own shutdown guard,
+      # and finish a shutdown that a second Ctrl-C interrupted. A completed
+      # shutdown does nothing when called again.
+      on.exit(shutdown(), add = TRUE)
 
       logger::log_info("Starting Tiny Shiny Server")
       logger::log_info("Press Ctrl-C to shutdown gracefully")
@@ -60,9 +62,6 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
 
       # Start HTTP servers
       start_servers()
-
-      # Set up async processing
-      setup_async_processing()
 
       # Main event loop
       run_event_loop()
@@ -198,14 +197,6 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
         )
       )
     },
-    setup_async_processing = function() {
-      "Configure async processing for better performance"
-
-      # NOTE: Removed future::multisession to avoid race conditions
-      # The cleanup scheduler now runs in the main thread for safety
-      # If async processing is needed in the future, ensure proper synchronization
-      logger::log_info("Async processing: using sequential mode to avoid race conditions")
-    },
     run_event_loop = function() {
       "Main event loop with proper error handling"
 
@@ -234,11 +225,10 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
         }
       }, interrupt = function(e) {
         logger::log_info("Interrupt received, shutting down...")
-        shutdown()
       }, error = function(e) {
         logger::log_error("Server error: {error}", error = e$message)
-        shutdown()
       }, finally = {
+        # The one shutdown for every way out of the loop
         shutdown()
       })
     },
@@ -311,6 +301,10 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
     shutdown = function() {
       "Gracefully shutdown the entire server"
 
+      if (isTRUE(shutdown_complete)) {
+        return(invisible(NULL))
+      }
+
       # Set shutdown flag to prevent monitoring services from restarting apps
       is_shutting_down <<- TRUE
 
@@ -349,31 +343,9 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
         process_manager$stop_all_apps()
       }
 
+      shutdown_complete <<- TRUE
       logger::log_info("Server shutdown complete")
       # NOTE: Intentionally not calling quit() here to avoid killing the host R session
-    },
-    get_server_status = function() {
-      "Get comprehensive server status"
-
-      total_connections <- length(config$get_all_ws_connections())
-      running_apps <- 0
-
-      for (app_name in names(config$get_all_app_processes())) {
-        process <- config$get_app_process(app_name)
-        if (!is.null(process) && is_process_alive(process)) {
-          running_apps <- running_apps + 1
-        }
-      }
-
-      return(list(
-        total_apps = length(config$config$apps),
-        running_apps = running_apps,
-        total_connections = total_connections,
-        proxy_host = config$get_proxy_host(),
-        proxy_port = config$config$proxy_port %||% 3838,
-        management_port = config$config$management_port %||% 3839,
-        log_dir = config$config$log_dir
-      ))
     }
   )
 )

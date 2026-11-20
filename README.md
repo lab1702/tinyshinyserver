@@ -124,7 +124,7 @@ Apps receive ports in configuration order, starting from `starting_port`. Alloca
 
 On-demand apps stop 30 seconds after their last WebSocket connection closes, provided no new connection opens and no HTTP requests remain; the grace period lets a reloaded or newly opened page reconnect without restarting the app. If requests are in flight, shutdown waits for them to finish before the grace period applies. If a visit never opens a WebSocket session, the app stops after 30 seconds without HTTP activity. A failed on-demand app starts again on the next request.
 
-`appstart_timeout` controls how long a request waits for a starting app to become ready (default: 2 seconds, measured from app startup). If the app is still starting after that, the proxy returns HTTP 503. Increase this value for slow-starting apps; fractional seconds are supported.
+`appstart_timeout` controls how long a request waits for a starting app to become ready (default: 2 seconds, measured from app startup). If the app is still starting after that, the proxy returns HTTP 503 with a `Retry-After` header. A browser opening the app's page receives a page that reloads itself until the app is ready, for up to two minutes; scripts and other clients receive JSON. Increase this value for slow-starting apps; fractional seconds are supported.
 
 The proxy forwards traffic to an app only when the app's own process is listening on the app's port. If another program holds that port, for example a second server instance with the same `starting_port`, the proxy returns HTTP 503 and logs a warning instead of sending the other program your users' requests.
 

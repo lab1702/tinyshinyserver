@@ -28,7 +28,9 @@
 
 ## Web pages
 
-* The landing page and management dashboard have a new design. They follow the system light or dark theme by default and have a theme toggle; an explicit choice is remembered in the browser until it is switched back to match the system. Error and status pages use the same theme.
+* The landing page and management dashboard have a new design. They follow the system light or dark theme by default and have a theme toggle; an explicit choice is remembered in the browser until it is switched back to match the system.
+
+* A browser that opens an app before it is ready, for example an on-demand app that is still starting, now receives a page that reloads itself until the app answers, for up to two minutes. It previously showed the proxy's JSON error until the visitor reloaded by hand. The response is still HTTP 503 with `Retry-After`, and scripts and other clients still receive JSON.
 
 * Management dashboard actions report their results in an inline notice instead of browser alert dialogs.
 
@@ -67,6 +69,8 @@
 * Uploads to apps are no longer limited to about 4 MB per second, and every proxied request is faster. A transfer now continues as soon as the app's socket is ready instead of on a 10-millisecond timer, and a request to a running app no longer opens a separate connection first to check that the app is listening. This requires `later` 1.4.0 or later.
 
 * An upload that an app refuses from its headers, such as one above `shiny.maxRequestSize`, now returns the app's HTTP 413 response. It returned HTTP 502 when the client sent `Expect: 100-continue`, as curl does for large uploads. The proxy now offers request bodies over 64 KB to the app with `Expect: 100-continue` and sends them once the app agrees.
+
+* Stopping the server with Ctrl-C, or after an error in its event loop, no longer runs the shutdown twice, which repeated its log messages. A shutdown interrupted by a second Ctrl-C still runs again.
 
 * Assigning app ports no longer waits about a second for each app on Windows, which delayed startup and paused all apps' traffic during a configuration reload. A port now counts as in use when the server cannot listen on it.
 
