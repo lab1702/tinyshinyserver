@@ -572,7 +572,7 @@ test_that("a browser opening an app that is not ready gets a page that reloads i
   assign("testapp", list(
     state = "starting", started_at = Sys.time() - (config$APP_STARTUP_TIMEOUT_SECONDS + 5)
   ), envir = config$app_startup_state)
-  late <- forward_request("GET", url, browser, "testapp", config, tm)
+  late <- await_response(forward_request("GET", url, browser, "testapp", config, tm))
   expect_equal(late$status, 502)
   expect_equal(late$headers[["Content-Type"]], "text/html")
   expect_match(late$body, "window.location.reload()", fixed = TRUE)
@@ -597,15 +597,65 @@ test_that("handle_http_request passes the template manager to proxied requests",
   expect_identical(seen, tm)
 })
 
-test_that("forward_request returns 502 for timed out startups", {
+test_that("a startup that timed out is reported to one request while the app does not answer", {
   config <- ShinyServerConfig$new()
   config$config <- list(apps = list())
   assign("testapp", list(
     state = "starting", started_at = Sys.time() - (config$APP_STARTUP_TIMEOUT_SECONDS + 5)
   ), envir = config$app_startup_state)
-  result <- forward_request("GET", "http://127.0.0.1:3001/", list(), "testapp", config)
+  local_mocked_bindings(wait_for_backend = function(url, wait_seconds) promises::promise_resolve(FALSE))
+  request <- function() {
+    await_response(forward_request("GET", "http://127.0.0.1:3001/", list(), "testapp", config))
+  }
+
+  # A WebSocket handshake that asks first does not use the report up
+  expect_false(config$is_app_starting("testapp"))
+  result <- request()
   expect_equal(result$status, 502)
   expect_match(result$body, "timed out")
+
+  expect_null(config$get_app_startup_state("testapp"))
+  again <- request()
+  expect_equal(again$status, 503)
+  expect_match(again$body, "not ready")
+})
+
+test_that("an app that answers after its startup timed out is served without the report", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", port = 3001)))
+  config$add_app_process("app", test_backend_process())
+  config$set_app_starting("app")
+  config$set_app_start_timed_out("app")
+  local_mocked_bindings(
+    process_owns_port = function(process, port) TRUE,
+    fetch_backend_async = function(url, handle) promises::promise_resolve(list(
+      status_code = 200L, headers = charToRaw("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n"),
+      content = charToRaw("ready")
+    ))
+  )
+  result <- await_response(forward_request("GET", "http://127.0.0.1:3001/", list(), "app", config))
+  expect_equal(result$status, 200)
+  expect_null(config$get_app_startup_state("app"))
+})
+
+test_that("the proxy's own pages and endpoints answer only GET and HEAD", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "testapp", path = "/path", port = 3001, resident = TRUE)))
+  tm <- create_mock_template_manager()
+  cm <- ConnectionManager$new(config)
+  route <- function(path, method) route_http_request(path, method, NULL, list(), config, tm, cm)
+
+  for (path in c("/", "/health", "/api/apps", "/templates/style.css")) {
+    for (method in c("POST", "PUT", "PATCH", "DELETE", "OPTIONS")) {
+      result <- route(path, method)
+      expect_equal(result$status, 405, info = paste(method, path))
+      expect_equal(result$headers[["Allow"]], "GET, HEAD", info = paste(method, path))
+    }
+    expect_equal(route(path, "GET")$status, 200, info = path)
+    expect_equal(route(path, "HEAD")$status, 200, info = path)
+  }
+  # A path the proxy does not serve is still not found, whatever the method
+  expect_equal(route("/unknown", "POST")$status, 404)
 })
 
 test_that("forward_request returns 503 when backend is unavailable", {

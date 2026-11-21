@@ -761,6 +761,36 @@ test_that("stop_all_apps stops all running processes", {
   expect_null(config$get_app_process("app2"))
 })
 
+test_that("stop_all_apps tries a surviving process again and reports what is left", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list())
+  config$add_app_process("slow", list(name = "slow"))
+  config$add_app_process("stuck", list(name = "stuck"))
+  pm <- ProcessManager$new(config)
+
+  attempts <- c(slow = 0, stuck = 0)
+  local_mocked_bindings(kill_process_safely = function(process) {
+    attempts[[process$name]] <<- attempts[[process$name]] + 1
+    # "slow" is gone by the second attempt; "stuck" never stops
+    process$name == "slow" && attempts[["slow"]] == 2
+  })
+  surviving <- NULL
+  logged <- capture_test_log(surviving <- pm$stop_all_apps())
+
+  expect_equal(attempts, c(slow = 2, stuck = 2))
+  expect_equal(surviving, "stuck")
+  expect_null(config$get_app_process("slow"))
+  expect_true(any(grepl("Failed to stop app stuck", logged, fixed = TRUE)))
+  expect_true(any(grepl("Could not stop apps: stuck", logged, fixed = TRUE)))
+  expect_false(any(grepl("All applications stopped", logged, fixed = TRUE)))
+
+  # With nothing left running, the usual message is logged
+  config$remove_app_process("stuck")
+  logged <- capture_test_log(surviving <- pm$stop_all_apps())
+  expect_length(surviving, 0)
+  expect_true(any(grepl("All applications stopped", logged, fixed = TRUE)))
+})
+
 test_that("stop_all_apps cleans up all connections", {
   config <- ShinyServerConfig$new()
   config$config <- list(apps = list())
@@ -1169,7 +1199,7 @@ test_that("a Quarto document is rendered only when its page is out of date", {
   expect_true(quarto_needs_render(qmd))
 })
 
-test_that("start_app tells a Quarto app whether to render first", {
+test_that("start_app leaves the Quarto render decision to the app's own process", {
   app_dir <- tempfile("tss-qmd")
   dir.create(app_dir)
   on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
@@ -1190,15 +1220,38 @@ test_that("start_app tells a Quarto app whether to render first", {
     config$remove_app_process("app")
   }
 
+  # The check reads every file of the app directory, so it must not run here,
+  # where it would hold up every app's traffic
+  checks <- 0
+  local_mocked_bindings(quarto_needs_render = function(qmd_file) {
+    checks <<- checks + 1
+    TRUE
+  })
   start()
+  expect_equal(checks, 0)
   expect_equal(launched$type, "qmd")
   expect_equal(basename(launched$file), "doc.qmd")
-  expect_true(launched$render)
+  # The app's process need not load this package to run the check
+  expect_identical(environment(launched$needs_render), baseenv())
+})
+
+test_that("an app's own process can decide whether its Quarto document needs rendering", {
+  skip_on_cran() # Starts an R process
+  app_dir <- tempfile("tss-qmd")
+  dir.create(app_dir)
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  qmd <- file.path(app_dir, "doc.qmd")
+  writeLines("", qmd)
+  needs_render <- quarto_needs_render
+  environment(needs_render) <- baseenv()
+  in_app_process <- function() {
+    callr::r(function(needs_render, file) needs_render(file), args = list(needs_render = needs_render, file = qmd))
+  }
+  expect_true(in_app_process())
 
   writeLines("", file.path(app_dir, "doc.html"))
   Sys.setFileTime(qmd, Sys.time() - 300)
-  start()
-  expect_false(launched$render)
+  expect_false(in_app_process())
 })
 
 # ============================================================================

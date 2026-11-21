@@ -136,6 +136,7 @@ The proxy applies these limits:
 - Requests with query strings longer than 8,192 characters are rejected with HTTP 400.
 - Requests with a path longer than 1,000 characters, counted with the `/proxy/{app_name}` prefix, or with a `..` path segment, are rejected with HTTP 400.
 - Request bodies larger than `max_request_size_mb` (default: 100 MB), or sent with chunked transfer encoding, are rejected with HTTP 413 before they are read.
+- Request headers whose names contain an underscore, such as `X_Custom`, are not passed on to apps; see [Network access and authentication](#network-access-and-authentication). The path after `/proxy/{app_name}` reaches the app exactly as the client sent it.
 - A WebSocket message from the browser larger than 1 MB closes the session. This check runs only after the whole message has been received, so it does not limit the memory that a single very large message uses; expose the proxy port only to trusted or authenticated clients.
 - WebSocket messages from an app to the browser may be up to 2 GB.
 
@@ -174,7 +175,7 @@ The proxy applies these limits:
 
 The server is intended for development and internal use. It does not provide built-in authentication or TLS. For external access, put an authenticated HTTPS reverse proxy in front of it and restrict direct access with firewall rules.
 
-The proxy passes request headers on to the app, both on HTTP requests and on the WebSocket connection whose headers Shiny exposes as `session$request`. An app can therefore read an identity header that the reverse proxy sets, such as `X-Forwarded-User`. Rely on such a header only if the reverse proxy overwrites it and clients cannot reach the proxy port directly; otherwise a client can send its own.
+The proxy passes request headers on to the app, both on HTTP requests and on the WebSocket connection whose headers Shiny exposes as `session$request`. An app can therefore read an identity header that the reverse proxy sets, such as `X-Forwarded-User`. Rely on such a header only if the reverse proxy overwrites it and clients cannot reach the proxy port directly; otherwise a client can send its own. The proxy does not pass on headers whose names contain an underscore: R's web server reads `X_Forwarded_User` as `X-Forwarded-User`, in place of the value the reverse proxy set.
 
 The proxy checks the `Host` header to block DNS rebinding only when `proxy_host` is a loopback address. With `"0.0.0.0"` or `"::"`, any website visited by someone who can reach the proxy port can point its own domain at this server and then read and control the apps through that person's browser. A firewall that admits a whole network therefore does not keep the apps private from the web. In that setup, allow direct connections to the proxy port only from the reverse proxy.
 
@@ -262,7 +263,7 @@ The management dashboard lists active WebSocket connections with their client IP
 
 ### Proxy endpoints
 
-These read-only endpoints are served on the proxy port:
+These read-only endpoints are served on the proxy port. Like the landing page, they answer methods other than `GET` and `HEAD` with HTTP 405:
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -313,7 +314,7 @@ Detection prefers standard Shiny files, then R Markdown, then Quarto. File exten
 
 An app whose directory is missing, or contains none of these entry points, is not started. The reason is written to `server.log`: when a resident app is started, and for on-demand apps when the configuration is loaded and again when someone opens the app. Until the directory is fixed, such an on-demand app is shown as **unavailable** and its landing page tile is disabled.
 
-A Quarto document is rendered before it is served, which can take many seconds. To keep on-demand starts and restarts fast, the server renders it only when the rendered page (`{name}.html`, next to the `.qmd`) is missing or older than another file in the app directory. Changes outside that directory, such as an upgraded package, are not noticed; delete the `.html` file to force a render at the next start.
+A Quarto document is rendered before it is served, which can take many seconds. To keep on-demand starts and restarts fast, the server renders it only when the rendered page (`{name}.html`, next to the `.qmd`) is missing or older than another file in the app directory. Changes outside that directory, such as an upgraded package, are not noticed; delete the `.html` file to force a render at the next start. The app's error log records whether the document was rendered.
 
 To add an app, create its directory, add an entry with `name` and `path` to the configuration, and click **Reload Config & Restart All** in the management dashboard.
 

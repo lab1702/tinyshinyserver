@@ -690,20 +690,29 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         rm(list = app_name, envir = app_startup_state)
       }
     },
+    set_app_start_timed_out = function(app_name) {
+      "Mark an app that is still starting as having taken too long"
+      if (exists(app_name, envir = app_startup_state)) {
+        startup_info <- get(app_name, envir = app_startup_state)
+        startup_info$state <- "timeout"
+        assign(app_name, startup_info, envir = app_startup_state)
+      }
+    },
     get_app_startup_state = function(app_name) {
-      "Get the startup state of an app (NULL if ready, list if starting)"
+      "Get the startup state of an app (NULL if ready, list if starting or timed out)"
       if (exists(app_name, envir = app_startup_state)) {
         startup_info <- get(app_name, envir = app_startup_state)
 
-        # Check if startup has timed out
+        # A startup has timed out when the readiness checks gave up on it, or
+        # when its time is up. Reading the state leaves it in place:
+        # forward_request() reports the timeout and ends it, so a WebSocket
+        # handshake that asks first cannot use it up.
         elapsed <- as.numeric(difftime(Sys.time(), startup_info$started_at,
           units = "secs"
         ))
         app_config <- get_app_config(app_name)
         startup_timeout <- max(APP_STARTUP_TIMEOUT_SECONDS, app_config$appstart_timeout %||% 0)
-        if (elapsed > startup_timeout) {
-          # Startup timed out, remove state
-          rm(list = app_name, envir = app_startup_state)
+        if (identical(startup_info$state, "timeout") || elapsed > startup_timeout) {
           return(list(state = "timeout", elapsed = elapsed))
         }
 

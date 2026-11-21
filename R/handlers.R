@@ -4,13 +4,16 @@
 # httpuv receives a request's whole body before calling the app, and the proxy
 # then reads it into memory to forward it, so reject oversized bodies from the
 # headers alone, as Shiny's own server does. Chunked bodies have no declared
-# size and are rejected.
+# size and are rejected, whatever length the request also declares. The
+# headers are read under the names the client sent: req$CONTENT_LENGTH would
+# also answer for a "Content_Length" header that states a smaller size.
 reject_large_request_body <- function(req, max_bytes) {
   size <- 0
-  if (length(req$CONTENT_LENGTH) > 0) {
-    size <- suppressWarnings(as.numeric(req$CONTENT_LENGTH))
-  } else if (length(req$HTTP_TRANSFER_ENCODING) > 0) {
+  declared <- request_header(req, "content-length")
+  if (!is.null(request_header(req, "transfer-encoding"))) {
     size <- Inf
+  } else if (!is.null(declared)) {
+    size <- suppressWarnings(as.numeric(declared))
   }
   if (is.na(size) || size > max_bytes) {
     return(create_error_response("Request body too large", 413))
@@ -66,6 +69,20 @@ route_http_request <- function(path, method, query_string, req, config, template
                                process_manager = NULL) {
   "Route HTTP requests to appropriate handlers"
 
+  # Proxy requests to apps, in any method the proxy forwards
+  if (startsWith(path, "/proxy/")) {
+    return(handle_proxy_request(
+      path, method, query_string, req, config,
+      process_manager, connection_manager, template_manager
+    ))
+  }
+
+  # The proxy's own pages and endpoints are read-only
+  own_route <- path %in% c("/", "", "/health", "/api/apps") || startsWith(path, "/templates/")
+  if (own_route && !method %in% c("GET", "HEAD")) {
+    return(create_method_not_allowed_response())
+  }
+
   # Landing page
   if (path == "/" || path == "") {
     return(handle_landing_page(config, template_manager))
@@ -84,14 +101,6 @@ route_http_request <- function(path, method, query_string, req, config, template
   # Static files (CSS, JS, images)
   if (startsWith(path, "/templates/")) {
     return(handle_static_file(path, template_manager, req$HTTP_IF_NONE_MATCH))
-  }
-
-  # Proxy requests to apps
-  if (startsWith(path, "/proxy/")) {
-    return(handle_proxy_request(
-      path, method, query_string, req, config,
-      process_manager, connection_manager, template_manager
-    ))
   }
 
   # 404 for unknown paths
@@ -263,13 +272,16 @@ UNFORWARDED_REQUEST_HEADERS <- c(
 forwarded_request_headers <- function(req, skip = character()) {
   "The request headers to send to an app, for HTTP requests and WebSocket handshakes alike"
 
+  sent <- request_headers(req)
   headers <- list()
-  for (name in names(req)) {
-    if (startsWith(name, "HTTP_")) {
-      header_name <- substring(name, 6)
-      if (!header_name %in% c(UNFORWARDED_REQUEST_HEADERS, skip)) {
-        headers[[gsub("_", "-", header_name)]] <- req[[name]]
-      }
+  for (name in names(sent)) {
+    # An app's own server reads "X_Forwarded_User" as X-Forwarded-User, in
+    # place of the value a reverse proxy set, so no header whose name has an
+    # underscore is passed on
+    if (grepl("_", name, fixed = TRUE)) next
+    header_name <- toupper(name)
+    if (!gsub("-", "_", header_name, fixed = TRUE) %in% c(UNFORWARDED_REQUEST_HEADERS, skip)) {
+      headers[[header_name]] <- sent[[name]]
     }
   }
   headers
@@ -320,12 +332,13 @@ forward_request <- function(method, target_url, req, app_name, config, template_
     request_process <- config$get_app_process(app_name)
     grace_period <- app_config$appstart_timeout %||% 2
     wait_seconds <- 0
-    starting <- !is.null(startup_state)
+    starting <- !is.null(startup_state) && startup_state$state == "starting"
+    # A startup that took too long is reported to one request, and only if the
+    # app still does not answer: its process is still running and may yet do
+    # so. This is the one place that ends a timed-out startup state.
+    timed_out <- !is.null(startup_state) && startup_state$state == "timeout"
+    if (timed_out) config$set_app_ready(app_name)
     if (starting) {
-      if (startup_state$state == "timeout") {
-        # Reported once; the app's process is still running and may yet answer
-        return(for_browser(create_error_response("App startup timed out", 502)))
-      }
       wait_seconds <- max(0, grace_period - startup_state$elapsed)
       if (wait_seconds == 0) {
         return(unavailable(sprintf("App '%s' is starting up, please retry", app_name)))
@@ -342,10 +355,10 @@ forward_request <- function(method, target_url, req, app_name, config, template_
       # with "Content-Length: 0". It keeps the client's Content-Type: libcurl
       # gives a body without one "application/x-www-form-urlencoded", which a
       # header with an empty value prevents.
-      declared <- length(req$CONTENT_LENGTH %||% req$HTTP_CONTENT_LENGTH) > 0
+      declared <- !is.null(request_header(req, "content-length"))
       if (length(body) > 0 || declared) {
         body <- body %||% raw()
-        headers[["Content-Type"]] <- req$CONTENT_TYPE %||% req$HTTP_CONTENT_TYPE %||% ""
+        headers[["Content-Type"]] <- request_header(req, "content-type") %||% ""
       } else {
         body <- NULL
       }
@@ -372,6 +385,9 @@ forward_request <- function(method, target_url, req, app_name, config, template_
         ready <- FALSE
       }
       if (!ready) {
+        if (timed_out) {
+          return(for_browser(create_error_response("App startup timed out", 502)))
+        }
         message <- if (starting) {
           sprintf("App '%s' is starting up, please retry", app_name)
         } else {
@@ -383,9 +399,11 @@ forward_request <- function(method, target_url, req, app_name, config, template_
       # Bound stalled transfers rather than total time, so slow downloads and
       # documents that render during the request still complete. The handle and
       # its pool are never reused, so close the backend connection when done
-      # instead of leaving it open until garbage collection.
+      # instead of leaving it open until garbage collection. The app receives
+      # the path as the client sent it: libcurl would otherwise remove "." and
+      # ".." segments, including their "%2e" spellings.
       handle <- new_backend_handle(
-        customrequest = method, nobody = identical(method, "HEAD"),
+        customrequest = method, nobody = identical(method, "HEAD"), path_as_is = TRUE,
         connecttimeout = 10, low_speed_limit = 1, low_speed_time = 600, followlocation = FALSE,
         accept_encoding = "identity", http_content_decoding = FALSE, forbid_reuse = TRUE
       )
@@ -680,9 +698,10 @@ is_same_origin_websocket <- function(req) {
   hosts <- req$HTTP_HOST
   # A reverse proxy on this machine may rewrite Host but report the original
   remote_addr <- req$REMOTE_ADDR
+  forwarded_host <- request_header(req, "x-forwarded-host")
   if (!is.null(remote_addr) && remote_addr %in% c("127.0.0.1", "::1", "::ffff:127.0.0.1") &&
-      !is.null(req$HTTP_X_FORWARDED_HOST)) {
-    hosts <- c(hosts, strsplit(req$HTTP_X_FORWARDED_HOST, ",")[[1]])
+      !is.null(forwarded_host)) {
+    hosts <- c(hosts, strsplit(forwarded_host, ",")[[1]])
   }
   hosts <- hosts[!is.na(hosts) & trimws(hosts) != ""]
   origin_authority %in% normalize(hosts, default_port)

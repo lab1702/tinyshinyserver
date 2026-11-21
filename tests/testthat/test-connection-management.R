@@ -310,8 +310,33 @@ test_that("Config handles startup timeout correctly", {
   expect_equal(startup_state$state, "timeout")
   expect_true(startup_state$elapsed > config$APP_STARTUP_TIMEOUT_SECONDS)
 
-  # State should be cleared after timeout detection
-  expect_null(config$get_app_startup_state("timeout_app"))
+  # Reading the state does not use it up: forward_request() reports the
+  # timeout and ends it, whichever caller asks first
+  expect_false(config$is_app_starting("timeout_app"))
+  expect_equal(config$get_app_startup_state("timeout_app")$state, "timeout")
+
+  # The readiness checks mark a startup they gave up on in the same way
+  config$set_app_starting("slow_app")
+  config$set_app_start_timed_out("slow_app")
+  expect_false(config$is_app_starting("slow_app"))
+  expect_equal(config$get_app_startup_state("slow_app")$state, "timeout")
+  # Nothing is created for an app that is not starting
+  config$set_app_start_timed_out("ready_app")
+  expect_null(config$get_app_startup_state("ready_app"))
+})
+
+test_that("a session's close is logged once, and not for an untracked session", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list())
+  cm <- ConnectionManager$new(config)
+  cm$add_client_connection("s1", list(close = function() NULL), "app", "127.0.0.1", "test")
+  logged <- capture_test_log({
+    cm$close_client_connection("s1")
+    # The socket's own close handler asks again
+    cm$remove_client_connection("s1")
+    cm$remove_client_connection("never-opened")
+  })
+  expect_equal(sum(grepl("WebSocket connection closed for session", logged)), 1)
 })
 
 # ============================================================================

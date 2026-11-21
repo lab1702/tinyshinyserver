@@ -25,6 +25,38 @@ respond_safely <- function(response) {
   })
 }
 
+# A request's headers under the names the client sent, in lower case. httpuv
+# also stores every header as HTTP_<NAME> with "-" written as "_", where a
+# header that a client spells with an underscore, such as "Content_Length" or
+# "X_Forwarded_User", takes the place of the real one. Decisions about a
+# request therefore read req$HEADERS; the HTTP_ entries serve only a request
+# object that has none.
+request_headers <- function(req) {
+  headers <- req[["HEADERS"]]
+  if (!is.null(headers)) {
+    return(headers)
+  }
+  fields <- grep("^HTTP_", names(req), value = TRUE)
+  headers <- vapply(fields, function(field) paste(req[[field]], collapse = ","), character(1))
+  names(headers) <- tolower(gsub("_", "-", substring(fields, 6), fixed = TRUE))
+  # httpuv copies these two from their HTTP_ entries
+  for (field in c("CONTENT_LENGTH", "CONTENT_TYPE")) {
+    name <- tolower(sub("_", "-", field, fixed = TRUE))
+    if (!is.null(req[[field]]) && !name %in% names(headers)) {
+      headers[[name]] <- paste(req[[field]], collapse = ",")
+    }
+  }
+  headers
+}
+
+request_header <- function(req, name) {
+  "The value of one request header, named in lower case, or NULL when the request has none"
+
+  headers <- request_headers(req)
+  value <- headers[names(headers) == name]
+  if (length(value) == 0) NULL else value[[1]]
+}
+
 # Helper functions for connection tracking
 get_client_ip <- function(req) {
   "Extract client IP address from request headers"
@@ -35,7 +67,7 @@ get_client_ip <- function(req) {
   # Forwarding headers are client-controlled, so trust them only when the
   # request arrives from a reverse proxy on this machine
   if (has_remote_addr && remote_addr %in% c("127.0.0.1", "::1", "::ffff:127.0.0.1")) {
-    forwarded_for <- req$HTTP_X_FORWARDED_FOR
+    forwarded_for <- request_header(req, "x-forwarded-for")
     if (!is.null(forwarded_for) && forwarded_for != "") {
       # The last entry is the one added by the proxy itself
       ips <- trimws(strsplit(forwarded_for, ",")[[1]])
@@ -45,7 +77,7 @@ get_client_ip <- function(req) {
       }
     }
 
-    real_ip <- req$HTTP_X_REAL_IP
+    real_ip <- request_header(req, "x-real-ip")
     if (!is.null(real_ip) && real_ip != "") {
       return(trimws(real_ip))
     }
@@ -234,6 +266,14 @@ create_error_response <- function(message, status = 500) {
     headers = list("Content-Type" = "application/json"),
     body = jsonlite::toJSON(list(error = paste(status, "-", message)), auto_unbox = TRUE)
   ))
+}
+
+create_method_not_allowed_response <- function(allowed = c("GET", "HEAD")) {
+  "Create the HTTP 405 response of a route that serves only some methods"
+
+  response <- create_error_response("Method Not Allowed", 405)
+  response$headers[["Allow"]] <- paste(allowed, collapse = ", ")
+  response
 }
 
 create_redirect_response <- function(location, query_string = NULL) {

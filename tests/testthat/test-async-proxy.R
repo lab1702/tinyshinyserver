@@ -479,6 +479,23 @@ test_that("backend requests ignore proxy environment variables", {
   expect_identical(rawToChar(response$body), "direct")
 })
 
+test_that("an app receives dot segments as the client sent them", {
+  seen <- character()
+  backend <- start_test_http_server(function(req) {
+    seen <<- c(seen, req$PATH_INFO)
+    create_html_response("ok")
+  })
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  config <- proxy_test_config(backend$port)
+  # libcurl would send these as /a/b, /c and /a/b
+  paths <- c("/a/./b", "/a/%2e%2e/c", "/a/%2E/b")
+  for (path in paths) {
+    response <- await_response(forward_request("GET", paste0(backend$url, path), list(), "app", config))
+    expect_equal(response$status, 200)
+  }
+  expect_identical(seen, paths)
+})
+
 test_that("requests to a running app are forwarded without a readiness probe", {
   seen <- character()
   backend <- start_test_http_server(function(req) {
@@ -773,9 +790,11 @@ test_that("WebSocket proxy forwards each browser's own authentication headers", 
     on_ws = function(ws) handle_websocket_connection(ws, config, cm))
   on.exit(httpuv::stopServer(proxy$server), add = TRUE)
   for (user in c("alice", "bob", "NONE")) {
-    # X-Forwarded-User stands for the identity header of an authenticating reverse proxy
+    # X-Forwarded-User stands for the identity header of an authenticating
+    # reverse proxy. A client cannot replace it by sending the same name with
+    # underscores, which the app's server would read in its place.
     headers <- if (user == "NONE") list() else list(Cookie = paste0("session=", user),
-      Authorization = paste("Bearer", user), "X-Forwarded-User" = user)
+      Authorization = paste("Bearer", user), "X-Forwarded-User" = user, "X_Forwarded_User" = "admin")
     ws <- websocket::WebSocket$new(paste0(sub("http:", "ws:", proxy$url), "/proxy/app/websocket/"), headers = headers)
     on.exit(ws$close(), add = TRUE, after = FALSE)
     response <- promises::promise(function(resolve, reject) {
@@ -899,9 +918,12 @@ test_that("the proxy never forwards to another program holding an app's port", {
   config$set_app_starting("app")
   pm <- ProcessManager$new(config)
   expect_false(await_response(pm$check_app_ready("app", backend$port, app, max_attempts = 1)))
-  result <- await_response(forward_request("GET", backend$url,
-    list(HTTP_COOKIE = "session=secret"), "app", config))
-  expect_equal(result$status, 503)
+  request <- function() {
+    await_response(forward_request("GET", backend$url, list(HTTP_COOKIE = "session=secret"), "app", config))
+  }
+  # The readiness checks gave up, which the first request reports
+  expect_equal(request()$status, 502)
+  expect_equal(request()$status, 503)
 
   closed <- FALSE
   client <- list(request = list(PATH_INFO = "/proxy/app/websocket/", HTTP_COOKIE = "session=secret"),
@@ -962,9 +984,41 @@ test_that("request bodies are limited from their headers alone", {
   expect_null(reject_large_request_body(list(), 10))
   expect_null(reject_large_request_body(list(CONTENT_LENGTH = "10"), 10))
   for (req in list(list(CONTENT_LENGTH = "11"), list(CONTENT_LENGTH = "x"),
-    list(HTTP_TRANSFER_ENCODING = "chunked"))) {
+    list(HTTP_TRANSFER_ENCODING = "chunked"),
+    # A chunked body is rejected whatever length the request also declares
+    list(CONTENT_LENGTH = "5", HTTP_TRANSFER_ENCODING = "chunked"))) {
     expect_equal(reject_large_request_body(req, 10)$status, 413)
   }
+})
+
+test_that("a header spelled with an underscore cannot understate a request body", {
+  understated <- httpuv_request(c("content-length" = "5000", "content_length" = "5"))
+  # What httpuv does, and why the limit reads the headers under the names sent
+  expect_equal(understated$CONTENT_LENGTH, "5")
+  expect_equal(reject_large_request_body(understated, 1024)$status, 413)
+
+  chunked <- httpuv_request(c("transfer-encoding" = "chunked", "content_length" = "5"))
+  expect_equal(reject_large_request_body(chunked, 1024)$status, 413)
+
+  expect_null(reject_large_request_body(httpuv_request(c("content-length" = "1024")), 1024))
+  # The misspelled header alone declares no body
+  expect_null(reject_large_request_body(httpuv_request(c("content_length" = "5000")), 1024))
+})
+
+test_that("headers spelled with an underscore are not passed on to an app", {
+  req <- httpuv_request(c("x-forwarded-user" = "alice", "x_forwarded_user" = "admin",
+    "cookie" = "session=a", "my_header" = "x", "host" = "localhost", "content-length" = "3"))
+  expect_equal(req$HTTP_X_FORWARDED_USER, "admin")
+  headers <- forwarded_request_headers(req)
+  expect_setequal(names(headers), c("X-FORWARDED-USER", "COOKIE"))
+  expect_equal(headers[["X-FORWARDED-USER"]], "alice")
+  expect_equal(headers[["COOKIE"]], "session=a")
+  expect_setequal(names(forwarded_request_headers(req, skip = "COOKIE")), "X-FORWARDED-USER")
+
+  # A request object without HEADERS is read from its HTTP_ entries, as before
+  plain <- forwarded_request_headers(list(HTTP_X_FORWARDED_USER = "alice", HTTP_HOST = "localhost",
+    HTTP_KEEP_ALIVE = "1", PATH_INFO = "/"))
+  expect_equal(plain, list("X-FORWARDED-USER" = "alice"))
 })
 
 test_that("an oversized request body is rejected before the app is called", {
@@ -984,6 +1038,12 @@ test_that("an oversized request body is rejected before the app is called", {
     await_response(fetch_backend_async(paste0("http://127.0.0.1:", port, "/"), handle))
   }
   expect_equal(post(2048)$status_code, 413)
+  expect_false(called)
+  # Nor when a second header, which httpuv reads as Content-Length, states less
+  understated <- curl::new_handle(customrequest = "POST", postfields = raw(2048))
+  curl::handle_setheaders(understated, "Content_Length" = "5")
+  response <- await_response(fetch_backend_async(paste0("http://127.0.0.1:", port, "/"), understated))
+  expect_equal(response$status_code, 413)
   expect_false(called)
   expect_equal(post(512)$status_code, 200)
   expect_true(called)

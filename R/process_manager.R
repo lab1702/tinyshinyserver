@@ -50,6 +50,8 @@ app_start_problem <- function(app_config) {
 # seconds on every start, including each start of an on-demand app. The
 # rendered page stays valid while it is newer than every other file in the
 # app directory, so render only when it is missing or something has changed.
+# start_app() hands this function to the app's own process, which need not
+# load this package, so it may call only base R.
 quarto_needs_render <- function(qmd_file) {
   output <- sub("\\.qmd$", ".html", qmd_file)
   if (!file.exists(output)) {
@@ -90,12 +92,8 @@ ProcessManager <- setRefClass("ProcessManager",
 
       logger::log_info("Starting app {app_name} on port {app_port}", app_name = app_name, app_port = app_port)
 
-      render <- FALSE
       if (app$type == "qmd") {
-        render <- quarto_needs_render(app$file)
-        logger::log_info("Detected Quarto document for {app_name}, using quarto::quarto_serve ({rendering})",
-          app_name = app_name, rendering = if (render) "rendering it first" else "its rendered page is current"
-        )
+        logger::log_info("Detected Quarto document for {app_name}, using quarto::quarto_serve", app_name = app_name)
       } else if (app$type == "rmd") {
         logger::log_info("Detected R Markdown app for {app_name}, using rmarkdown::run", app_name = app_name)
       } else {
@@ -123,12 +121,21 @@ ProcessManager <- setRefClass("ProcessManager",
         }
       }
 
+      # Whether a Quarto document must be rendered is decided in the app's own
+      # process: the check reads every file of the app directory, which would
+      # hold up every app's traffic if it ran here. The function travels
+      # without this package's namespace.
+      needs_render <- quarto_needs_render
+      environment(needs_render) <- baseenv()
+
       # Start the app process. Its stdout and stderr go straight to the log
       # files so that output from child processes and native code is captured
       # and can never fill an unread pipe.
       process <- callr::r_bg(
-        function(app_path, port, type, file, render) {
+        function(app_path, port, type, file, needs_render) {
           if (type == "qmd") {
+            render <- needs_render(file)
+            message(if (render) "Rendering " else "Serving the rendered page of ", file)
             quarto::quarto_serve(
               input = file,
               render = render,
@@ -159,7 +166,7 @@ ProcessManager <- setRefClass("ProcessManager",
           port = app_port,
           type = app$type,
           file = app$file,
-          render = render
+          needs_render = needs_render
         ),
         stdout = output_log,
         stderr = error_log,
@@ -234,7 +241,8 @@ ProcessManager <- setRefClass("ProcessManager",
           logger::log_error("App {app_name} failed to become ready after {max} attempts",
             app_name = app_name, max = max_attempts
           )
-          config$set_app_ready(app_name) # Remove startup state (timed out)
+          # The next request for the app reports the timeout and ends this state
+          config$set_app_start_timed_out(app_name)
         }
 
         return(FALSE)
@@ -371,6 +379,7 @@ ProcessManager <- setRefClass("ProcessManager",
           logger::log_info("Successfully stopped app {app_name}", app_name = app_name)
           return(list(success = TRUE, message = paste("App", app_name, "stopped successfully")))
         } else {
+          logger::log_error("Failed to stop app {app_name}: its process is still running", app_name = app_name)
           return(list(success = FALSE, message = paste("Failed to stop app", app_name)))
         }
       }
@@ -631,14 +640,17 @@ ProcessManager <- setRefClass("ProcessManager",
       return(apps_status)
     },
     stop_all_apps = function() {
-      "Stop all running applications and clean up all connections"
+      "Stop all running applications and clean up all connections. Returns the names of apps that did not stop."
       pending_restarts <<- new.env(parent = emptyenv())
 
       logger::log_info("Stopping all applications...")
 
-      # Stop all app processes
-      for (app_name in names(config$get_all_app_processes())) {
-        stop_app(app_name)
+      # Stop all app processes. One that outlives the first attempt, for
+      # example because it is slow to exit, is tried once more.
+      for (attempt in 1:2) {
+        for (app_name in names(config$get_all_app_processes())) {
+          stop_app(app_name)
+        }
       }
 
       # Clean up backend connections (close WebSocket handles)
@@ -658,7 +670,14 @@ ProcessManager <- setRefClass("ProcessManager",
         config$remove_ws_connection(session_id)
       }
 
-      logger::log_info("All applications stopped")
+      # A process that is still tracked is still running
+      surviving <- names(config$get_all_app_processes())
+      if (length(surviving) > 0) {
+        logger::log_error("Could not stop apps: {apps}", apps = paste(surviving, collapse = ", "))
+      } else {
+        logger::log_info("All applications stopped")
+      }
+      invisible(surviving)
     }
   )
 )

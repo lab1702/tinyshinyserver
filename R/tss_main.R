@@ -326,7 +326,15 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       }
 
       shutdown_complete <<- TRUE
-      logger::log_info("Server shutdown complete")
+      # An app that could not be stopped keeps its port until this R session ends
+      surviving <- names(config$get_all_app_processes())
+      if (length(surviving) > 0) {
+        logger::log_error("Server shutdown complete, but these apps are still running: {apps}",
+          apps = paste(surviving, collapse = ", ")
+        )
+      } else {
+        logger::log_info("Server shutdown complete")
+      }
       # NOTE: Intentionally not calling quit() here to avoid killing the host R session
     }
   )

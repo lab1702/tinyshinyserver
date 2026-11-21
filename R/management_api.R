@@ -59,7 +59,7 @@ route_management_request <- function(path, method, req, config, process_manager,
 
   # A custom header makes browser mutations require a same-origin request.
   # Cross-origin preflights are deliberately not granted CORS permission.
-  if (method == "POST" && !identical(req$HTTP_X_TINYSHINYSERVER_REQUEST, "management")) {
+  if (method == "POST" && !identical(request_header(req, "x-tinyshinyserver-request"), "management")) {
     return(create_error_response("Missing or invalid X-TinyShinyServer-Request header", 403))
   }
 
@@ -98,6 +98,9 @@ route_management_request <- function(path, method, req, config, process_manager,
 
   # Static files for management interface
   if (startsWith(path, "/templates/")) {
+    if (!method %in% c("GET", "HEAD")) {
+      return(create_method_not_allowed_response())
+    }
     return(handle_static_file(path, template_manager, req$HTTP_IF_NONE_MATCH))
   }
 
@@ -218,15 +221,14 @@ handle_management_status_api <- function(config) {
 handle_app_restart <- function(path, process_manager) {
   "Handle app restart requests"
 
-  # Extract app name from path
-  path_parts <- strsplit(path, "/")[[1]]
-  path_parts <- path_parts[path_parts != ""]
-
-  if (length(path_parts) < 3) {
+  # The whole path must be /api/apps/<name>/restart: with a looser match,
+  # "/api/apps/a/b/restart" would restart app "a"
+  route <- regmatches(path, regexec("^/api/apps/([^/]+)/restart$", path))[[1]]
+  if (length(route) != 2) {
     return(create_error_response("Invalid restart path", 400))
   }
 
-  app_name_validation <- validate_app_name(path_parts[3])
+  app_name_validation <- validate_app_name(route[2])
   if (!app_name_validation$valid) {
     return(create_error_response(paste("Invalid app name:", app_name_validation$error), 400))
   }

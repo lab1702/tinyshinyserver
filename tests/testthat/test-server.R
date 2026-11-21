@@ -154,6 +154,26 @@ test_that("a shutdown that was interrupted runs again", {
   expect_true(server$shutdown_complete)
 })
 
+test_that("shutdown names the apps it could not stop", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(log_dir = tempdir())
+  local_mocked_bindings(create_server_config = function(...) config, setup_logging = function(...) NULL)
+  server <- TinyShinyServer$new()
+  # A process that is still tracked after stop_all_apps() is still running
+  config$add_app_process("stuck", list())
+  server$field("process_manager", list(stop_all_apps = function() NULL))
+
+  logged <- capture_test_log(server$shutdown())
+  expect_true(any(grepl("these apps are still running: stuck", logged, fixed = TRUE)))
+  expect_false(any(grepl("Server shutdown complete$", logged)))
+  expect_true(server$shutdown_complete)
+
+  config$remove_app_process("stuck")
+  server$field("shutdown_complete", FALSE)
+  logged <- capture_test_log(server$shutdown())
+  expect_true(any(grepl("Server shutdown complete$", logged)))
+})
+
 test_that("an unwritable server log does not stop logging or shutdown", {
   log_dir <- tempfile("tss-logging")
   on.exit({

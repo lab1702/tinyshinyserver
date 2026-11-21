@@ -24,6 +24,8 @@
 
 * App WebSocket sessions now receive the same request headers as proxied HTTP requests, so `session$request` includes the identity headers that an authenticating reverse proxy adds, such as `X-Forwarded-User`, as well as `User-Agent` and `X-Forwarded-For`. Previously only `Cookie` and `Authorization` were forwarded.
 
+* A request header spelled with an underscore no longer takes the place of the real header. R's web server reads `Content_Length` as `Content-Length` and `X_Forwarded_User` as `X-Forwarded-User`, and the underscore spelling wins. A client could therefore send a body of any size, chunked or not, past `max_request_size_mb` by also declaring a small `Content_Length`, and a user behind an authenticating reverse proxy could replace the identity header that the reverse proxy set. The proxy now reads the body size, and the forwarding headers behind the client IP addresses it shows, under the names the client sent. It rejects a chunked body whatever length is also declared, and it does not pass a header whose name contains an underscore on to an app.
+
 * HTTP 502 responses from the proxy no longer include the underlying connection error, which named the app's internal address and port. The error is written to `server.log`.
 
 * Requests to apps no longer follow the `http_proxy` and `ALL_PROXY` environment variables. Where R was configured to use a proxy and `no_proxy` did not list `127.0.0.1`, app requests, with their cookies and bodies, were sent to that proxy, and every app answered HTTP 502 or 503.
@@ -42,7 +44,9 @@
 
 * Restarting an app refreshes the dashboard's status tiles and connection list at once. They previously kept their old values, such as the number of running apps, for up to 5 seconds.
 
-* `POST /api/apps/{name}/restart` returns HTTP 404 instead of 500 for an app name that is not configured.
+* `POST /api/apps/{name}/restart` returns HTTP 404 instead of 500 for an app name that is not configured, and accepts only that path. A path with extra segments, such as `/api/apps/a/b/restart`, restarted app `a`; it now returns HTTP 400.
+
+* The proxy's own pages and endpoints (`/`, `/health`, `/api/apps`, and the files under `/templates/`) answer methods other than `GET` and `HEAD` with HTTP 405. They answered every method as if it were a `GET`.
 
 * Requests for a directory under `/templates/` return HTTP 404 instead of 500.
 
@@ -132,7 +136,15 @@
 
 * An app whose directory is missing, or contains no `app.R`, `ui.R` and `server.R`, `.Rmd`, or `.qmd` file, is no longer started. A resident app with a mistyped `path` previously started a new R process that exited, every 10 to 15 seconds, indefinitely, with the reason only in the app's error log. The reason is now written to `server.log`, for on-demand apps already when the configuration is loaded.
 
-* A Quarto document is rendered only when its rendered page is missing or older than another file in the app directory, instead of on every start. On-demand Quarto apps and restarts no longer wait for a full render each time. Delete the document's `.html` file to force a render.
+* A Quarto document is rendered only when its rendered page is missing or older than another file in the app directory, instead of on every start. On-demand Quarto apps and restarts no longer wait for a full render each time. Delete the document's `.html` file to force a render. The check runs in the app's own process, so reading a large app directory does not hold up the other apps' traffic, and the app's error log records whether the document was rendered.
+
+* An app receives the request path exactly as the client sent it. `.` and `..` segments were removed on the way, including their `%2e` spellings, so `/proxy/app/a/%2e%2e/c` reached the app as `/c`.
+
+* Shutdown and a configuration reload try once more to stop an app process that outlives the first attempt, and `server.log` names any app that is still running afterwards. It reported "All applications stopped" and "Server shutdown complete" regardless.
+
+* The HTTP 502 answer "App startup timed out" goes to the first request after an app's startup window has ended, and only if the app still does not answer. Whether it was sent used to depend on which request or check came first: a WebSocket connection could use it up.
+
+* `server.log` records the close of a WebSocket session once. A session that the proxy closed was recorded twice, and one that was never opened was recorded as closed.
 
 * The proxy connects to an app's WebSocket as soon as the browser's WebSocket opens, instead of at the browser's first message. Sockets on which only the app speaks, such as Shiny's autoreload socket, now work.
 
@@ -165,6 +177,8 @@
 * Removed the unused `future` dependency. `tools` and `utils` are now declared imports, as is `glue`, which `logger` needs to format the package's log messages. Added `ps`, already required by `callr`, to identify the process listening on an app's port.
 
 * Removed the `digest` dependency. Session IDs are 256 random bits from `openssl`; hashing them with request details added nothing.
+
+* The package now requires `httpuv` 1.5.2 or later, the first version whose `startServer()` has the `quiet` argument, and `ps` 1.2.0 or later, the first version with `ps_connections()`. With an older `httpuv`, every port was reported as in use and the server did not start.
 
 * The browser tests in `tests/browser`, which need Node.js and Playwright, are no longer included in the built package.
 

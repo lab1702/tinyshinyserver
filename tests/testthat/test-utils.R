@@ -38,6 +38,30 @@ test_that("get_client_ip uses the entry added by the local proxy", {
   expect_equal(get_client_ip(req), "203.0.113.8")
 })
 
+test_that("get_client_ip ignores a forwarding header spelled with an underscore", {
+  # httpuv reads X_Forwarded_For in place of the header the reverse proxy set
+  req <- httpuv_request(c("x-forwarded-for" = "203.0.113.7", "x_forwarded_for" = "198.51.100.1"),
+    REMOTE_ADDR = "127.0.0.1")
+  expect_equal(req$HTTP_X_FORWARDED_FOR, "198.51.100.1")
+  expect_equal(get_client_ip(req), "203.0.113.7")
+  spoofed_only <- httpuv_request(c("x_real_ip" = "198.51.100.1"), REMOTE_ADDR = "127.0.0.1")
+  expect_equal(get_client_ip(spoofed_only), "127.0.0.1")
+})
+
+test_that("request headers are read under the names the client sent", {
+  req <- httpuv_request(c("content-type" = "text/plain", "x-one" = "1", "x_one" = "2"))
+  expect_equal(request_header(req, "x-one"), "1")
+  expect_equal(request_header(req, "x_one"), "2")
+  expect_equal(request_header(req, "content-type"), "text/plain")
+  expect_null(request_header(req, "x-two"))
+
+  # A request object without HEADERS is read from its HTTP_ entries
+  plain <- list(HTTP_X_ONE = "1", CONTENT_LENGTH = "3", CONTENT_TYPE = "text/plain", PATH_INFO = "/")
+  expect_equal(request_headers(plain), c("x-one" = "1", "content-length" = "3", "content-type" = "text/plain"))
+  expect_length(request_headers(list()), 0)
+  expect_null(request_header(list(), "host"))
+})
+
 test_that("get_client_ip returns unknown for missing info", {
   req <- list()
   result <- get_client_ip(req)

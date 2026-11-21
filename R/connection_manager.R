@@ -218,14 +218,16 @@ ConnectionManager <- setRefClass("ConnectionManager",
     remove_client_connection = function(session_id) {
       "Remove a client WebSocket connection and cleanup"
 
-      logger::log_info("WebSocket connection closed for session {session_id}", session_id = session_id)
-
       # Get the app name before removing the connection
       conn_info <- config$get_ws_connection(session_id)
       app_name <- if (!is.null(conn_info)) conn_info$app_name else NULL
 
-      # Clean up client connection
-      config$remove_ws_connection(session_id)
+      # Clean up client connection. A session that the proxy closes is removed
+      # here first and again by its socket's close handler, so the close is
+      # logged only when it ends a tracked session.
+      if (isTRUE(config$remove_ws_connection(session_id))) {
+        logger::log_info("WebSocket connection closed for session {session_id}", session_id = session_id)
+      }
 
       # Stop an idle on-demand app only after a grace period: on a reload or
       # navigation the old page's socket closes after the new page's response

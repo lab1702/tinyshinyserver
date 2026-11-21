@@ -418,23 +418,43 @@ test_that("handle_app_restart validates app name", {
   pm <- ProcessManager$new(config)
 
   # Invalid app name with special characters
-  result <- handle_app_restart("/api/apps/../etc/passwd/restart", pm)
+  result <- handle_app_restart("/api/apps/bad.name/restart", pm)
 
   expect_equal(result$status, 400)
   expect_match(result$body, "Invalid app name")
 })
 
-test_that("handle_app_restart handles short path gracefully", {
+test_that("handle_app_restart accepts only /api/apps/{name}/restart", {
+  restarted <- character()
+  pm <- list(
+    get_app_status = function(name) list(status = "running"),
+    restart_app = function(name) {
+      restarted <<- c(restarted, name)
+      list(success = TRUE, message = "restarted")
+    }
+  )
+  # A looser match restarted "app1" for the third and fourth paths, and an
+  # app named "restart" for the first two
+  for (path in c("/api/apps/restart", "/api/apps//restart", "/api/apps/app1/b/restart",
+    "/api/apps/app1/restart/restart", "/api/apps/../etc/passwd/restart")) {
+    result <- handle_app_restart(path, pm)
+    expect_equal(result$status, 400, info = path)
+    expect_match(result$body, "Invalid restart path", info = path)
+  }
+  expect_length(restarted, 0)
+
+  expect_equal(handle_app_restart("/api/apps/app1/restart", pm)$status, 200)
+  expect_equal(restarted, "app1")
+})
+
+test_that("management static files answer only GET and HEAD", {
   config <- ShinyServerConfig$new()
-  config$config <- list(apps = list())
-  pm <- ProcessManager$new(config)
-
-  # Path with missing app name segment
-  result <- handle_app_restart("/api/apps/restart", pm)
-
-  # The function will try to extract app name from path_parts[3] which is "restart"
-  # Then it validates it and returns 404 since "restart" isn't a configured app
-  expect_equal(result$status, 404)
+  tm <- list(serve_static_file = function(path, if_none_match = NULL) create_html_response("file"))
+  req <- list(HTTP_X_TINYSHINYSERVER_REQUEST = "management")
+  result <- route_management_request("/templates/styles/main.css", "POST", req, config, list(), tm)
+  expect_equal(result$status, 405)
+  expect_equal(result$headers[["Allow"]], "GET, HEAD")
+  expect_equal(route_management_request("/templates/styles/main.css", "HEAD", list(), config, list(), tm)$status, 200)
 })
 
 test_that("handle_app_restart returns 404 for an unknown app", {
