@@ -31,6 +31,12 @@ documented in NEWS.md and README.md.
 * The proxy rejects request bodies larger than the new `max_request_size_mb`
   option (default 100 MB), and chunked request bodies, with HTTP 413 before
   reading them, instead of buffering them in memory.
+* Request headers are read under the names the client sent. R's web server
+  stores a header spelled with an underscore, such as `Content_Length` or
+  `X_Forwarded_User`, in place of the real one, which let a client understate
+  a body's size to pass that limit, or replace the identity header set by an
+  authenticating reverse proxy. Headers whose names contain an underscore are
+  not passed on to apps.
 * The public `/api/apps` endpoint no longer exposes app paths, ports, or
   process IDs.
 * An unexpected error while answering a request is answered with HTTP 500
@@ -91,6 +97,19 @@ documented in NEWS.md and README.md.
   `HEAD` request) are sent without one; for clients that accept gzip, a
   compressed empty body followed them.
 * The proxy forwards `PATCH` requests, which it answered with HTTP 405.
+* An app receives the request path as the client sent it. `.` and `..`
+  segments, including their `%2e` spellings, were removed on the way.
+* The proxy's own pages and endpoints answer methods other than `GET` and
+  `HEAD` with HTTP 405; they answered every method as a `GET`. The restart
+  endpoint accepts only `/api/apps/{name}/restart`; a path with extra
+  segments restarted an app.
+* Shutdown and a configuration reload try once more to stop an app process
+  that outlives the first attempt, and `server.log` names any app that is
+  still running; it reported that every app had stopped. The log records the
+  close of a WebSocket session once instead of twice.
+* The HTTP 502 answer "App startup timed out" goes to the first request
+  after an app's startup window, and only if the app still does not answer;
+  whether it was sent depended on which request or check came first.
 * Apps can be stopped on platforms where the `ps` package cannot list
   processes; stopping an app failed there.
 * An app whose directory is missing, or holds no app entry point, is no
@@ -108,6 +127,8 @@ documented in NEWS.md and README.md.
   path.
 * A Quarto document is rendered only when its rendered page is missing or
   older than another file in the app directory, instead of on every start.
+  The app's own process makes that check, so reading a large app directory
+  does not hold up the other apps' traffic.
 * An on-demand app that is still starting is no longer stopped as unused 30
   seconds after the last request. It is left to finish, for up to 10 minutes
   from its start. A start slower than the two minutes for which the
@@ -149,17 +170,19 @@ documented in NEWS.md and README.md.
   messages. Added `ps`, which `callr` already requires. The package now
   requires `websocket` >= 1.1.0, the first version whose client accepts a
   `maxMessageSize` argument, `later` >= 1.4.0, the first version with
-  `later_fd()`, and `curl` >= 3.3, the first version with `file_writer()`.
+  `later_fd()`, `curl` >= 3.3, the first version with `file_writer()`,
+  `httpuv` >= 1.5.2, the first version whose `startServer()` has the `quiet`
+  argument, and `ps` >= 1.2.0, the first version with `ps_connections()`.
 
 ## Test environments
 
 * Local: Windows 11 x64 (build 26300), x86_64-w64-mingw32,
   R 4.6.2 (2026-10-29 ucrt).
   Checked with `R CMD check --as-cran` on the source tarball built from
-  commit 475f580, including the PDF manual and the CRAN incoming
+  commit 1eeaf3b, including the PDF manual and the CRAN incoming
   feasibility check.
-* R-hub (commit 475f580, run
-  https://github.com/lab1702/tinyshinyserver/actions/runs/44833828009):
+* R-hub (commit 1eeaf3b, run
+  https://github.com/lab1702/tinyshinyserver/actions/runs/44841826586):
   linux (R-devel), windows (R-devel), macos-arm64 (R-devel), gcc16, and
   ubuntu-gcc12.
 
@@ -170,10 +193,10 @@ from the build, so the package checked is identical.
 
 Local: 0 errors | 0 warnings | 0 notes.
 
-R-hub at commit 475f580: 0 errors | 0 warnings | 0 notes on all five platforms.
+R-hub at commit 1eeaf3b: 0 errors | 0 warnings | 0 notes on all five platforms.
 
-Test results: 1954 passes locally and on all five R-hub platforms, with 7
-intentional skips on CRAN (a timing check of the port test and six tests
+Test results: 2069 passes locally and on all five R-hub platforms, with 8
+intentional skips on CRAN (a timing check of the port test and seven tests
 that start real R processes). All runs had 0 failures and 0 warnings. One
 test's expectation count depends on timing.
 
