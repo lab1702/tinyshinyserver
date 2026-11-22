@@ -10,10 +10,13 @@ library(plotly)
 library(DT)
 library(dplyr)
 
-# Generate sample data
+# Generate sample data. The dates are fixed: the page is rendered once and
+# served again at later starts, so the date range written into it must match
+# the data that the server chunk below generates on any day.
 set.seed(42)
 n_days <- 90
-dates <- seq(from = Sys.Date() - n_days, to = Sys.Date(), by = "day")
+end_date <- as.Date("2025-06-30")
+dates <- seq(from = end_date - n_days, to = end_date, by = "day")
 
 performance_data <- data.frame(
   Date = dates,
@@ -65,10 +68,11 @@ library(plotly)
 library(DT)
 library(dplyr)
 
-# Make data available in server context
+# Make data available in server context, with the same dates as above
 set.seed(42)
 n_days <- 90
-dates <- seq(from = Sys.Date() - n_days, to = Sys.Date(), by = "day")
+end_date <- as.Date("2025-06-30")
+dates <- seq(from = end_date - n_days, to = end_date, by = "day")
 
 performance_data <- data.frame(
   Date = dates,

@@ -63,8 +63,9 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     MAX_MESSAGE_SIZE = "numeric",
     APP_STARTUP_TIMEOUT_SECONDS = "numeric",
     HTTP_SESSION_GRACE_SECONDS = "numeric",
-    # How long an on-demand app that nobody is waiting for may keep starting
-    # before the idle check stops it
+    # How long an app may keep starting: the readiness checks stop looking for
+    # it then, and the idle check stops an on-demand app that nobody is
+    # waiting for
     ON_DEMAND_START_LIMIT_SECONDS = "numeric",
     # Longest time a finding of whether an app directory can be served is
     # reused, for changes that leave the directory's modification time alone

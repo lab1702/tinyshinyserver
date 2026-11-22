@@ -8,7 +8,7 @@
 
 * The proxy's public `/api/apps` endpoint now returns only each app's name, status, mode, and connection count. App paths, ports, and process IDs are available only from the loopback management API.
 
-* **App processes now start in their app directory and read the `.Rprofile` there,** as R does when the app is run on its own, so an app's profile, such as one that activates renv, now applies to it. They read the `.Rprofile` of the R working directory that `start_tss()` was called from instead, and every app shared it; an app that relied on that file needs its own copy. As at R's startup, an error in the profile is written to the app's error log and the app still starts.
+* **App processes now start in their app directory and read the `.Renviron` and `.Rprofile` there,** as R does when the app is run on its own, so an app's own environment variables and profile, such as one that activates renv, now apply to it. An app without such a file reads the user's `~/.Renviron` or `~/.Rprofile`, or the file that `R_ENVIRON_USER` or `R_PROFILE_USER` names, as R does. Apps read the `.Renviron` and `.Rprofile` of the R working directory that `start_tss()` was called from instead, and every app shared them; an app that relied on those files needs its own copy. As at R's startup, an error in the profile is written to the app's error log and the app still starts.
 
 * On-demand apps now stop 30 seconds after their last WebSocket connection closes instead of immediately. Reloading or navigating within an on-demand app previously stopped it between pages, forcing a cold restart that could make the new page's requests fail with HTTP 503.
 
@@ -48,7 +48,7 @@
 
 * `POST /api/apps/{name}/restart` returns HTTP 404 instead of 500 for an app name that is not configured, and accepts only that path. A path with extra segments, such as `/api/apps/a/b/restart`, restarted app `a`; it now returns HTTP 400.
 
-* The proxy's own pages and endpoints (`/`, `/health`, `/api/apps`, and the files under `/templates/`) answer methods other than `GET` and `HEAD` with HTTP 405. They answered every method as if it were a `GET`.
+* The proxy's own pages and endpoints (`/`, `/health`, `/api/apps`, and the files under `/templates/`) answer methods other than `GET` and `HEAD` with HTTP 405. They answered every method as if it were a `GET`. The management server's dashboard and `GET` endpoints also answer `HEAD` now, where they returned HTTP 404, and its pages and actions answer a method they do not serve with HTTP 405 instead of 404.
 
 * Every answer to a `HEAD` request that the proxy or the management server makes itself is sent without a body, such as the landing page, `/health`, the pages' style sheet, and the 503 for an app that is starting. The body was sent after the headers, so a client that sent another request on the same connection, as uptime monitors and HTTP libraries do, read it as the start of the next answer and failed.
 
@@ -96,6 +96,8 @@
 
 * Proxied responses no longer carry two `Date` headers, and a response that an app sends without a `Content-Type`, such as HTTP 304, is no longer labelled `text/html`.
 
+* Proxied responses keep their headers when one of them holds a byte that is not valid UTF-8, such as a Latin-1 file name in `Content-Disposition`; such bytes are passed on unchanged. Every header was dropped, so the browser received the body without its `Content-Type`, cookies, or redirect `Location`.
+
 * Apps can now be stopped and restarted on platforms where the `ps` package cannot list processes. Stopping an app failed there, which also blocked restarts, reloads, and shutdown; on those platforms only the app's own process is stopped, not processes it started.
 
 * An on-demand app's finished HTTP requests no longer each leave a timer queued for 30 seconds; a newer idle check now replaces the pending one.
@@ -138,11 +140,13 @@
 
 * The management dashboard shows "N/A" instead of "[object Object]" as the PID of apps that are not running.
 
-* Startup readiness checks now continue for the full 30-second startup window (or `appstart_timeout`, if longer) instead of giving up after about 5 seconds. Slow-starting apps, such as Quarto documents that render first, no longer log a false "failed to become ready" error, and WebSocket clients keep receiving the "App is starting" reply until the app is ready.
+* Startup readiness checks now continue for the full 30-second startup window (or `appstart_timeout`, if longer) instead of giving up after about 5 seconds, and WebSocket clients receive the "App is starting" reply throughout it. An app whose process is still running after the window, such as a Quarto document that is still rendering, is checked every 2 seconds for up to 10 minutes from its start and logged as ready once it answers. Slow-starting apps no longer log a false "failed to become ready" error.
 
 * The management dashboard shows app paths containing characters such as `<` or `&` literally instead of interpreting them as HTML.
 
 * The inventory example app accepts at most 10,000 items, so a visitor can no longer make it allocate unbounded memory.
+
+* The dashboard example's data cover fixed dates. Its date range was taken from the day the page was rendered and its data from the day the app started, so once its rendered page was reused, the newest data could not be selected, and after three months the dashboard showed no data at all.
 
 * An app whose directory is missing, or contains no `app.R`, `ui.R` and `server.R`, `.Rmd`, or `.qmd` file, is no longer started. A resident app with a mistyped `path` previously started a new R process that exited, every 10 to 15 seconds, indefinitely, with the reason only in the app's error log. The reason is now written to `server.log`, for on-demand apps already when the configuration is loaded. Whether an on-demand app's directory can be served is looked up again when the directory changes, and at least every 30 seconds, instead of for every status request from every open landing page.
 

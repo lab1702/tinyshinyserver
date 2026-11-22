@@ -186,6 +186,31 @@ quarto_needs_render <- function(qmd_file, log_dir = NULL) {
   any(is.na(changed) | changed)
 }
 
+# The user environment file that R reads when it starts in an app's directory:
+# the file that R_ENVIRON_USER names, the directory's .Renviron, or
+# ~/.Renviron. callr would otherwise copy the .Renviron of this session's
+# working directory into every app.
+app_environ_file <- function(app_path) {
+  named <- Sys.getenv("R_ENVIRON_USER", "")
+  if (nzchar(named)) {
+    return(named)
+  }
+  local <- file.path(app_path, ".Renviron")
+  if (file.exists(local)) local else path.expand("~/.Renviron")
+}
+
+# The user profile that R reads when it starts in the working directory: the
+# file that R_PROFILE_USER names, the directory's .Rprofile, or ~/.Rprofile.
+# start_app() hands this function to the app's own process, which need not
+# load this package, so it may call only base R.
+startup_profile_file <- function() {
+  named <- Sys.getenv("R_PROFILE_USER", "")
+  if (nzchar(named)) {
+    return(path.expand(named))
+  }
+  if (file.exists(".Rprofile")) ".Rprofile" else path.expand("~/.Rprofile")
+}
+
 # Process Manager Class
 ProcessManager <- setRefClass("ProcessManager",
   fields = list(
@@ -247,24 +272,28 @@ ProcessManager <- setRefClass("ProcessManager",
       # without this package's namespace.
       needs_render <- quarto_needs_render
       environment(needs_render) <- baseenv()
+      profile_file <- startup_profile_file
+      environment(profile_file) <- baseenv()
 
       # Start the app process. Its stdout and stderr go straight to the log
       # files so that output from child processes and native code is captured
       # and can never fill an unread pipe.
       #
-      # The process starts in the app directory and reads the .Rprofile there,
-      # as R does for a project, so that an app's own profile, such as one that
-      # activates renv, applies as it would if the app were run on its own.
-      # callr's profile option would read the .Rprofile of this session's
-      # working directory instead, so it is turned off. The app's profile runs
-      # after callr has set the library paths, which renv then replaces. As at
-      # R's own startup, an error in the profile is reported and the app still
-      # starts.
+      # The process starts in the app directory and reads the startup files
+      # that R reads there, so that an app's own .Renviron and .Rprofile, such
+      # as a profile that activates renv, apply as they would if the app were
+      # run on its own; without them, the user's ~/.Renviron and ~/.Rprofile
+      # apply. callr would read the files of this session's working directory
+      # instead: its profile option is turned off, and it is told which
+      # environment file to use. The profile runs after callr has set the
+      # library paths, which renv then replaces. As at R's own startup, an
+      # error in the profile is reported and the app still starts.
       process <- callr::r_bg(
-        function(app_path, port, type, file, needs_render, log_dir) {
-          if (file.exists(".Rprofile")) {
-            tryCatch(source(".Rprofile"), error = function(e) {
-              message("Error in ", file.path(getwd(), ".Rprofile"), ": ", conditionMessage(e))
+        function(app_path, port, type, file, needs_render, log_dir, profile_file) {
+          profile <- profile_file()
+          if (file.exists(profile)) {
+            tryCatch(source(profile), error = function(e) {
+              message("Error in ", normalizePath(profile), ": ", conditionMessage(e))
             })
           }
           if (type == "qmd") {
@@ -301,11 +330,13 @@ ProcessManager <- setRefClass("ProcessManager",
           type = app$type,
           file = app$file,
           needs_render = needs_render,
-          log_dir = log_dir
+          log_dir = log_dir,
+          profile_file = profile_file
         ),
         stdout = output_log,
         stderr = error_log,
         user_profile = FALSE,
+        env = c(callr::rcmd_safe_env(), R_ENVIRON_USER = app_environ_file(app_path)),
         # Passed on to processx: the directory the app's R session starts in
         wd = app_path,
         # Stop the app even if this R session dies without cleaning up
@@ -375,12 +406,30 @@ ProcessManager <- setRefClass("ProcessManager",
           logger::log_debug("App {app_name} not ready yet, will retry (attempt {attempt}/{max})",
             app_name = app_name, attempt = attempt, max = max_attempts
           )
-        } else {
-          logger::log_error("App {app_name} failed to become ready after {max} attempts",
-            app_name = app_name, max = max_attempts
-          )
+          return(FALSE)
+        }
+
+        if (attempt == max_attempts) {
           # The next request for the app reports the timeout and ends this state
           config$set_app_start_timed_out(app_name)
+        }
+        # A slow start, such as a long Quarto render, may still finish. Keep
+        # looking, less often, while the process runs, for as long as an app
+        # may keep starting.
+        uptime <- process_uptime_seconds(process)
+        if (!is.null(uptime) && uptime < config$ON_DEMAND_START_LIMIT_SECONDS) {
+          if (attempt == max_attempts) {
+            logger::log_warn("App {app_name} is not ready after {max} attempts; still waiting for it to start",
+              app_name = app_name, max = max_attempts
+            )
+          }
+          later::later(function() {
+            check_app_ready(app_name, app_port, process, attempt + 1, max_attempts)
+          }, delay = 2)
+        } else {
+          logger::log_error("App {app_name} failed to become ready after {attempts} attempts",
+            app_name = app_name, attempts = attempt
+          )
         }
 
         return(FALSE)

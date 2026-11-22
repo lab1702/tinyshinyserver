@@ -471,11 +471,41 @@ test_that("management static files answer only GET and HEAD", {
   expect_equal(route_management_request("/templates/styles/main.css", "HEAD", list(), config, list(), tm)$status, 200)
 })
 
+test_that("management pages and endpoints answer GET and HEAD, and other methods with 405", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list())
+  pm <- ProcessManager$new(config)
+  tm <- list(generate_management_page = function() "<html>Dashboard</html>",
+    serve_static_file = function(path, if_none_match = NULL) create_html_response("file"))
+  req <- list(HTTP_X_TINYSHINYSERVER_REQUEST = "management")
+  for (path in c("/", "/api/apps", "/api/connections", "/api/status", "/templates/styles/main.css")) {
+    expect_equal(route_management_request(path, "HEAD", list(), config, pm, tm)$status, 200, info = path)
+    for (method in c("POST", "PUT", "DELETE", "OPTIONS")) {
+      result <- route_management_request(path, method, req, config, pm, tm)
+      expect_equal(result$status, 405, info = paste(method, path))
+      expect_equal(result$headers[["Allow"]], "GET, HEAD", info = paste(method, path))
+    }
+  }
+  # The actions answer only POST, and are not run by any other method
+  for (path in c("/api/reload", "/api/shutdown", "/api/apps/app/restart")) {
+    for (method in c("GET", "HEAD", "PUT", "DELETE", "OPTIONS")) {
+      result <- route_management_request(path, method, req, config, pm, tm)
+      expect_equal(result$status, 405, info = paste(method, path))
+      expect_equal(result$headers[["Allow"]], "POST", info = paste(method, path))
+    }
+  }
+  expect_false(config$shutdown_requested)
+  expect_false(config$reload_requested)
+  expect_equal(route_management_request("/unknown", "POST", req, config, pm, tm)$status, 404)
+})
+
 test_that("management answers to HEAD keep their headers but send no body", {
   config <- ShinyServerConfig$new()
-  tm <- list(serve_static_file = function(path, if_none_match = NULL) create_html_response("file"))
+  config$config <- list(apps = list())
+  tm <- list(serve_static_file = function(path, if_none_match = NULL) create_html_response("file"),
+    generate_management_page = function() "<html>Dashboard</html>")
   request <- function(path, method) list(PATH_INFO = path, REQUEST_METHOD = method, QUERY_STRING = "")
-  for (path in c("/templates/styles/main.css", "/unknown")) {
+  for (path in c("/", "/api/status", "/templates/styles/main.css", "/unknown")) {
     get <- handle_management_request(request(path, "GET"), config, list(), tm)
     head <- handle_management_request(request(path, "HEAD"), config, list(), tm)
     expect_equal(head$status, get$status, info = path)

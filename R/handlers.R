@@ -460,14 +460,41 @@ forward_request <- function(method, target_url, req, app_name, config, template_
   }, error = proxy_error)
 }
 
+# Whether strings hold only ASCII characters, which tolower() can read in any
+# encoding, including "bytes"
+is_ascii <- function(x) !grepl("[^\001-\177]", x, useBytes = TRUE)
+
+# The header fields of an app's final response, from libcurl's raw header
+# block, as a list named by lower-case field name. Each value keeps the bytes
+# the app sent. curl::parse_headers_list() returns no fields at all for a
+# block that holds a byte that is not valid UTF-8, such as a Latin-1 file
+# name, and the response would then be sent without its Content-Type, cookies,
+# or redirect. A line whose field name is not an HTTP token is left out.
+parse_response_headers <- function(raw_headers) {
+  text <- rawToChar(raw_headers)
+  Encoding(text) <- "bytes"
+  blocks <- strsplit(text, "\r\n\r\n|\n\n|\r\r", useBytes = TRUE)[[1]]
+  if (length(blocks) == 0) {
+    return(list())
+  }
+  lines <- strsplit(blocks[length(blocks)], "\r\n|\n|\r", useBytes = TRUE)[[1]]
+  colon <- regexpr(":", lines, fixed = TRUE, useBytes = TRUE)
+  names <- substr(lines, 1, colon - 1)
+  fields <- colon > 1 & grepl("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$", names, useBytes = TRUE)
+  values <- as.list(trimws(substr(lines[fields], colon[fields] + 1, nchar(lines[fields], type = "bytes"))))
+  names(values) <- tolower(names[fields])
+  values
+}
+
 # Preserve end-to-end headers, including repeated Set-Cookie fields. Transfer
 # framing belongs to httpuv; libcurl already removes chunk framing, but content
 # decoding is disabled so Content-Encoding still describes the returned bytes.
 # A response the app sent without a Content-Type is passed on without one.
 proxy_response_headers <- function(raw_headers, target_url, app_name, method, base_path = "") {
-  headers <- curl::parse_headers_list(raw_headers)
+  headers <- parse_response_headers(raw_headers)
   connection <- as.character(unlist(headers[names(headers) == "connection"], use.names = FALSE))
-  nominated <- tolower(trimws(unlist(strsplit(connection, ",", fixed = TRUE))))
+  nominated <- trimws(unlist(strsplit(connection, ",", fixed = TRUE, useBytes = TRUE)))
+  nominated <- tolower(nominated[is_ascii(nominated)])
   # httpuv adds its own Date to every response; the app's would be a second one
   excluded <- c("connection", "keep-alive", "transfer-encoding", "te", "trailer",
     "upgrade", "proxy-authenticate", "proxy-authorization", "date", nominated)
@@ -483,7 +510,8 @@ proxy_response_headers <- function(raw_headers, target_url, app_name, method, ba
       parts <- regmatches(value, regexec("^(?:https?:)?//([^/?#]+)(.*)$", value,
         ignore.case = TRUE, perl = TRUE))[[1]]
       backend_authority <- sub("^https?://", "", authority)
-      backend_local <- length(parts) == 3 && tolower(parts[2]) == tolower(backend_authority)
+      backend_local <- length(parts) == 3 && is_ascii(parts[2]) &&
+        tolower(parts[2]) == tolower(backend_authority)
       if (backend_local) {
         value <- parts[3]
         if (!startsWith(value, "/")) value <- paste0("/", value)

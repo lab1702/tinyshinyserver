@@ -63,44 +63,56 @@ route_management_request <- function(path, method, req, config, process_manager,
     return(create_error_response("Missing or invalid X-TinyShinyServer-Request header", 403))
   }
 
+  # The dashboard, status endpoints, and static files are read-only and answer
+  # GET and HEAD alike; handle_management_request() sends the answer to HEAD
+  # without its body. The actions answer only POST. A known path requested
+  # with another method is answered with 405.
+  is_restart <- startsWith(path, "/api/apps/") && endsWith(path, "/restart")
+  if (path %in% c("/", "/api/apps", "/api/connections", "/api/status") || startsWith(path, "/templates/")) {
+    if (!method %in% c("GET", "HEAD")) {
+      return(create_method_not_allowed_response())
+    }
+  } else if (is_restart || path %in% c("/api/reload", "/api/shutdown")) {
+    if (method != "POST") {
+      return(create_method_not_allowed_response("POST"))
+    }
+  }
+
   # Management dashboard
-  if (path == "/" && method == "GET") {
+  if (path == "/") {
     return(handle_management_dashboard(template_manager))
   }
 
   # API endpoints
-  if (path == "/api/apps" && method == "GET") {
+  if (path == "/api/apps") {
     return(handle_management_apps_api(process_manager))
   }
 
-  if (path == "/api/connections" && method == "GET") {
+  if (path == "/api/connections") {
     return(handle_management_connections_api(config))
   }
 
-  if (path == "/api/status" && method == "GET") {
+  if (path == "/api/status") {
     return(handle_management_status_api(config))
   }
 
   # App restart endpoint
-  if (startsWith(path, "/api/apps/") && endsWith(path, "/restart") && method == "POST") {
+  if (is_restart) {
     return(handle_app_restart(path, process_manager))
   }
 
   # Configuration reload endpoint
-  if (path == "/api/reload" && method == "POST") {
+  if (path == "/api/reload") {
     return(handle_config_reload(config))
   }
 
   # Shutdown endpoint
-  if (path == "/api/shutdown" && method == "POST") {
+  if (path == "/api/shutdown") {
     return(handle_server_shutdown(config))
   }
 
   # Static files for management interface
   if (startsWith(path, "/templates/")) {
-    if (!method %in% c("GET", "HEAD")) {
-      return(create_method_not_allowed_response())
-    }
     return(handle_static_file(path, template_manager, req$HTTP_IF_NONE_MATCH))
   }
 

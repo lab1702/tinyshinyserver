@@ -910,6 +910,8 @@ test_that("the proxy never forwards to another program holding an app's port", {
   on.exit(app$kill(), add = TRUE)
   config <- proxy_test_config(backend$port)
   config$add_app_process("app", app)
+  # Retire the process, so that readiness checks still watching it stop
+  on.exit(config$remove_app_process("app"), add = TRUE, after = FALSE)
   # Checks run on the event loop, so they must not walk the process table.
   local_mocked_bindings(ps_children = function(...) stop("Process table walked"), .package = "ps")
   expect_true(process_owns_port(test_backend_process(), backend$port))
@@ -1086,6 +1088,38 @@ test_that("response headers preserve duplicates and remove transfer framing", {
     c("a=1; Path=/proxy/app/; HttpOnly", "b=2; Path=/proxy/app/folder"))
   expect_false(any(c("connection", "x-internal", "transfer-encoding", "content-length") %in% names(result)))
   expect_equal(proxy_response_headers(headers, "http://127.0.0.1:3001/", "app", "HEAD")$`content-length`, "99")
+})
+
+test_that("response headers keep bytes that are not valid UTF-8", {
+  # A Latin-1 "é", as in a file name read from a Latin-1 file system
+  latin1 <- function(...) c(charToRaw(paste0(...)), as.raw(0xE9))
+  headers <- c(charToRaw("HTTP/1.1 302 Found\r\nContent-Type: text/csv\r\n"),
+    latin1("Content-Disposition: attachment; filename=\"caf"), charToRaw(".csv\"\r\n"),
+    latin1("Location: http://127.0.0.1:3001/caf"), charToRaw("\r\n"),
+    latin1("Set-Cookie: s=caf"), charToRaw("; Path=/\r\n"),
+    latin1("Connection: close, X-Caf"), charToRaw("\r\n"),
+    # Not a field name, so left out
+    latin1("Bad Nam"), charToRaw(": dropped\r\n\r\n"))
+  result <- proxy_response_headers(headers, "http://127.0.0.1:3001/", "app", "GET")
+  expect_named(result, c("content-type", "content-disposition", "location", "set-cookie"))
+  bytes <- function(value) charToRaw(value)
+  expect_equal(result$`content-type`, "text/csv")
+  expect_identical(bytes(result$`content-disposition`), c(latin1("attachment; filename=\"caf"), charToRaw(".csv\"")))
+  expect_identical(bytes(result$location), latin1("/proxy/app/caf"))
+  expect_identical(bytes(result$`set-cookie`), c(latin1("s=caf"), charToRaw("; Path=/proxy/app/")))
+  # A redirect to another host is not taken for the app's own address
+  other <- c(latin1("HTTP/1.1 302 Found\r\nLocation: http://caf"), charToRaw(".example/\r\n\r\n"))
+  expect_identical(bytes(proxy_response_headers(other, "http://127.0.0.1:3001/", "app", "GET")$location),
+    c(latin1("http://caf"), charToRaw(".example/")))
+})
+
+test_that("response headers come from the final response only", {
+  headers <- charToRaw(paste0("HTTP/1.1 100 Continue\r\nX-Interim: yes\r\n\r\n",
+    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nX-Note:  padded value \t\r\n\r\n"))
+  result <- proxy_response_headers(headers, "http://127.0.0.1:3001/", "app", "GET")
+  expect_named(result, c("content-type", "x-note"))
+  expect_equal(result$`x-note`, "padded value")
+  expect_length(proxy_response_headers(raw(), "http://127.0.0.1:3001/", "app", "GET"), 0)
 })
 
 test_that("cookies with no path get an app-scoped default path", {

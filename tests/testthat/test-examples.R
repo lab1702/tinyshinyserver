@@ -1,6 +1,19 @@
 # Tests for the bundled example apps
 
 # ============================================================================
+# Dashboard example
+# ============================================================================
+
+test_that("the dashboard example does not depend on the day it is rendered", {
+  # Its page is rendered once and served again at later starts, while the
+  # server chunk runs at every start. Dates taken from the clock would make the
+  # rendered date range drift away from the data, until no data is shown.
+  qmd <- readLines(system.file("examples", "dashboard", "dashboard.qmd", package = "tinyshinyserver"))
+  expect_false(any(grepl("Sys.Date()", qmd, fixed = TRUE)))
+  expect_false(any(grepl("Sys.time()", qmd, fixed = TRUE)))
+})
+
+# ============================================================================
 # Inventory example
 # ============================================================================
 

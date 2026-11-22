@@ -1177,6 +1177,56 @@ test_that("readiness checks cover the full startup window for short appstart_tim
   })
 })
 
+test_that("readiness checks keep watching an app that is still starting after the window", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app1", port = 3001)))
+  config$set_app_starting("app1")
+  pm <- ProcessManager$new(config)
+  started <- Sys.time()
+  process <- list(get_start_time = function() started)
+  config$add_app_process("app1", process)
+  ready <- FALSE
+  local_mocked_bindings(
+    is_process_alive = function(process) TRUE,
+    process_owns_port = function(process, port) TRUE,
+    wait_for_backend = function(url, wait_seconds = 0) promises::promise_resolve(ready)
+  )
+  last_attempt <- config$APP_STARTUP_TIMEOUT_SECONDS / 0.5
+  # Whether another check is scheduled, once the promise callbacks that are
+  # already due have run
+  check_scheduled <- function() {
+    for (i in 1:10) later::run_now(0)
+    !later::loop_empty()
+  }
+  later::with_loop(later::create_loop(), {
+    # A long render outlasts the window in which requests wait: the next
+    # request reports the timeout, but the app is not given up on
+    log <- capture_test_log(expect_false(await_response(pm$check_app_ready("app1", 3001, process,
+      attempt = last_attempt))))
+    expect_equal(config$get_app_startup_state("app1")$state, "timeout")
+    expect_match(paste(log, collapse = "\n"), "still waiting for it to start", fixed = TRUE)
+    expect_no_match(paste(log, collapse = "\n"), "failed to become ready", fixed = TRUE)
+    expect_true(check_scheduled())
+
+    # Once it listens, it is ready
+    ready <- TRUE
+    log <- capture_test_log(expect_true(await_response(pm$check_app_ready("app1", 3001, process,
+      attempt = last_attempt + 5))))
+    expect_null(config$get_app_startup_state("app1"))
+    expect_match(paste(log, collapse = "\n"), "App app1 is ready", fixed = TRUE)
+  })
+
+  # An app that has not listened for as long as an app may keep starting is given up on
+  ready <- FALSE
+  started <- Sys.time() - config$ON_DEMAND_START_LIMIT_SECONDS
+  later::with_loop(later::create_loop(), {
+    log <- capture_test_log(expect_false(await_response(pm$check_app_ready("app1", 3001, process,
+      attempt = last_attempt + 300))))
+    expect_match(paste(log, collapse = "\n"), "failed to become ready", fixed = TRUE)
+    expect_false(check_scheduled())
+  })
+})
+
 })
 
 # ============================================================================
@@ -1532,25 +1582,75 @@ test_that("start_app starts an app process in the app's directory", {
   ProcessManager$new(config)$start_app(config$config$apps[[1]])
   config$remove_app_process("app")
   expect_identical(args$wd, normalizePath(app_dir))
-  # callr would read the .Rprofile of the server's working directory
+  # callr would read the .Rprofile and .Renviron of the server's working directory
   expect_false(args$user_profile)
+  expect_identical(args$env[["R_ENVIRON_USER"]], app_environ_file(normalizePath(app_dir)))
+  expect_true(all(names(callr::rcmd_safe_env()) %in% names(args$env)))
+  # The app's process need not load this package to find its profile
+  expect_identical(environment(args$args$profile_file), baseenv())
   # Paths stay valid from the app's directory
   expect_identical(args$stdout, file.path(normalizePath(tempdir()), "app_output.log"))
   expect_identical(args$args$log_dir, normalizePath(tempdir()))
 })
 
-test_that("an app process reads its own .Rprofile, not the server's", {
+test_that("an app reads the environment file that R reads in its directory", {
+  app_dir <- tempfile("tss-environ-app")
+  dir.create(app_dir)
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  old <- Sys.getenv("R_ENVIRON_USER", unset = NA)
+  on.exit(if (is.na(old)) Sys.unsetenv("R_ENVIRON_USER") else Sys.setenv(R_ENVIRON_USER = old), add = TRUE)
+  Sys.unsetenv("R_ENVIRON_USER")
+
+  # Without a file of its own, the user's
+  expect_identical(app_environ_file(app_dir), path.expand("~/.Renviron"))
+  writeLines("TSS_TEST=1", file.path(app_dir, ".Renviron"))
+  expect_identical(app_environ_file(app_dir), file.path(app_dir, ".Renviron"))
+  # As at R's startup, a file that R_ENVIRON_USER names takes the place of both
+  Sys.setenv(R_ENVIRON_USER = file.path(tempdir(), "shared.Renviron"))
+  expect_identical(app_environ_file(app_dir), file.path(tempdir(), "shared.Renviron"))
+})
+
+test_that("an app runs the profile that R runs in its directory", {
+  dir <- tempfile("tss-profile-dir")
+  dir.create(dir)
+  on.exit(unlink(dir, recursive = TRUE), add = TRUE)
+  old_dir <- setwd(dir)
+  on.exit(setwd(old_dir), add = TRUE, after = FALSE)
+  old <- Sys.getenv("R_PROFILE_USER", unset = NA)
+  on.exit(if (is.na(old)) Sys.unsetenv("R_PROFILE_USER") else Sys.setenv(R_PROFILE_USER = old), add = TRUE)
+  Sys.unsetenv("R_PROFILE_USER")
+
+  # Without a profile of its own, the user's
+  expect_identical(startup_profile_file(), path.expand("~/.Rprofile"))
+  writeLines("", ".Rprofile")
+  expect_identical(startup_profile_file(), ".Rprofile")
+  # As at R's startup, a file that R_PROFILE_USER names takes the place of both
+  Sys.setenv(R_PROFILE_USER = "~/shared.Rprofile")
+  expect_identical(startup_profile_file(), path.expand("~/shared.Rprofile"))
+})
+
+test_that("an app process reads its own .Rprofile and .Renviron, not the server's", {
   skip_on_cran() # Starts an R session that loads shiny
   server_dir <- tempfile("tss-server-dir")
   app_dir <- tempfile("tss-profile-app")
   dir.create(server_dir)
   dir.create(app_dir)
   on.exit(unlink(c(server_dir, app_dir), recursive = TRUE), add = TRUE)
+  old_profile <- Sys.getenv("R_PROFILE_USER", unset = NA)
+  old_environ <- Sys.getenv("R_ENVIRON_USER", unset = NA)
+  on.exit({
+    if (is.na(old_profile)) Sys.unsetenv("R_PROFILE_USER") else Sys.setenv(R_PROFILE_USER = old_profile)
+    if (is.na(old_environ)) Sys.unsetenv("R_ENVIRON_USER") else Sys.setenv(R_ENVIRON_USER = old_environ)
+  }, add = TRUE)
+  Sys.unsetenv(c("R_PROFILE_USER", "R_ENVIRON_USER"))
   marker <- file.path(app_dir, "profiles")
   writeLines("options(tss.test.profile = 'server')", file.path(server_dir, ".Rprofile"))
   writeLines("options(tss.test.profile = 'app')", file.path(app_dir, ".Rprofile"))
+  writeLines("TSS_TEST_ENVIRON=server", file.path(server_dir, ".Renviron"))
+  writeLines("TSS_TEST_ENVIRON=app", file.path(app_dir, ".Renviron"))
   writeLines(c(
-    sprintf("writeLines(getOption('tss.test.profile', 'none'), %s)", deparse(marker)),
+    sprintf("writeLines(c(getOption('tss.test.profile', 'none'), Sys.getenv('TSS_TEST_ENVIRON', 'none')), %s)",
+      deparse(marker)),
     "Sys.sleep(60)"
   ), file.path(app_dir, "app.R"))
 
@@ -1563,21 +1663,33 @@ test_that("an app process reads its own .Rprofile, not the server's", {
     log_dir = "logs")
   ProcessManager$new(config)$start_app(config$config$apps[[1]])
 
-  deadline <- Sys.time() + 30
-  while (!file.exists(marker) && Sys.time() < deadline) Sys.sleep(0.1)
-  expect_equal(readLines(marker), "app")
+  read_marker <- function() {
+    deadline <- Sys.time() + 30
+    while (length(if (file.exists(marker)) readLines(marker)) < 2 && Sys.time() < deadline) Sys.sleep(0.1)
+    readLines(marker)
+  }
+  restart <- function() {
+    stop_test_app_processes(config)
+    unlink(marker)
+    ProcessManager$new(config)$start_app(config$config$apps[[1]])
+  }
+  expect_equal(read_marker(), c("app", "app"))
   expect_true(file.exists(file.path(server_dir, "logs", "app_error.log")))
 
   # An error in the profile is reported, and the app still starts
-  stop_test_app_processes(config)
-  unlink(marker)
   writeLines("stop('broken profile')", file.path(app_dir, ".Rprofile"))
-  ProcessManager$new(config)$start_app(config$config$apps[[1]])
-  deadline <- Sys.time() + 30
-  while (!file.exists(marker) && Sys.time() < deadline) Sys.sleep(0.1)
-  expect_equal(readLines(marker), "none")
+  restart()
+  expect_equal(read_marker(), c("none", "app"))
   expect_match(paste(readLines(file.path(server_dir, "logs", "app_error.log")), collapse = "\n"),
     "broken profile", fixed = TRUE)
+
+  # Without a profile of its own, the app runs the user's, as R does
+  unlink(file.path(app_dir, ".Rprofile"))
+  user_profile <- file.path(server_dir, "user.Rprofile")
+  writeLines("options(tss.test.profile = 'user')", user_profile)
+  Sys.setenv(R_PROFILE_USER = user_profile)
+  restart()
+  expect_equal(read_marker(), c("user", "app"))
 })
 
 test_that("app output from child processes reaches the log without blocking", {
