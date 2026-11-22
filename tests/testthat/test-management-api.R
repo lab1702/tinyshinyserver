@@ -116,7 +116,7 @@ test_that("handle_management_request validates request inputs", {
   config <- ShinyServerConfig$new()
   pm <- ProcessManager$new(config)
 
-  # Test with invalid method - returns 405 Method Not Allowed
+  # A method that no resource serves returns 501 Not Implemented
   req <- list(
     PATH_INFO = "/",
     REQUEST_METHOD = "INVALID",
@@ -125,7 +125,7 @@ test_that("handle_management_request validates request inputs", {
 
   result <- handle_management_request(req, config, pm, list())
 
-  expect_equal(result$status, 405)
+  expect_equal(result$status, 501)
 })
 
 test_that("handle_management_request handles valid requests", {
@@ -445,6 +445,20 @@ test_that("handle_app_restart accepts only /api/apps/{name}/restart", {
 
   expect_equal(handle_app_restart("/api/apps/app1/restart", pm)$status, 200)
   expect_equal(restarted, "app1")
+})
+
+test_that("handle_app_restart keeps an unexpected error's message out of the response", {
+  pm <- list(
+    get_app_status = function(name) list(status = "running"),
+    restart_app = function(name) stop("cannot open C:/secret/app1/app.R")
+  )
+
+  result <- handle_app_restart("/api/apps/app1/restart", pm)
+
+  expect_equal(result$status, 500)
+  expect_equal(jsonlite::fromJSON(result$body)$error,
+    "500 - Unexpected error; see server.log for the reason")
+  expect_no_match(result$body, "secret", fixed = TRUE)
 })
 
 test_that("management static files answer only GET and HEAD", {

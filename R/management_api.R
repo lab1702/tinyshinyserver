@@ -260,8 +260,9 @@ handle_app_restart <- function(path, process_manager) {
       return(create_json_response(result, status = if (result$success) 200 else 500))
     },
     error = function(e) {
-      logger::log_error("Error restarting app {app_name}: {error}", app_name = app_name, error = e$message)
-      return(create_error_response(paste("Failed to restart app:", e$message), 500))
+      # The message can name files on the server, so it stays in the log
+      logger::log_error("Error restarting app {app_name}: {error}", app_name = app_name, error = conditionMessage(e))
+      return(create_error_response("Unexpected error; see server.log for the reason", 500))
     }
   )
 }

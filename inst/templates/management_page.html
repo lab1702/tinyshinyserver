@@ -141,6 +141,12 @@
             return typeof value === "number" ? format(value) : "N/A";
         }
 
+        // The text of a failed request's answer. Error responses carry it as
+        // "error", after their status code, as in "500 - Internal Server Error".
+        function errorText(data) {
+            return String(data.message || data.error || "unknown error").replace(/^\d{3} - /, "");
+        }
+
         function element(tag, className, text) {
             const node = document.createElement(tag);
             if (className) node.className = className;
@@ -322,8 +328,11 @@
             .then(data => {
                 if (data.success) {
                     showNotice(data.message || "Restarted " + appName, "success");
+                } else if (data.message) {
+                    // The restart endpoint's own answer says which app failed and why
+                    showNotice(data.message, "error");
                 } else {
-                    showNotice("Failed to restart " + appName + ": " + data.message, "error");
+                    showNotice("Failed to restart " + appName + ": " + errorText(data), "error");
                 }
                 button.disabled = false;
                 button.textContent = "Restart";
@@ -441,7 +450,7 @@
                 if (data.success) {
                     showShutdownScreen();
                 } else {
-                    showNotice("Failed to shutdown server: " + data.message, "error");
+                    showNotice("Failed to shutdown server: " + errorText(data), "error");
                     restore();
                 }
             })

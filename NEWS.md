@@ -30,7 +30,7 @@
 
 * Requests to apps no longer follow the `http_proxy` and `ALL_PROXY` environment variables. Where R was configured to use a proxy and `no_proxy` did not list `127.0.0.1`, app requests, with their cookies and bodies, were sent to that proxy, and every app answered HTTP 502 or 503.
 
-* An unexpected error while answering a request is now answered with HTTP 500 and no detail, and the error is written to `server.log`. The client used to receive the R error message; on Windows, a request for `/templates/nul` returned the server's installation path that way, and now returns HTTP 404. An error reading a page's style sheet or script no longer names the file either.
+* An unexpected error while answering a request is now answered with HTTP 500 and no detail, and the error is written to `server.log`. The client used to receive the R error message; on Windows, a request for `/templates/nul` returned the server's installation path that way, and now returns HTTP 404. An error reading a page's style sheet or script no longer names the file either. The management API's restart endpoint answers an unexpected error the same way; a restart that cannot start the app still reports why.
 
 * The INFO message that records a WebSocket connection to an app no longer includes the connection's query string, which can carry a token. The full address is logged at DEBUG.
 
@@ -49,6 +49,12 @@
 * The proxy's own pages and endpoints (`/`, `/health`, `/api/apps`, and the files under `/templates/`) answer methods other than `GET` and `HEAD` with HTTP 405. They answered every method as if it were a `GET`.
 
 * Requests for a directory under `/templates/` return HTTP 404 instead of 500.
+
+* Files under `/templates/` are sent as their bytes. Files other than images were read as lines of text, which changed line endings and dropped a final newline, and would have corrupted fonts and other binary files; web fonts and WebP images are now sent with their own types, and unknown types as `application/octet-stream` instead of `text/plain`.
+
+* A request with a method that neither server supports on any page, such as `PROPFIND`, receives HTTP 501 (Not Implemented) instead of a 405 without the `Allow` header that a 405 requires. Method names are matched exactly, as HTTP defines them, so `get` is not taken for `GET`.
+
+* When restarting an app or shutting down fails with an error, the management dashboard shows the server's reason instead of "undefined", and a failed restart's notice names the app once instead of repeating itself.
 
 * The management dashboard shows the server's uptime and memory use, and each running app's memory use and uptime. `/api/status` returns `uptime_seconds`, `server_memory_bytes`, and `apps_memory_bytes` in place of the `server_uptime` and `memory_usage` fields, which were always `"N/A"`; the management `/api/apps` returns `memory_bytes` and `uptime_seconds` for running apps. Memory is the resident memory of each R process and is left out where the `ps` package cannot read it.
 
@@ -134,7 +140,11 @@
 
 * The inventory example app accepts at most 10,000 items, so a visitor can no longer make it allocate unbounded memory.
 
-* An app whose directory is missing, or contains no `app.R`, `ui.R` and `server.R`, `.Rmd`, or `.qmd` file, is no longer started. A resident app with a mistyped `path` previously started a new R process that exited, every 10 to 15 seconds, indefinitely, with the reason only in the app's error log. The reason is now written to `server.log`, for on-demand apps already when the configuration is loaded.
+* An app whose directory is missing, or contains no `app.R`, `ui.R` and `server.R`, `.Rmd`, or `.qmd` file, is no longer started. A resident app with a mistyped `path` previously started a new R process that exited, every 10 to 15 seconds, indefinitely, with the reason only in the app's error log. The reason is now written to `server.log`, for on-demand apps already when the configuration is loaded. Whether an on-demand app's directory can be served is looked up again when the directory changes, and at least every 30 seconds, instead of for every status request from every open landing page.
+
+* R Markdown and Quarto documents are found whatever the letter case of their extension, such as `report.rmd` or `dash.QMD`, as `rmarkdown` and Quarto accept them. Such an app was reported as having nothing to serve.
+
+* A directory with several documents serves the one that `rmarkdown` picks, instead of the first in alphabetical order. Files whose names start with `_`, which are partials that other documents include, are never served; such a file, such as `_child.Rmd`, could be served in place of the app, and a directory holding only partials now says so in `server.log`. An `index` or `ui` document is preferred, then one whose front matter sets `runtime: shiny` or `server: shiny`, so a static page no longer displaces the app. Among the rest, a document spelled `.Rmd` or `.qmd` comes before other letter cases, so a child document such as `appendix.rmd` does not displace `report.Rmd`.
 
 * A Quarto document is rendered only when its rendered page is missing or older than another file in the app directory, instead of on every start. On-demand Quarto apps and restarts no longer wait for a full render each time. Delete the document's `.html` file to force a render. The check runs in the app's own process, so reading a large app directory does not hold up the other apps' traffic, and the app's error log records whether the document was rendered.
 

@@ -49,6 +49,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     pending_session_checks = "environment",
     app_startup_state = "environment", # Track app startup progress (starting/ready)
     verified_backends = "environment", # Process generations confirmed to own their app port
+    start_problems = "environment", # Recent app_start_problem() results, by app name
     shutdown_requested = "logical", # Set by the management API; read by the event loop
     reload_requested = "logical", # Set by the management API; read by the event loop
     last_reload = "list", # Outcome of the latest reload; empty while one is pending
@@ -64,7 +65,10 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     HTTP_SESSION_GRACE_SECONDS = "numeric",
     # How long an on-demand app that nobody is waiting for may keep starting
     # before the idle check stops it
-    ON_DEMAND_START_LIMIT_SECONDS = "numeric"
+    ON_DEMAND_START_LIMIT_SECONDS = "numeric",
+    # Longest time a finding of whether an app directory can be served is
+    # reused, for changes that leave the directory's modification time alone
+    START_PROBLEM_MAX_AGE_SECONDS = "numeric"
   ),
   methods = list(
     initialize = function() {
@@ -76,6 +80,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       APP_STARTUP_TIMEOUT_SECONDS <<- 30
       HTTP_SESSION_GRACE_SECONDS <<- 30
       ON_DEMAND_START_LIMIT_SECONDS <<- 600
+      START_PROBLEM_MAX_AGE_SECONDS <<- 30
 
       # Initialize runtime state
       app_processes <<- list()
@@ -87,6 +92,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       pending_session_checks <<- new.env(hash = TRUE, parent = emptyenv())
       app_startup_state <<- new.env(hash = TRUE, parent = emptyenv())
       verified_backends <<- new.env(hash = TRUE, parent = emptyenv())
+      start_problems <<- new.env(hash = TRUE, parent = emptyenv())
       shutdown_requested <<- FALSE
       reload_requested <<- FALSE
       last_reload <<- list()
@@ -206,6 +212,35 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       pending_session_checks <<- new.env(hash = TRUE, parent = emptyenv())
       app_startup_state <<- new.env(hash = TRUE, parent = emptyenv())
       verified_backends <<- new.env(hash = TRUE, parent = emptyenv())
+      start_problems <<- new.env(hash = TRUE, parent = emptyenv())
+    },
+    cached_start_problem = function(app_config) {
+      "Why an app's directory cannot be served, or NULL, looked up again only once the directory changes"
+
+      # Every open landing page asks for each dormant app's status every 5
+      # seconds, on the thread that serves every app. Whether a directory can
+      # be served depends only on the names it holds, and adding, removing,
+      # or renaming one changes the directory's modification time on most
+      # file systems. A directory read within 2 seconds of that time is read
+      # again, for file systems that record times in whole seconds or
+      # coarser. Some changes leave the time alone, such as a fixed
+      # permission or a file added on a FAT or exFAT drive, so no finding is
+      # used for longer than START_PROBLEM_MAX_AGE_SECONDS.
+      read_at <- Sys.time()
+      path <- normalizePath(app_config$path, mustWork = FALSE)
+      modified <- file.mtime(path)
+      cached <- start_problems[[app_config$name]]
+      if (!is.null(cached) && !is.na(modified) && identical(cached$path, path) &&
+        identical(cached$modified, modified) &&
+        as.numeric(difftime(cached$read_at, modified, units = "secs")) > 2 &&
+        as.numeric(difftime(read_at, cached$read_at, units = "secs")) < START_PROBLEM_MAX_AGE_SECONDS) {
+        return(cached$problem)
+      }
+      problem <- app_start_problem(app_config)
+      assign(app_config$name, list(
+        path = path, modified = modified, read_at = read_at, problem = problem
+      ), envir = start_problems)
+      problem
     },
     validate_config = function(config) {
       "Validate configuration structure and values"

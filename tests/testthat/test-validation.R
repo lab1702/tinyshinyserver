@@ -104,14 +104,13 @@ test_that("validate_http_method accepts valid methods", {
   }
 })
 
-test_that("validate_http_method converts to uppercase and trims", {
-  result <- validate_http_method("  get  ")
-  expect_true(result$valid)
-  expect_equal(result$sanitized, "GET")
-
-  result <- validate_http_method("post")
-  expect_true(result$valid)
-  expect_equal(result$sanitized, "POST")
+test_that("validate_http_method matches method names exactly", {
+  # Method names are case-sensitive: "get" is a different method from GET
+  for (method in c("get", "Post", "  GET  ", "GET ")) {
+    result <- validate_http_method(method)
+    expect_false(result$valid, info = method)
+    expect_match(result$error, "not supported", info = method)
+  }
 })
 
 test_that("validate_http_method rejects null and invalid types", {
@@ -131,11 +130,11 @@ test_that("validate_http_method rejects null and invalid types", {
 test_that("validate_http_method rejects invalid methods", {
   result <- validate_http_method("INVALID")
   expect_false(result$valid)
-  expect_match(result$error, "not allowed")
+  expect_match(result$error, "not supported")
 
   result <- validate_http_method("TRACE")
   expect_false(result$valid)
-  expect_match(result$error, "not allowed")
+  expect_match(result$error, "not supported")
 })
 
 # ============================================================================
@@ -376,7 +375,11 @@ test_that("validate_request_inputs returns error for invalid method", {
 
   expect_false(result$valid)
   expect_match(result$error, "Invalid method")
-  expect_equal(result$status_code, 405)
+  # A method that no resource serves is not implemented, so the answer is 501,
+  # not a 405 whose Allow header would have to list a route's methods
+  expect_equal(result$status_code, 501)
+  expect_equal(result$response$status, 501)
+  expect_null(result$response$headers[["Allow"]])
 })
 
 # ============================================================================

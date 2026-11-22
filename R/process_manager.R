@@ -16,14 +16,13 @@ detect_app_type <- function(app_path) {
     return(list(type = "shiny"))
   }
 
-  # The first matching document in alphabetical order is used
-  rmd_files <- list.files(app_path, pattern = "\\.Rmd$", full.names = TRUE)
-  if (length(rmd_files) > 0) {
-    return(list(type = "rmd", file = rmd_files[1]))
+  rmd_file <- pick_document(app_path, "Rmd")
+  if (!is.null(rmd_file)) {
+    return(list(type = "rmd", file = rmd_file))
   }
-  qmd_files <- list.files(app_path, pattern = "\\.qmd$", full.names = TRUE)
-  if (length(qmd_files) > 0) {
-    return(list(type = "qmd", file = qmd_files[1]))
+  qmd_file <- pick_document(app_path, "qmd")
+  if (!is.null(qmd_file)) {
+    return(list(type = "qmd", file = qmd_file))
   }
 
   # shiny::runApp() also accepts these names in any letter case, and a
@@ -32,7 +31,53 @@ detect_app_type <- function(app_path) {
     return(list(type = "shiny"))
   }
 
-  stop("No app.R, ui.R and server.R, .Rmd, or .qmd file found in ", app_path, call. = FALSE)
+  # A directory that holds only partials would otherwise seem to hold a document
+  partials <- list.files(app_path, pattern = "^_.*\\.(Rmd|qmd)$", ignore.case = TRUE)
+  stop("No app.R, ui.R and server.R, .Rmd, or .qmd file found in ", app_path,
+    if (length(partials) > 0) {
+      paste0(" (", paste(partials, collapse = ", "),
+        " not served: a name that starts with \"_\" marks a partial that other documents include)")
+    },
+    call. = FALSE
+  )
+}
+
+# The document that serves an app directory, or NULL when it has none. The
+# extension may be in any letter case, as rmarkdown and Quarto accept it. As in
+# rmarkdown::run(), a name that starts with "_" is a partial that other
+# documents include, an index or ui document is preferred, and otherwise a
+# document whose front matter makes it a Shiny document. Next comes the
+# extension's usual letter case, so that a child document such as
+# "appendix.rmd" does not displace "report.Rmd". Ties go to alphabetical order.
+pick_document <- function(app_path, extension) {
+  files <- list.files(app_path, pattern = paste0("\\.", extension, "$"), ignore.case = TRUE)
+  files <- files[!startsWith(files, "_")]
+  if (length(files) == 0) {
+    return(NULL)
+  }
+  stem <- tolower(sub("\\.[^.]*$", "", files))
+  preferred <- stem %in% c("index", "ui")
+  # Front matter is read only when it decides the choice
+  shiny <- rep(FALSE, length(files))
+  if (length(files) > 1 && !any(preferred)) {
+    shiny <- vapply(file.path(app_path, files), is_shiny_document, logical(1), USE.NAMES = FALSE)
+  }
+  usual_case <- endsWith(files, paste0(".", extension))
+  file.path(app_path, files[order(!preferred, !shiny, !usual_case, seq_along(files))[1]])
+}
+
+# Whether a document's front matter asks for a Shiny runtime, as
+# rmarkdown::run() decides it: "runtime: shiny" or another runtime whose name
+# starts with "shiny", or Quarto's "server: shiny". Front matter that cannot be
+# read counts as none.
+is_shiny_document <- function(file) {
+  yaml <- tryCatch(rmarkdown::yaml_front_matter(file), error = function(e) list())
+  if (!is.list(yaml)) yaml <- list()
+  runtime <- yaml[["runtime"]]
+  server <- yaml[["server"]]
+  if (is.list(server)) server <- server[["type"]]
+  is_string <- function(x) is.character(x) && length(x) == 1 && !is.na(x)
+  (is_string(runtime) && startsWith(runtime, "shiny")) || (is_string(server) && identical(server, "shiny"))
 }
 
 # Why an app's directory cannot be served, or NULL when it can
@@ -53,14 +98,15 @@ app_start_problem <- function(app_config) {
 # start_app() hands this function to the app's own process, which need not
 # load this package, so it may call only base R.
 quarto_needs_render <- function(qmd_file) {
-  output <- sub("\\.qmd$", ".html", qmd_file)
+  # Quarto names the page "doc.html" for "doc.qmd" and "doc.QMD" alike
+  output <- sub("\\.qmd$", ".html", qmd_file, ignore.case = TRUE)
   if (!file.exists(output)) {
     return(TRUE)
   }
 
   app_dir <- dirname(qmd_file)
   # Files that rendering itself writes
-  generated <- c(basename(output), sub("\\.qmd$", "_files", basename(qmd_file)), ".quarto")
+  generated <- c(basename(output), sub("\\.qmd$", "_files", basename(qmd_file), ignore.case = TRUE), ".quarto")
   sources <- list.files(app_dir, recursive = TRUE, all.files = TRUE)
   sources <- sources[!sub("/.*$", "", sources) %in% generated]
   # A file as new as the page may have changed after it was rendered
@@ -361,7 +407,7 @@ ProcessManager <- setRefClass("ProcessManager",
         },
         error = function(e) {
           logger::log_error("Failed to restart app {app_name}: {error}", app_name = app_name, error = e$message)
-          return(list(success = FALSE, message = paste("Failed to restart app:", e$message)))
+          return(list(success = FALSE, message = paste0("Failed to restart app ", app_name, ": ", e$message)))
         }
       )
     },
@@ -598,7 +644,7 @@ ProcessManager <- setRefClass("ProcessManager",
       status <- if (is.null(process)) {
         if (app_config$resident) {
           "stopped" # Resident app should be running
-        } else if (is.null(app_start_problem(app_config))) {
+        } else if (is.null(config$cached_start_problem(app_config))) {
           "dormant" # Non-resident app is normally stopped
         } else {
           "unavailable" # Opening the app could not start it

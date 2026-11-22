@@ -31,18 +31,20 @@ validate_path <- function(path, max_length = 1000) {
   return(list(valid = TRUE, sanitized = path))
 }
 
-validate_http_method <- function(method,
-                                 allowed_methods = c("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")) {
+# The methods the proxy and the management server recognize at all. Routes
+# may accept fewer of them.
+ALLOWED_HTTP_METHODS <- c("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
+
+validate_http_method <- function(method, allowed_methods = ALLOWED_HTTP_METHODS) {
   "Validate HTTP request methods"
 
   if (is.null(method) || !is.character(method) || length(method) != 1) {
     return(list(valid = FALSE, error = "Invalid method type"))
   }
 
-  method <- toupper(trimws(method))
-
+  # Method names are case-sensitive, so "get" is not GET
   if (!method %in% allowed_methods) {
-    return(list(valid = FALSE, error = "HTTP method not allowed"))
+    return(list(valid = FALSE, error = "HTTP method not supported"))
   }
 
   return(list(valid = TRUE, sanitized = method))
@@ -216,9 +218,11 @@ validate_request_inputs <- function(path, method, query_string = NULL) {
   }
 
   # Validate method
+  # A method that the server serves on no resource is answered with 501, which
+  # needs no Allow header; a route that serves other methods answers 405
   method_result <- validate_http_method(method)
   if (!method_result$valid) {
-    return(create_validation_error(paste("Invalid method:", method_result$error), 405))
+    return(create_validation_error(paste("Invalid method:", method_result$error), 501))
   }
 
   # Validate query string if provided

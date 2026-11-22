@@ -332,7 +332,31 @@ test_that("serve_static_file serves CSS files", {
 
   expect_equal(result$status, 200)
   expect_equal(result$headers[["Content-Type"]], "text/css")
-  expect_match(result$body, "body")
+  expect_match(rawToChar(result$body), "body")
+})
+
+test_that("serve_static_file sends a file's bytes unchanged", {
+  temp_dir <- create_test_template_dir()
+  on.exit(cleanup_test_template_dir(temp_dir))
+  tm <- TemplateManager$new(temp_dir)
+
+  # Line endings, a missing final newline, and UTF-8 text are kept, so the
+  # body has the size that the entity tag names
+  text <- c(charToRaw("a {}\r\nb {}"), as.raw(c(0xc3, 0xa9)))
+  writeBin(text, file.path(temp_dir, "styles", "exact.css"))
+  result <- tm$serve_static_file("styles/exact.css")
+  expect_identical(result$body, text)
+  expect_match(result$headers[["ETag"]], paste0('^"', length(text), "-"))
+
+  # Fonts and other binary files arrive intact, with their own types
+  font <- as.raw(c(0x77, 0x4f, 0x46, 0x32, 0x00, 0x0a, 0xff, 0x0d))
+  writeBin(font, file.path(temp_dir, "font.woff2"))
+  result <- tm$serve_static_file("font.woff2")
+  expect_identical(result$body, font)
+  expect_equal(result$headers[["Content-Type"]], "font/woff2")
+
+  writeBin(font, file.path(temp_dir, "data.bin"))
+  expect_equal(tm$serve_static_file("data.bin")$headers[["Content-Type"]], "application/octet-stream")
 })
 
 test_that("serve_static_file lets browsers keep a file and answers 304 for an unchanged one", {

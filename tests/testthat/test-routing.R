@@ -303,7 +303,7 @@ test_that("handle_http_request validates request inputs", {
 
   result <- handle_http_request(req, config, template_manager, connection_manager)
 
-  expect_equal(result$status, 405)
+  expect_equal(result$status, 501)
 })
 
 test_that("handle_http_request routes valid requests", {

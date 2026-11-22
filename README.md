@@ -130,7 +130,7 @@ The proxy forwards traffic to an app only when the app's own process is listenin
 
 The proxy applies these limits:
 
-- The proxy forwards `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, and `OPTIONS` requests. Other methods receive HTTP 405.
+- The proxy forwards `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, and `OPTIONS` requests. Other methods receive HTTP 501 (Not Implemented).
 - If a running app does not accept connections, the proxy returns HTTP 503. Once the app accepts a connection, a proxied HTTP request fails with HTTP 502 only if the app sends no data for 10 minutes; there is no limit on total transfer time.
 - A response reaches the browser once the app has finished sending it. A response that an app streams, such as server-sent events, is therefore not delivered piece by piece, and a download shows no progress until the proxy has received all of it.
 - Requests with query strings longer than 8,192 characters are rejected with HTTP 400.
@@ -310,9 +310,9 @@ Point each app's `path` at a directory containing one of these entry points:
 | R Markdown | A `.Rmd` document | `runtime: shiny` and Pandoc |
 | Quarto | A `.qmd` document | `server: shiny` and the Quarto CLI |
 
-Detection prefers standard Shiny files, then R Markdown, then Quarto. File extensions are case-sensitive. For document apps, the first matching file in alphabetical order is used; keep one entry document per directory to make the choice explicit.
+Detection prefers standard Shiny files, then R Markdown, then Quarto. Document extensions may be in any letter case, such as `report.rmd`. For document apps, files whose names start with `_` are skipped, as `rmarkdown` and Quarto treat them as partials that other documents include. Of the rest, an `index` or `ui` document is used first, then, as `rmarkdown` chooses, one whose front matter sets `runtime: shiny` or `server: shiny`, then one spelled `.Rmd` or `.qmd`, then the first in alphabetical order; keep one entry document per directory to make the choice explicit.
 
-An app whose directory is missing, or contains none of these entry points, is not started. The reason is written to `server.log`: when a resident app is started, and for on-demand apps when the configuration is loaded and again when someone opens the app. Until the directory is fixed, such an on-demand app is shown as **unavailable** and its landing page tile is disabled.
+An app whose directory is missing, or contains none of these entry points, is not started. The reason is written to `server.log`: when a resident app is started, and for on-demand apps when the configuration is loaded and again when someone opens the app. Until the directory is fixed, such an on-demand app is shown as **unavailable** and its landing page tile is disabled. The status changes as soon as files are added to or removed from the directory, or within 30 seconds for a change that leaves the directory's modification time alone, such as a fixed permission or a file copied to a FAT or exFAT drive.
 
 A Quarto document is rendered before it is served, which can take many seconds. To keep on-demand starts and restarts fast, the server renders it only when the rendered page (`{name}.html`, next to the `.qmd`) is missing or older than another file in the app directory. Changes outside that directory, such as an upgraded package, are not noticed; delete the `.html` file to force a render at the next start. The app's error log records whether the document was rendered.
 

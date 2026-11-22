@@ -42,6 +42,11 @@ const { chromium } = require('playwright');
         return route.fulfill({ contentType: 'application/json',
           body: JSON.stringify({ success: true, message: 'App live restarted' }) });
       }
+      if (pathname === '/api/apps/dormant/restart') {
+        // An unexpected error is answered with the "error" field alone
+        return route.fulfill({ status: 500, contentType: 'application/json',
+          body: JSON.stringify({ error: '500 - Unexpected error; see server.log for the reason' }) });
+      }
       const data = pathname === '/api/connections' ? connections
         : pathname === '/api/status' ? { total_apps: 1, running_apps: runningApps, total_connections: 2, uptime_seconds: 3725,
             server_memory_bytes: 90 * 1024 * 1024, apps_memory_bytes: 1.5 * 1024 ** 3, ...lastReload }
@@ -137,7 +142,12 @@ const { chromium } = require('playwright');
     await page.waitForFunction(() => document.getElementById('notice').textContent === 'App live restarted');
     await page.waitForFunction(() => Array.from(document.querySelectorAll('#systemStatus .status-card'))
       .some(card => card.textContent === 'Running apps0'), null, { timeout: 5000 });
-    console.log('PASS: hostile headers and app paths render literally; ordinary metadata, empty-state, landing app-set reload, theme toggling, and the refresh after a restart work.');
+    // A failed restart shows the server's reason, not "undefined"
+    await page.locator('#appsContainer .app-card').filter({ hasText: 'dormant' })
+      .getByRole('button', { name: 'Restart', exact: true }).click();
+    await page.waitForFunction(() => document.getElementById('notice').textContent ===
+      'Failed to restart dormant: Unexpected error; see server.log for the reason');
+    console.log('PASS: hostile headers and app paths render literally; ordinary metadata, empty-state, landing app-set reload, theme toggling, the refresh after a restart, and a failed restart\'s reason work.');
   } finally {
     await browser.close();
   }

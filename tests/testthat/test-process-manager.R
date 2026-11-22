@@ -78,6 +78,83 @@ test_that("an on-demand app whose directory cannot be served is unavailable unti
   expect_equal(pm$get_app_status("ondemand")$status, "dormant")
 })
 
+test_that("a dormant app's directory is looked at again only once it changes", {
+  app_dir <- tempfile("tss-app")
+  dir.create(app_dir)
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  writeLines("# placeholder", file.path(app_dir, "app.R"))
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "ondemand", path = app_dir, port = 3001, resident = FALSE)))
+  pm <- ProcessManager$new(config)
+
+  checks <- 0
+  local_mocked_bindings(app_start_problem = function(app_config) {
+    checks <<- checks + 1
+    tryCatch({
+      detect_app_type(normalizePath(app_config$path, mustWork = FALSE))
+      NULL
+    }, error = function(e) conditionMessage(e))
+  })
+
+  # Every landing page asks every few seconds; one look serves them all
+  Sys.setFileTime(app_dir, Sys.time() - 60)
+  for (i in 1:3) expect_equal(pm$get_app_status("ondemand")$status, "dormant")
+  expect_equal(checks, 1)
+
+  # Removing the app's entry point changes the directory
+  unlink(file.path(app_dir, "app.R"))
+  expect_equal(pm$get_app_status("ondemand")$status, "unavailable")
+  expect_equal(checks, 2)
+
+  # A directory changed moments before it was looked at is looked at again,
+  # as its time may be recorded in whole seconds. A time ahead of the clock
+  # stands for that moment however slowly these lines run.
+  writeLines("# placeholder", file.path(app_dir, "app.R"))
+  Sys.setFileTime(app_dir, Sys.time() + 60)
+  checks <- 0
+  expect_equal(pm$get_app_status("ondemand")$status, "dormant")
+  expect_equal(pm$get_app_status("ondemand")$status, "dormant")
+  expect_equal(checks, 2)
+
+  # A reload forgets what was found
+  Sys.setFileTime(app_dir, Sys.time() - 60)
+  pm$get_app_status("ondemand")
+  checks <- 0
+  pm$get_app_status("ondemand")
+  expect_equal(checks, 0)
+  config$reset_app_state()
+  pm$get_app_status("ondemand")
+  expect_equal(checks, 1)
+})
+
+test_that("a finding about an app directory is reused for a limited time", {
+  app_dir <- tempfile("tss-app")
+  dir.create(app_dir)
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  Sys.setFileTime(app_dir, Sys.time() - 60)
+  config <- ShinyServerConfig$new()
+  app <- list(name = "ondemand", path = app_dir, port = 3001, resident = FALSE)
+  config$config <- list(apps = list(app))
+
+  # The directory is read after the time that the finding records, so the
+  # 2-second margin counts from before the read, however long it takes
+  entered <- NULL
+  local_mocked_bindings(app_start_problem = function(app_config) {
+    entered <<- c(entered, as.numeric(Sys.time()))
+    "No app.R found"
+  })
+  expect_equal(config$cached_start_problem(app), "No app.R found")
+  expect_lte(as.numeric(config$start_problems$ondemand$read_at), entered[1])
+
+  # A fixed permission, or a file added on a FAT or exFAT drive, can leave the
+  # directory's time unchanged, so an old finding is not used
+  expect_equal(config$cached_start_problem(app), "No app.R found")
+  expect_length(entered, 1)
+  config$START_PROBLEM_MAX_AGE_SECONDS <- 0
+  expect_equal(config$cached_start_problem(app), "No app.R found")
+  expect_length(entered, 2)
+})
+
 test_that("an app that is not running has no pid field, which JSON would show as {}", {
   app_dir <- make_test_app_dir()
   on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
@@ -1134,6 +1211,90 @@ test_that("detect_app_type names what a directory holds, in order of preference"
   clear()
   add("server.R")
   expect_equal(detect_app_type(app_dir), list(type = "shiny"))
+
+  # rmarkdown and Quarto accept a document's extension in any letter case
+  clear()
+  add("dash.QMD")
+  expect_equal(detect_app_type(app_dir)$type, "qmd")
+  expect_equal(basename(detect_app_type(app_dir)$file), "dash.QMD")
+  add("report.rmd")
+  expect_equal(detect_app_type(app_dir)$type, "rmd")
+  expect_equal(basename(detect_app_type(app_dir)$file), "report.rmd")
+})
+
+test_that("detect_app_type picks the document that rmarkdown would serve", {
+  app_dir <- tempfile("tss-detect")
+  dir.create(app_dir)
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  add <- function(...) for (name in c(...)) writeLines("", file.path(app_dir, name))
+  clear <- function() unlink(list.files(app_dir, full.names = TRUE))
+  picked <- function() basename(detect_app_type(app_dir)$file)
+
+  # A child document in another letter case does not displace the main one
+  add("report.Rmd", "appendix.rmd")
+  expect_equal(picked(), "report.Rmd")
+  clear()
+  add("dash.qmd", "aside.QMD")
+  expect_equal(picked(), "dash.qmd")
+
+  # Partials, whose names start with "_", are never served
+  clear()
+  add("_child.Rmd", "app.Rmd")
+  expect_equal(picked(), "app.Rmd")
+  clear()
+  add("_include.qmd", "Dashboard.qmd")
+  expect_equal(picked(), "Dashboard.qmd")
+  clear()
+  add("_child.Rmd", "_setup.qmd")
+  # The reason names the partials, which would otherwise seem to be documents
+  expect_error(detect_app_type(app_dir),
+    "No app.R, ui.R and server.R, .Rmd, or .qmd file found in .*\\(_child.Rmd, _setup.qmd not served: a name that starts with \"_\" marks a partial")
+
+  # An index document is preferred, in any letter case
+  clear()
+  add("about.Rmd", "Index.rmd", "notes.Rmd")
+  expect_equal(picked(), "Index.rmd")
+
+  # Otherwise, as in rmarkdown::run(), a Shiny document is preferred to a static one
+  clear()
+  front <- function(name, ...) writeLines(c("---", ..., "---", "", "Text"), file.path(app_dir, name))
+  front("appendix.Rmd", "title: Appendix")
+  front("report.Rmd", "title: Report", "runtime: shiny")
+  expect_equal(picked(), "report.Rmd")
+  # Among Shiny documents, the usual spelling of the extension still comes first
+  front("notes.rmd", "runtime: shiny_prerendered")
+  expect_equal(picked(), "report.Rmd")
+  clear()
+  front("appendix.Rmd", "title: Appendix")
+  front("tutorial.Rmd", "runtime: shiny_prerendered")
+  expect_equal(picked(), "tutorial.Rmd")
+  clear()
+  front("about.qmd", "title: About")
+  front("dash.qmd", "server:", "  type: shiny")
+  expect_equal(picked(), "dash.qmd")
+  front("board.qmd", "server: shiny")
+  expect_equal(picked(), "board.qmd")
+})
+
+test_that("is_shiny_document reads the runtime that a document's front matter asks for", {
+  doc <- tempfile(fileext = ".Rmd")
+  on.exit(unlink(doc), add = TRUE)
+  shiny <- function(...) {
+    writeLines(c(...), doc)
+    is_shiny_document(doc)
+  }
+
+  expect_true(shiny("---", "runtime: shiny", "---"))
+  expect_true(shiny("---", "runtime: shinyrmd", "---"))
+  expect_true(shiny("---", "server: shiny", "---"))
+  expect_true(shiny("---", "server:", "  type: shiny", "---"))
+  expect_false(shiny("---", "title: Static", "---"))
+  expect_false(shiny("---", "runtime: static", "server: other", "---"))
+  expect_false(shiny("No front matter"))
+  # Front matter that cannot be read counts as none
+  expect_false(shiny("---", "title: [unclosed", "---"))
+  expect_false(shiny("---", "just a string", "---"))
+  expect_false(shiny("---", "runtime: [shiny, other]", "---"))
 })
 
 test_that("detect_app_type explains why a directory cannot be served", {
@@ -1197,6 +1358,26 @@ test_that("a Quarto document is rendered only when its page is out of date", {
   # A change in the same instant as the page may have come after it
   age(data, 200)
   expect_true(quarto_needs_render(qmd))
+})
+
+test_that("a Quarto document with an upper-case extension finds its rendered page", {
+  app_dir <- tempfile("tss-qmd-case")
+  dir.create(file.path(app_dir, "doc_files"), recursive = TRUE)
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  qmd <- file.path(app_dir, "doc.QMD")
+  html <- file.path(app_dir, "doc.html")
+  generated <- file.path(app_dir, "doc_files", "lib.js")
+  for (file in c(qmd, generated)) writeLines("", file)
+  now <- Sys.time()
+
+  expect_true(quarto_needs_render(qmd))
+
+  # Quarto writes doc.html and doc_files for doc.QMD
+  writeLines("", html)
+  Sys.setFileTime(qmd, now - 300)
+  Sys.setFileTime(html, now - 200)
+  Sys.setFileTime(generated, now - 100)
+  expect_false(quarto_needs_render(qmd))
 })
 
 test_that("start_app leaves the Quarto render decision to the app's own process", {
@@ -1536,7 +1717,8 @@ test_that("a restart that cannot start the app reports the reason", {
     path = file.path(tempdir(), "tss-no-such-app"))), restart_delay = 0, log_dir = tempdir())
   result <- ProcessManager$new(config)$restart_app("app")
   expect_false(result$success)
-  expect_match(result$message, "App directory not found")
+  # The dashboard shows this message as it is, so it names the app
+  expect_match(result$message, "^Failed to restart app app: App directory not found")
   expect_null(config$get_app_process("app"))
 })
 

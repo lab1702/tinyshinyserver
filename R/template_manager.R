@@ -228,25 +228,27 @@ TemplateManager <- setRefClass("TemplateManager",
         "css" = "text/css",
         "js" = "application/javascript",
         "html" = "text/html",
+        "txt" = "text/plain",
+        "json" = "application/json",
         "png" = "image/png",
         "jpg" = "image/jpeg",
         "jpeg" = "image/jpeg",
         "gif" = "image/gif",
         "svg" = "image/svg+xml",
+        "webp" = "image/webp",
         "ico" = "image/x-icon",
-        "text/plain"
+        "woff" = "font/woff",
+        "woff2" = "font/woff2",
+        "ttf" = "font/ttf",
+        "otf" = "font/otf",
+        "application/octet-stream"
       )
 
-      # Read file content
+      # Send the file's bytes unchanged, text and binary alike, so that the
+      # body is what the entity tag describes
       tryCatch(
         {
-          if (content_type %in% c("image/png", "image/jpeg", "image/gif", "image/x-icon")) {
-            # Binary file
-            content <- readBin(normalized_path, "raw", info$size)
-          } else {
-            # Text file
-            content <- paste(readLines(normalized_path, encoding = "UTF-8", warn = FALSE), collapse = "\n")
-          }
+          content <- readBin(normalized_path, "raw", info$size)
 
           return(list(
             status = 200,
