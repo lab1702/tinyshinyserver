@@ -52,6 +52,10 @@ documented in NEWS.md and README.md.
 * App processes write stdout and stderr directly to their log files instead
   of unread pipes that could fill and hang the app. The previous run's logs
   are kept.
+* App processes start in their app directory and read the `.Rprofile`
+  there, as R does when the app is run on its own, so an app's own profile,
+  such as one that activates renv, applies to it. Every app read the
+  `.Rprofile` of the directory that `start_tss()` was called from instead.
 * On-demand apps stop 30 seconds after their last WebSocket closes, so
   reloading a page no longer kills and cold-starts the app.
 * The proxy forwards requests and WebSocket sessions only when the app's own
@@ -100,6 +104,11 @@ documented in NEWS.md and README.md.
   Responses that cannot have a body (HTTP 204 and 304, and the answer to a
   `HEAD` request) are sent without one; for clients that accept gzip, a
   compressed empty body followed them.
+* Every answer to a `HEAD` request that the proxy or the management server
+  makes itself, such as the landing page, `/health`, or the 503 for an app
+  that is starting, is sent without a body. The body followed the headers,
+  so a client that sent another request on the same connection read it as
+  the start of the next answer.
 * The proxy forwards `PATCH` requests, which it answered with HTTP 405.
 * An app receives the request path as the client sent it. `.` and `..`
   segments, including their `%2e` spellings, were removed on the way.
@@ -142,7 +151,8 @@ documented in NEWS.md and README.md.
 * A Quarto document is rendered only when its rendered page is missing or
   older than another file in the app directory, instead of on every start.
   The app's own process makes that check, so reading a large app directory
-  does not hold up the other apps' traffic.
+  does not hold up the other apps' traffic. When `log_dir` lies in the app
+  directory, the server's log files there do not count as changes.
 * A configuration in which two apps serve the same Quarto document, or the
   same prerendered R Markdown document, is rejected when it is loaded or
   reloaded. Such documents are rendered into their own directory, and two
@@ -202,10 +212,10 @@ documented in NEWS.md and README.md.
 * Local: Windows 11 x64 (build 26300), x86_64-w64-mingw32,
   R 4.6.2 (2026-10-29 ucrt).
   Checked with `R CMD check --as-cran` on the source tarball built from
-  commit 2ba3432, including the PDF manual and the CRAN incoming
+  commit f575406, including the PDF manual and the CRAN incoming
   feasibility check.
-* R-hub (commit 2ba3432, run
-  https://github.com/lab1702/tinyshinyserver/actions/runs/45062198086):
+* R-hub (commit f575406, run
+  https://github.com/lab1702/tinyshinyserver/actions/runs/45066577095):
   linux (R-devel), windows (R-devel), macos-arm64 (R-devel), gcc16, and
   ubuntu-gcc12.
 
@@ -216,10 +226,10 @@ from the build, so the package checked is identical.
 
 Local: 0 errors | 0 warnings | 0 notes.
 
-R-hub at commit 2ba3432: 0 errors | 0 warnings | 0 notes on all five platforms.
+R-hub at commit f575406: 0 errors | 0 warnings | 0 notes on all five platforms.
 
-Test results: 2139 passes locally and on all five R-hub platforms, with 8
-intentional skips on CRAN (a timing check of the port test and seven tests
+Test results: 2192 passes locally and on all five R-hub platforms, with 9
+intentional skips on CRAN (a timing check of the port test and eight tests
 that start real R processes). All runs had 0 failures and 0 warnings. One
 test's expectation count depends on timing.
 
