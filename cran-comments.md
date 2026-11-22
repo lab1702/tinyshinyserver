@@ -52,10 +52,12 @@ documented in NEWS.md and README.md.
 * App processes write stdout and stderr directly to their log files instead
   of unread pipes that could fill and hang the app. The previous run's logs
   are kept.
-* App processes start in their app directory and read the `.Rprofile`
-  there, as R does when the app is run on its own, so an app's own profile,
-  such as one that activates renv, applies to it. Every app read the
-  `.Rprofile` of the directory that `start_tss()` was called from instead.
+* App processes start in their app directory and read the `.Renviron` and
+  `.Rprofile` there, as R does when the app is run on its own, so an app's
+  own environment variables and profile, such as one that activates renv,
+  apply to it; without them, the user's `~/.Renviron` and `~/.Rprofile`
+  apply. Every app read the `.Renviron` and `.Rprofile` of the directory
+  that `start_tss()` was called from instead.
 * On-demand apps stop 30 seconds after their last WebSocket closes, so
   reloading a page no longer kills and cold-starts the app.
 * The proxy forwards requests and WebSocket sessions only when the app's own
@@ -95,6 +97,8 @@ documented in NEWS.md and README.md.
   configuration as well as reported.
 * Proxied responses no longer carry two `Date` headers, and a response that
   an app sends without a `Content-Type` is no longer labelled `text/html`.
+  A response keeps its headers when one of them holds a byte that is not
+  valid UTF-8, such as a Latin-1 file name; every header was dropped.
 * A request body that the client sent without a `Content-Type` reaches the
   app without one; the proxy labelled it
   `application/x-www-form-urlencoded`. A request with `Content-Length: 0`
@@ -116,8 +120,10 @@ documented in NEWS.md and README.md.
   `HEAD` with HTTP 405; they answered every method as a `GET`. A method that
   neither server supports on any page, such as `PROPFIND`, gets HTTP 501
   instead of a 405 without the `Allow` header that a 405 requires. The
-  restart endpoint accepts only `/api/apps/{name}/restart`; a path with extra
-  segments restarted an app.
+  management dashboard and its `GET` endpoints answer `HEAD`, which returned
+  HTTP 404, and a management page or action asked with a method it does not
+  serve gets HTTP 405 instead of 404. The restart endpoint accepts only
+  `/api/apps/{name}/restart`; a path with extra segments restarted an app.
 * Shutdown and a configuration reload try once more to stop an app process
   that outlives the first attempt, and `server.log` names any app that is
   still running; it reported that every app had stopped. The log records the
@@ -152,7 +158,9 @@ documented in NEWS.md and README.md.
   older than another file in the app directory, instead of on every start.
   The app's own process makes that check, so reading a large app directory
   does not hold up the other apps' traffic. When `log_dir` lies in the app
-  directory, the server's log files there do not count as changes.
+  directory, the server's log files there do not count as changes. The
+  example dashboard's data now cover fixed dates, since its rendered date
+  range drifted away from data generated at every start.
 * A configuration in which two apps serve the same Quarto document, or the
   same prerendered R Markdown document, is rejected when it is loaded or
   reloaded. Such documents are rendered into their own directory, and two
@@ -162,7 +170,10 @@ documented in NEWS.md and README.md.
   seconds after the last request. It is left to finish, for up to 10 minutes
   from its start. A start slower than the two minutes for which the
   visitor's page reloads, such as a Quarto render, used to be thrown away
-  and begun again on the next visit.
+  and begun again on the next visit. Readiness checks keep watching an app
+  whose process is still running after the startup window, for up to 10
+  minutes, and log it as ready when it answers instead of logging that it
+  failed to become ready.
 * New `idle_timeout_minutes` and `log_level` options set how long a session
   may carry no WebSocket message before it is closed (30 minutes by
   default, as before; 0 keeps idle sessions open) and the threshold of the
@@ -212,10 +223,10 @@ documented in NEWS.md and README.md.
 * Local: Windows 11 x64 (build 26300), x86_64-w64-mingw32,
   R 4.6.2 (2026-10-29 ucrt).
   Checked with `R CMD check --as-cran` on the source tarball built from
-  commit f575406, including the PDF manual and the CRAN incoming
+  commit 23d2697, including the PDF manual and the CRAN incoming
   feasibility check.
-* R-hub (commit f575406, run
-  https://github.com/lab1702/tinyshinyserver/actions/runs/45066577095):
+* R-hub (commit 23d2697, run
+  https://github.com/lab1702/tinyshinyserver/actions/runs/45071314610):
   linux (R-devel), windows (R-devel), macos-arm64 (R-devel), gcc16, and
   ubuntu-gcc12.
 
@@ -226,9 +237,9 @@ from the build, so the package checked is identical.
 
 Local: 0 errors | 0 warnings | 0 notes.
 
-R-hub at commit f575406: 0 errors | 0 warnings | 0 notes on all five platforms.
+R-hub at commit 23d2697: 0 errors | 0 warnings | 0 notes on all five platforms.
 
-Test results: 2192 passes locally and on all five R-hub platforms, with 9
+Test results: 2311 passes locally and on all five R-hub platforms, with 9
 intentional skips on CRAN (a timing check of the port test and eight tests
 that start real R processes). All runs had 0 failures and 0 warnings. One
 test's expectation count depends on timing.
