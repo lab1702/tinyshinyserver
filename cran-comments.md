@@ -50,10 +50,10 @@ that can affect existing users are:
 * Local: Windows 11 x64 (build 26300), x86_64-w64-mingw32,
   R 4.6.2 (2026-10-29 ucrt).
   Checked with `R CMD check --as-cran` on the source tarball built from
-  commit dabd099, including the PDF manual and the CRAN incoming
+  commit 6be7e49, including the PDF manual and the CRAN incoming
   feasibility check.
-* R-hub (commit dabd099, run
-  https://github.com/lab1702/tinyshinyserver/actions/runs/45076115854):
+* R-hub (commit 6be7e49, run
+  https://github.com/lab1702/tinyshinyserver/actions/runs/45080106067):
   linux (R-devel), windows (R-devel), macos-arm64 (R-devel), gcc16, and
   ubuntu-gcc12.
 
@@ -64,9 +64,9 @@ from the build, so the package checked is identical.
 
 Local: 0 errors | 0 warnings | 0 notes.
 
-R-hub at commit dabd099: 0 errors | 0 warnings | 0 notes on all five platforms.
+R-hub at commit 6be7e49: 0 errors | 0 warnings | 0 notes on all five platforms.
 
-Test results: 2312 passes locally and on all five R-hub platforms, with 9
+Test results: 2380 passes locally and on all five R-hub platforms, with 9
 intentional skips on CRAN (a timing check of the port test and eight tests
 that start real R processes). All runs had 0 failures and 0 warnings. One
 test's expectation count depends on timing.
