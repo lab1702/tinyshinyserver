@@ -316,6 +316,8 @@ An app whose directory is missing, or contains none of these entry points, is no
 
 A Quarto document is rendered before it is served, which can take many seconds. To keep on-demand starts and restarts fast, the server renders it only when the rendered page (`{name}.html`, next to the `.qmd`) is missing or older than another file in the app directory. Changes outside that directory, such as an upgraded package, are not noticed; delete the `.html` file to force a render at the next start. The app's error log records whether the document was rendered.
 
+Quarto documents, and R Markdown documents that `rmarkdown` serves prerendered (`runtime: shinyrmd` or `runtime: shiny_prerendered`, or `server: shiny`), are rendered into their own directory, as `{name}.html` and a `{name}_files` directory. Two renders of one document at once overwrite each other's files and can leave a broken page, which is then served at every start because it is newer than the document. A configuration in which two apps use the same such directory is therefore rejected. Do not serve one from two server instances either; give each instance its own copy of the directory. If a page is broken, delete its `.html` file so that it is rendered again. Other R Markdown documents are rendered into a temporary directory for each visit, so their directories may be shared.
+
 To add an app, create its directory, add an entry with `name` and `path` to the configuration, and click **Reload Config & Restart All** in the management dashboard.
 
 For local development, run a copied example directly from R:

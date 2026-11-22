@@ -166,6 +166,12 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         }
       }
 
+      # Two apps cannot render one document into its directory
+      shared_problem <- shared_document_problem(new_config$apps)
+      if (!is.null(shared_problem)) {
+        stop("Configuration validation failed: ", shared_problem)
+      }
+
       return(new_config)
     },
     read_reload_config = function() {

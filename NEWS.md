@@ -148,6 +148,8 @@
 
 * A Quarto document is rendered only when its rendered page is missing or older than another file in the app directory, instead of on every start. On-demand Quarto apps and restarts no longer wait for a full render each time. Delete the document's `.html` file to force a render. The check runs in the app's own process, so reading a large app directory does not hold up the other apps' traffic, and the app's error log records whether the document was rendered.
 
+* A configuration in which two apps serve the same Quarto document, or the same prerendered R Markdown document (`runtime: shinyrmd` or `shiny_prerendered`, or `server: shiny`), is rejected when it is loaded or reloaded. Such documents are rendered into their own directory, and two renders at once could leave a broken page or none, which was then served at every start because it was newer than the document. The README explains how to recover, and that two server instances must not share such a directory either.
+
 * An app receives the request path exactly as the client sent it. `.` and `..` segments were removed on the way, including their `%2e` spellings, so `/proxy/app/a/%2e%2e/c` reached the app as `/c`.
 
 * Shutdown and a configuration reload try once more to stop an app process that outlives the first attempt, and `server.log` names any app that is still running afterwards. It reported "All applications stopped" and "Server shutdown complete" regardless.

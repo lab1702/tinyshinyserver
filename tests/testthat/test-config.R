@@ -1256,3 +1256,53 @@ test_that("on-demand apps that cannot start are reported when the configuration 
   expect_length(warnings, 1)
   expect_match(warnings, "On-demand app ghost cannot start: App directory not found")
 })
+
+# ============================================================================
+# Apps sharing a directory
+# ============================================================================
+
+test_that("apps may not share a document that is rendered into its directory", {
+  root <- tempfile("tss-shared")
+  dir.create(root)
+  on.exit(unlink(root, recursive = TRUE), add = TRUE)
+  document <- function(dir, file, ...) {
+    dir.create(file.path(root, dir))
+    writeLines(c("---", ..., "---", "", "Text"), file.path(root, dir, file))
+    file.path(root, dir)
+  }
+  quarto <- document("quarto", "dash.qmd", "server: shiny")
+  prerendered <- document("prerendered", "tutorial.Rmd", "runtime: shiny_prerendered")
+  shinyrmd <- document("shinyrmd", "tutorial.Rmd", "runtime: shinyrmd")
+  server_shiny <- document("server-shiny", "report.Rmd", "server: shiny")
+  server_type <- document("server-type", "report.Rmd", "server:", "  type: shiny")
+  runtime_shiny <- document("runtime-shiny", "report.Rmd", "runtime: shiny")
+  shiny_app <- file.path(root, "app")
+  dir.create(shiny_app)
+  writeLines("shiny::shinyApp(shiny::fluidPage(), function(input, output) NULL)", file.path(shiny_app, "app.R"))
+
+  read_apps <- function(...) {
+    apps <- lapply(list(...), function(pair) list(name = pair[[1]], path = pair[[2]]))
+    path <- tempfile(fileext = ".json")
+    on.exit(unlink(path), add = TRUE)
+    writeLines(jsonlite::toJSON(list(apps = apps, log_dir = tempdir(), starting_port = 3001), auto_unbox = TRUE), path)
+    ShinyServerConfig$new()$read_config(path)
+  }
+
+  # The same directory however it is spelled
+  expect_error(read_apps(c("a", quarto), c("b", paste0(quarto, "/"))),
+    "Apps a and b serve the same document, dash.qmd, which is rendered into its directory", fixed = TRUE)
+  expect_error(read_apps(c("a", quarto), c("b", file.path(quarto, "..", "quarto")), c("c", quarto)),
+    "Apps a, b, and c serve the same document, dash.qmd", fixed = TRUE)
+  # rmarkdown::run() renders a prerendered Shiny document in place too
+  for (dir in c(prerendered, shinyrmd, server_shiny, server_type)) {
+    expect_error(read_apps(c("a", dir), c("b", dir)), "serve the same document", fixed = TRUE)
+  }
+
+  # Each document rendered once, a document rendered into a temporary
+  # directory, a Shiny app, and a missing directory may be shared
+  expect_length(read_apps(c("a", quarto), c("b", prerendered))$apps, 2)
+  expect_length(read_apps(c("a", runtime_shiny), c("b", runtime_shiny))$apps, 2)
+  expect_length(read_apps(c("a", shiny_app), c("b", shiny_app))$apps, 2)
+  missing <- file.path(root, "missing")
+  expect_length(read_apps(c("a", missing), c("b", missing))$apps, 2)
+})

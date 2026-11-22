@@ -347,3 +347,19 @@ test_that("the event loop runs a requested reload", {
   expect_equal(server$config$last_reload, list(success = FALSE, message = "reload failure is logged, not fatal"))
   expect_true(server$is_shutting_down)
 })
+
+test_that("read_reload_config reports apps that share a rendered document", {
+  path <- tempfile(fileext = ".json")
+  app_dir <- tempfile("tss-shared")
+  dir.create(app_dir)
+  on.exit(unlink(c(path, app_dir), recursive = TRUE), add = TRUE)
+  writeLines(c("---", "server: shiny", "---"), file.path(app_dir, "dash.qmd"))
+  write_reload_config(path, list(list(name = "one", path = app_dir)))
+  local_mocked_bindings(is_port_in_use = function(...) FALSE)
+  config <- create_server_config(path)
+
+  write_reload_config(path, list(list(name = "one", path = app_dir), list(name = "two", path = app_dir)))
+  check <- config$read_reload_config()
+  expect_false(check$valid)
+  expect_match(check$error, "Apps one and two serve the same document, dash.qmd", fixed = TRUE)
+})

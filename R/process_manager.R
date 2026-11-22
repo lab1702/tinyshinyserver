@@ -71,13 +71,66 @@ pick_document <- function(app_path, extension) {
 # starts with "shiny", or Quarto's "server: shiny". Front matter that cannot be
 # read counts as none.
 is_shiny_document <- function(file) {
-  yaml <- tryCatch(rmarkdown::yaml_front_matter(file), error = function(e) list())
-  if (!is.list(yaml)) yaml <- list()
+  yaml <- read_front_matter(file)
   runtime <- yaml[["runtime"]]
   server <- yaml[["server"]]
   if (is.list(server)) server <- server[["type"]]
   is_string <- function(x) is.character(x) && length(x) == 1 && !is.na(x)
   (is_string(runtime) && startsWith(runtime, "shiny")) || (is_string(server) && identical(server, "shiny"))
+}
+
+# Whether rmarkdown::run() serves a document as a prerendered Shiny document,
+# as it decides it: "runtime: shinyrmd" or "shiny_prerendered", or Quarto's
+# "server: shiny"
+is_prerendered_document <- function(file) {
+  yaml <- read_front_matter(file)
+  server <- yaml[["server"]]
+  if (is.list(server)) server <- server[["type"]]
+  identical(yaml[["runtime"]], "shinyrmd") || identical(yaml[["runtime"]], "shiny_prerendered") ||
+    identical(server, "shiny")
+}
+
+# A document's front matter, or an empty list when it cannot be read
+read_front_matter <- function(file) {
+  yaml <- tryCatch(rmarkdown::yaml_front_matter(file), error = function(e) list())
+  if (is.list(yaml)) yaml else list()
+}
+
+# The document that an app directory's app renders into that directory before
+# serving it, or NULL. Quarto always renders there, and rmarkdown::run()
+# renders a prerendered Shiny document there; other R Markdown documents are
+# rendered into a temporary directory.
+document_rendered_in_place <- function(app_path) {
+  app <- tryCatch(detect_app_type(app_path), error = function(e) NULL)
+  if (is.null(app) || identical(app$type, "shiny")) {
+    return(NULL)
+  }
+  if (identical(app$type, "qmd") || is_prerendered_document(app$file)) app$file else NULL
+}
+
+# Why apps cannot share their directory, or NULL when none do. A document
+# rendered in place is written by every process that renders it, and two
+# renders at once leave a broken page, or none. The broken page is then
+# newer than the document, so it is served at every start until deleted.
+shared_document_problem <- function(apps) {
+  # Paths that do not exist hold no document, however they are spelled
+  paths <- vapply(apps, function(app) normalizePath(app$path, mustWork = FALSE), character(1))
+  for (path in unique(paths[duplicated(paths)])) {
+    document <- document_rendered_in_place(path)
+    if (is.null(document)) next
+    names <- vapply(apps[paths == path], function(app) app$name, character(1))
+    listed <- if (length(names) == 2) {
+      paste(names, collapse = " and ")
+    } else {
+      paste0(paste(names[-length(names)], collapse = ", "), ", and ", names[length(names)])
+    }
+    return(paste0(
+      "Apps ", listed, " serve the same document, ", basename(document),
+      ", which is rendered into its directory before it is served, and two renders at once",
+      " can leave a broken page. Serve it from one app, or give each app its own copy of the directory"
+    ))
+  }
+  NULL
 }
 
 # Why an app's directory cannot be served, or NULL when it can
