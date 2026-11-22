@@ -42,7 +42,9 @@ documented in NEWS.md and README.md.
 * An unexpected error while answering a request is answered with HTTP 500
   and no detail, and is written to `server.log`. The client used to receive
   the R error message; on Windows, a request for `/templates/nul` returned
-  the server's installation path that way, and now gets HTTP 404.
+  the server's installation path that way, and now gets HTTP 404. The
+  management API's restart endpoint answers an unexpected error the same
+  way.
 * The INFO message for an app's WebSocket connection no longer includes the
   connection's query string, which can carry a token.
 * App processes write stdout and stderr directly to their log files instead
@@ -100,8 +102,10 @@ documented in NEWS.md and README.md.
 * An app receives the request path as the client sent it. `.` and `..`
   segments, including their `%2e` spellings, were removed on the way.
 * The proxy's own pages and endpoints answer methods other than `GET` and
-  `HEAD` with HTTP 405; they answered every method as a `GET`. The restart
-  endpoint accepts only `/api/apps/{name}/restart`; a path with extra
+  `HEAD` with HTTP 405; they answered every method as a `GET`. A method that
+  neither server supports on any page, such as `PROPFIND`, gets HTTP 501
+  instead of a 405 without the `Allow` header that a 405 requires. The
+  restart endpoint accepts only `/api/apps/{name}/restart`; a path with extra
   segments restarted an app.
 * Shutdown and a configuration reload try once more to stop an app process
   that outlives the first attempt, and `server.log` names any app that is
@@ -117,7 +121,15 @@ documented in NEWS.md and README.md.
   process that exited, every 10 to 15 seconds; the reason is now written to
   `server.log`. An on-demand app in that state has the new status
   "unavailable" instead of "dormant", and its landing page tile is disabled;
-  opening it could only fail with HTTP 502.
+  opening it could only fail with HTTP 502. That status is looked up again
+  when the directory changes, and at least every 30 seconds, instead of for
+  every status request from every open landing page.
+* A directory with several documents serves the one that `rmarkdown` picks.
+  Partials, whose names start with `_`, are never served, and an `index` or
+  `ui` document comes first, then one whose front matter asks for a Shiny
+  runtime; the first document in alphabetical order was served, which could
+  be a partial or a static page. Document extensions may be in any letter
+  case, such as `report.rmd`, as `rmarkdown` and Quarto accept them.
 * A restart requested from the dashboard or API no longer waits for
   `restart_delay`, which applies to restarts after a failure. Restarting an
   on-demand app stops it until it is next opened.
@@ -158,7 +170,11 @@ documented in NEWS.md and README.md.
   option sets the name shown on both pages.
 * The pages' style sheet and script are sent with `Cache-Control` and `ETag`
   headers, so browsers reuse them instead of fetching them again for every
-  page.
+  page. Files under `/templates/` are sent as their bytes; files other than
+  images were read as lines of text, which changed their line endings and
+  would have corrupted fonts.
+* When restarting an app or shutting down fails, the management dashboard
+  shows the server's reason instead of "undefined".
 * `start_tss()` configures logging only in the package's own logger
   namespace, leaving the caller's logger settings unchanged. Port assignments
   are written to `server.log`.
@@ -179,10 +195,10 @@ documented in NEWS.md and README.md.
 * Local: Windows 11 x64 (build 26300), x86_64-w64-mingw32,
   R 4.6.2 (2026-10-29 ucrt).
   Checked with `R CMD check --as-cran` on the source tarball built from
-  commit 1eeaf3b, including the PDF manual and the CRAN incoming
+  commit 2332e5e, including the PDF manual and the CRAN incoming
   feasibility check.
-* R-hub (commit 1eeaf3b, run
-  https://github.com/lab1702/tinyshinyserver/actions/runs/44841826586):
+* R-hub (commit 2332e5e, run
+  https://github.com/lab1702/tinyshinyserver/actions/runs/45055914702):
   linux (R-devel), windows (R-devel), macos-arm64 (R-devel), gcc16, and
   ubuntu-gcc12.
 
@@ -193,9 +209,9 @@ from the build, so the package checked is identical.
 
 Local: 0 errors | 0 warnings | 0 notes.
 
-R-hub at commit 1eeaf3b: 0 errors | 0 warnings | 0 notes on all five platforms.
+R-hub at commit 2332e5e: 0 errors | 0 warnings | 0 notes on all five platforms.
 
-Test results: 2069 passes locally and on all five R-hub platforms, with 8
+Test results: 2127 passes locally and on all five R-hub platforms, with 8
 intentional skips on CRAN (a timing check of the port test and seven tests
 that start real R processes). All runs had 0 failures and 0 warnings. One
 test's expectation count depends on timing.
