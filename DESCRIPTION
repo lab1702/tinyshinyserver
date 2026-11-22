@@ -5,10 +5,12 @@ Version: 0.3.0
 Authors@R: c(
     person(given = "Lars", family = "Bernhardsson", role = c("aut", "cre"), email = "cran.sherry228@passinbox.com")
     )
-Description: A lightweight, 'WebSocket'-enabled proxy server for hosting multiple
-    'shiny' applications with automatic health monitoring, session management,
-    and resource cleanup. Provides a simple entry point to run the server using
-    a JSON configuration file.
+Description: A lightweight proxy server that hosts multiple 'shiny'
+    applications, including interactive 'R Markdown' documents and 'Quarto'
+    dashboards, each in its own R process. It forwards HTTP and 'WebSocket'
+    traffic, keeps apps running or starts them on demand, restarts failed
+    apps, and provides a web dashboard for monitoring and management. The
+    server is configured with a JSON file.
 License: MIT + file LICENSE
 Encoding: UTF-8
 Depends: R (>= 4.1.0)

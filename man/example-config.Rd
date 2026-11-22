@@ -5,31 +5,30 @@
 \title{Example Configuration File}
 \description{
 The package includes an example configuration file, \file{config.json},
-together with the four apps it refers to. Use it to try the server or as a
+and the four apps that it serves. Use them to try the server, or as a
 starting point for your own configuration. See \code{\link{config-format}}
 for a description of each field.
 }
 \details{
-The example configuration includes:
-\itemize{
-  \item Four example apps: a single-file Shiny app (\code{sales}), a
-    multi-file Shiny app (\code{inventory}), an interactive R Markdown
-    document (\code{reports}), and a Quarto dashboard (\code{dashboard})
-  \item A mix of resident and on-demand apps
-  \item The default proxy and management ports (3838 and 3839)
-  \item Automatic app port assignment starting from 3001
-  \item A log directory
+The example configuration uses the default proxy and management ports
+(3838 and 3839), assigns app ports from 3001, and serves these apps:
+\describe{
+  \item{\code{sales}}{A Shiny app in one file, \file{app.R}. Resident: it
+    starts with the server.}
+  \item{\code{inventory}}{A Shiny app in two files, \file{ui.R} and
+    \file{server.R}. On demand: it starts when first opened.}
+  \item{\code{reports}}{An interactive R Markdown flexdashboard. On
+    demand. Needs Pandoc and the \pkg{DT}, \pkg{plotly}, \pkg{dplyr}, and
+    \pkg{flexdashboard} packages.}
+  \item{\code{dashboard}}{A Quarto dashboard. Resident, so the server
+    needs the Quarto CLI from the start. Needs the \pkg{DT},
+    \pkg{plotly}, and \pkg{dplyr} packages.}
 }
 
-The app paths are relative, so copy the \file{examples} directory and run
-the server from the directory that contains the copy, as in the example
-below. The \code{reports} and \code{dashboard} apps require the \pkg{DT},
-\pkg{plotly}, and \pkg{dplyr} packages, and \code{reports} also requires
-\pkg{flexdashboard}. The \code{reports} app needs Pandoc, and the
-\code{dashboard} app, which starts with the server, needs the Quarto CLI.
-
-Locate the installed files with
-\code{system.file("examples", package = "tinyshinyserver")}.
+The app paths and the log directory are relative, so copy the
+\file{examples} directory and run the server from the directory that
+contains the copy, as in the example below. Locate the installed files
+with \code{system.file("examples", package = "tinyshinyserver")}.
 }
 \examples{
 if (interactive()) {

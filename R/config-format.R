@@ -3,7 +3,9 @@
 #' Describes the JSON configuration file that \code{\link{start_tss}} reads.
 #'
 #' @section Configuration Structure:
-#' The configuration file must be valid JSON with the following structure:
+#' The configuration file must be valid JSON with this structure. Only
+#' \code{apps}, \code{starting_port}, and \code{log_dir} are required; the
+#' other values shown are the defaults.
 #'
 #' \preformatted{
 #' {
@@ -11,35 +13,35 @@
 #'     {
 #'       "name": "app-name",
 #'       "path": "./path/to/app",
-#'       "resident": true,
+#'       "resident": false,
 #'       "appstart_timeout": 2
 #'     }
 #'   ],
 #'   "starting_port": 3001,
+#'   "log_dir": "./logs",
 #'   "proxy_port": 3838,
 #'   "proxy_host": "127.0.0.1",
 #'   "management_port": 3839,
+#'   "base_path": "",
+#'   "title": "Tiny Shiny Server",
 #'   "restart_delay": 5,
 #'   "health_check_interval": 10,
 #'   "max_request_size_mb": 100,
 #'   "idle_timeout_minutes": 30,
-#'   "log_level": "INFO",
-#'   "title": "Tiny Shiny Server",
-#'   "base_path": "",
-#'   "log_dir": "./logs"
+#'   "log_level": "INFO"
 #' }
 #' }
 #'
-#' Relative application paths and \code{log_dir} are resolved from the R working
-#' directory (\code{getwd()}), not the configuration file's directory. JSON does
-#' not allow comments. Fields that the server does not recognize, such as a
-#' misspelled option name, have no effect; they are reported as a warning in
-#' \code{server.log} at startup and after a reload.
+#' Relative app paths and \code{log_dir} are resolved from the R working
+#' directory (\code{getwd()}), not from the configuration file's directory.
+#' JSON does not allow comments. Fields that the server does not recognize,
+#' such as a misspelled option name, have no effect; they are reported as a
+#' warning in \code{server.log} at startup and after a reload.
 #'
 #' @section Required Fields:
 #' \describe{
 #'   \item{\code{apps}}{Array of apps to host. Each app must have a \code{name} and a \code{path}; see \sQuote{Application Configuration}.}
-#'   \item{\code{starting_port}}{First port to try when assigning ports to apps; see \sQuote{Port Assignment}.}
+#'   \item{\code{starting_port}}{First port to try when assigning ports to apps; a whole number from 1 to 65535. See \sQuote{Port Assignment}.}
 #'   \item{\code{log_dir}}{Directory for the server and app logs. The server writes \code{server.log}, and each app writes \code{<name>_output.log} and \code{<name>_error.log}; the previous run's logs are kept as \code{<name>_output.prev.log} and \code{<name>_error.prev.log}.}
 #' }
 #'
@@ -48,32 +50,55 @@
 #'   \item{\code{proxy_port}}{Port for the proxy, which serves the landing page and the apps (default: 3838).}
 #'   \item{\code{proxy_host}}{Network interface the proxy listens on (default: \code{"127.0.0.1"}); see \sQuote{Host Configuration}.}
 #'   \item{\code{management_port}}{Port for the management dashboard and API (default: 3839).}
+#'   \item{\code{base_path}}{Public URL prefix when a reverse proxy serves the landing page and apps under a path such as \code{"/shiny"} (default: \code{""}, the site root). It must start with \code{/} and be at most 100 characters long; a trailing \code{/} is removed. Path segments may contain only ASCII letters, digits, and \code{. _ ~ -}, may not be \code{.} or \code{..}, and the first segment may not be \code{proxy}, \code{api}, \code{templates}, or \code{health} in any letter case. The proxy accepts requests with or without the prefix, so the reverse proxy may either pass it through or strip it. Links, redirects, and cookie paths use the prefix.}
+#'   \item{\code{title}}{Name shown in the browser tab and top bar of the landing and management pages; a non-empty string of up to 100 characters (default: \code{"Tiny Shiny Server"}).}
 #'   \item{\code{restart_delay}}{Seconds to wait before restarting a failed resident app; a non-negative finite number (default: 5). A restart requested from the management dashboard or API does not wait.}
-#'   \item{\code{health_check_interval}}{Seconds between health checks; a positive finite number (default: 10).}
+#'   \item{\code{health_check_interval}}{Seconds between health checks, which find app processes that have exited; a positive finite number (default: 10).}
 #'   \item{\code{max_request_size_mb}}{Largest HTTP request body, in megabytes, that the proxy accepts; a positive finite number (default: 100). Larger bodies, and bodies sent with chunked transfer encoding, are rejected with HTTP 413 before they are read. Apps that raise \code{shiny.maxRequestSize} above this need a larger value.}
 #'   \item{\code{idle_timeout_minutes}}{Minutes without a WebSocket message, in either direction, after which a session is closed and the browser shows the app as disconnected; a non-negative finite number (default: 30). \code{0} keeps idle sessions open. Idle sessions are checked every 5 minutes.}
-#'   \item{\code{log_level}}{Least severe messages written to \code{server.log}: \code{"DEBUG"}, \code{"INFO"}, \code{"WARN"}, or \code{"ERROR"} (default: \code{"INFO"}). \code{"DEBUG"} also records the first 100 characters of every WebSocket message.}
-#'   \item{\code{title}}{Name shown in the browser tab and top bar of the landing and management pages; a non-empty string of up to 100 characters (default: \code{"Tiny Shiny Server"}).}
-#'   \item{\code{base_path}}{Public URL prefix when a reverse proxy serves the landing page and apps under a path such as \code{"/shiny"} (default: \code{""}, the site root). It must start with \code{/}; a trailing \code{/} is removed. Path segments may contain only ASCII letters, digits, and \code{. _ ~ -}, and the first segment may not be \code{proxy}, \code{api}, \code{templates}, or \code{health}. The proxy accepts requests with or without the prefix, so the reverse proxy may either pass it through or strip it. Links, redirects, and cookie paths use the prefix. See the README section \sQuote{Serving under a URL prefix}.}
+#'   \item{\code{log_level}}{Least severe messages written to \code{server.log}: \code{"DEBUG"}, \code{"INFO"}, \code{"WARN"}, or \code{"ERROR"}, in any letter case (default: \code{"INFO"}). \code{"DEBUG"} also records the first 100 characters of every WebSocket message, which can include what users type.}
 #' }
 #'
 #' @section Application Configuration:
 #' Each application in the \code{apps} array can have:
 #' \describe{
 #'   \item{\code{name}}{Unique identifier used in URLs and log file names: 1--50 ASCII letters, digits, underscores, or hyphens. Names must differ by more than letter case. Required.}
-#'   \item{\code{path}}{Path to the app directory, either absolute or relative to the R working directory. Required. The app's R process starts in this directory and reads the \code{.Renviron} and \code{.Rprofile} there, if there are any, such as a profile that activates renv; without them, as at R's startup, it reads the user's \code{~/.Renviron} and \code{~/.Rprofile}, or the files that \code{R_ENVIRON_USER} and \code{R_PROFILE_USER} name. An app whose directory is missing, or holds no \code{app.R}, \code{ui.R} and \code{server.R}, \code{.Rmd}, or \code{.qmd} file, is not started; the reason is written to \code{server.log}. A document whose name starts with \code{_} does not count: R Markdown and Quarto treat it as a partial that other documents include. Two apps may not use the same directory when its document is rendered into it before it is served: a Quarto document, or an R Markdown document with \code{runtime: shinyrmd}, \code{runtime: shiny_prerendered}, or \code{server: shiny}. Two renders at once can leave a broken page, so give each app, and each server instance, its own copy of such a directory.}
-#'   \item{\code{resident}}{Boolean. If \code{true}, the app starts with the server and is restarted if its process fails. If \code{false} (the default), the app starts on demand and stops 30 seconds after its last WebSocket connection closes. Restarting an on-demand app from the management dashboard or API stops it until it is next opened.}
+#'   \item{\code{path}}{Path to the app directory, either absolute or relative to the R working directory; see \sQuote{Application Directories}. Required.}
+#'   \item{\code{resident}}{Boolean. If \code{true}, the app starts with the server and is restarted if its process fails. If \code{false} (the default), the app starts on demand and stops once it has had no WebSocket connection and no HTTP request in progress for 30 seconds. Restarting an on-demand app from the management dashboard or API stops it until it is next opened.}
 #'   \item{\code{appstart_timeout}}{Seconds, measured from app startup, that a request waits for the app to become ready before the proxy returns HTTP 503; a positive finite number (default: 2). Fractional seconds are supported.}
 #' }
 #'
+#' @section Application Directories:
+#' An app directory must hold one of these entry points, in order of
+#' preference: \file{app.R}, or \file{ui.R} and \file{server.R}; an R Markdown
+#' document (\file{.Rmd}) with a Shiny runtime; a Quarto document (\file{.qmd})
+#' with \code{server: shiny}; or, as \code{shiny::runApp()} accepts them, the
+#' Shiny file names in another letter case or \file{server.R} alone. A
+#' document whose name starts with \code{_} does not count, because R Markdown
+#' and Quarto treat it as a partial that other documents include. An app whose
+#' directory is missing or holds no entry point is not started, and the reason
+#' is written to \code{server.log}.
+#'
+#' The app's R process starts in its directory and reads the \file{.Renviron}
+#' and \file{.Rprofile} there, if there are any, such as a profile that
+#' activates renv. As at R's startup, the files that \env{R_ENVIRON_USER} and
+#' \env{R_PROFILE_USER} name take precedence, and a directory without these
+#' files falls back to the user's \file{~/.Renviron} and \file{~/.Rprofile}.
+#'
+#' Two apps may not use the same directory if its document is rendered into
+#' that directory before it is served: a Quarto document, or an R Markdown
+#' document with \code{runtime: shinyrmd}, \code{runtime: shiny_prerendered},
+#' or \code{server: shiny}. Two renders at once can leave a broken page, so
+#' give each app, and each server instance, its own copy of such a directory.
+#'
 #' @section Host Configuration:
 #' The \code{proxy_host} field controls the proxy's listening interface. The
-#' management server and backend apps always bind to \code{127.0.0.1}.
+#' management server and backend apps always listen on \code{127.0.0.1}.
 #' Supported proxy hosts are:
 #' \itemize{
 #'   \item \code{"127.0.0.1"} or \code{"localhost"}: Localhost only (most secure)
-#'   \item \code{"0.0.0.0"}: All network interfaces (allows external access)
 #'   \item \code{"::1"}: IPv6 localhost
+#'   \item \code{"0.0.0.0"}: All IPv4 interfaces (allows external access)
 #'   \item \code{"::"}: All IPv6 interfaces
 #' }
 #'
@@ -85,7 +110,7 @@
 #' host. A reverse proxy on another machine, used with \code{proxy_host} set to
 #' \code{"0.0.0.0"} or \code{"::"}, must instead preserve the public
 #' \code{Host} header. App WebSocket connections are accepted only when the
-#' browser \code{Origin} matches the request host.
+#' browser's \code{Origin} matches the public host.
 #'
 #' App processes listen on their own loopback ports without these checks, so a
 #' DNS-rebinding page in a browser on the server machine can still reach a
@@ -95,16 +120,17 @@
 #' Apps are assigned ports in configuration order, starting from
 #' \code{starting_port} and skipping \code{proxy_port}, \code{management_port},
 #' and ports already in use. For example, with \code{starting_port} set to 3001
-#' and no conflicts, three apps receive ports 3001, 3002, and 3003. A range that
-#' reaches 3838 or 3839 skips those ports when they are the proxy and management
-#' ports.
+#' and no conflicts, three apps receive ports 3001, 3002, and 3003. All ports
+#' must be whole numbers from 1 to 65535.
 #'
 #' @section Reloading:
 #' The management dashboard's \emph{Reload Config & Restart All} button reads
 #' the configuration file again, stops every app, and starts the resident apps
-#' under the new configuration; ports are assigned again at that point. Changes
-#' to \code{proxy_host}, \code{proxy_port}, or \code{management_port} are
-#' rejected and take effect only when the server restarts.
+#' under the new configuration; ports are assigned again at that point. The
+#' file is checked first: an invalid file, a \code{log_dir} where the server
+#' log cannot be written, or a change to \code{proxy_host}, \code{proxy_port},
+#' or \code{management_port} is reported without stopping any app. Those three
+#' settings take effect only when the server restarts.
 #'
 #' @examples
 #' if (interactive()) {
@@ -134,10 +160,12 @@
 #' }
 #'
 #' @seealso
-#' \code{\link{start_tss}} for starting the server with a configuration file.
+#' \code{\link{start_tss}} for starting the server with a configuration file,
+#' and \code{\link{example-config}} for a complete example configuration.
 #'
-#' Use \code{system.file("examples", "config.json", package = "tinyshinyserver")}
-#' to see a complete example configuration file.
+#' The README, at \url{https://github.com/lab1702/tinyshinyserver}, explains
+#' how apps start and stop, how to deploy behind a reverse proxy, including
+#' under a URL prefix, and the proxy's limits.
 #'
 #' @name config-format
 NULL

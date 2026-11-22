@@ -6,9 +6,9 @@
 \alias{tinyshinyserver}
 \title{tinyshinyserver: Tiny Shiny Server - Lightweight Multi-App Shiny Proxy}
 \description{
-A lightweight, WebSocket-enabled proxy server for hosting multiple Shiny
-applications with automatic health monitoring, session management, and
-resource cleanup.
+Serves several Shiny apps, interactive R Markdown documents, and Quarto
+dashboards from one R session. A lightweight proxy forwards HTTP and
+WebSocket traffic to the apps, each of which runs in its own R process.
 }
 \section{Main functions}{
 
@@ -20,35 +20,24 @@ resource cleanup.
 \section{Key features}{
 
 \itemize{
-  \item Host multiple Shiny applications behind a single proxy
-  \item Resident (always-running) and on-demand application modes
-  \item WebSocket support with session affinity
-  \item Web dashboard for monitoring, restarting apps, and shutting down
-  \item Automatic restart of failed resident apps
-  \item Cross-platform support (Windows, Linux, macOS)
-  \item Support for interactive R Markdown documents and Quarto dashboards
+  \item One proxy for many apps, each in its own R process
+  \item Resident apps, which start with the server and restart after a
+    failure, and on-demand apps, which start when first opened
+  \item Shiny apps, R Markdown documents with \code{runtime: shiny}, and
+    Quarto documents with \code{server: shiny}
+  \item A web dashboard and API to monitor apps and connections, restart
+    apps, reload the configuration, and shut down
+  \item Windows, Linux, and macOS support
 }
 }
 
 \section{Getting started}{
 
 See \code{\link{example-config}} to copy and run the included apps and to
-learn what they require. Use \code{\link{start_tss}} to launch the server and
-\code{\link{config-format}} to configure your own apps.
-}
-
-\section{Package resources}{
-
-The installed package includes:
-\itemize{
-  \item Example apps and an example configuration file,
-    \file{config.json}, in the \file{examples} directory
-  \item HTML templates and styles for the web pages in the \file{templates}
-    directory
-}
-
-Use \code{system.file("examples", package = "tinyshinyserver")} to locate
-the example files.
+learn what they require. Use \code{\link{start_tss}} to launch the server
+and \code{\link{config-format}} to configure your own apps. The README, at
+\url{https://github.com/lab1702/tinyshinyserver}, covers deployment behind
+a reverse proxy, the management API, and troubleshooting.
 }
 
 \seealso{

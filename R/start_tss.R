@@ -16,14 +16,15 @@
 #'
 #' @details
 #' See \code{\link{config-format}} for the required fields, defaults, app
-#' lifecycle settings, and port assignment. Relative app paths and the log directory are
-#' resolved from the R working directory, not the configuration file's directory.
+#' lifecycle settings, and port assignment. Relative app paths and the log
+#' directory are resolved from the R working directory, not from the
+#' configuration file's directory.
 #'
-#' Access points with the default ports:
+#' With the default ports, the server is reached at:
 #' \itemize{
 #'   \item Landing page: \verb{http://localhost:3838}
 #'   \item Management dashboard: \verb{http://localhost:3839}
-#'   \item Individual apps: \verb{http://localhost:3838/proxy/{app_name}/}
+#'   \item Each app: \verb{http://localhost:3838/proxy/{app_name}/}
 #' }
 #'
 #' @examples
