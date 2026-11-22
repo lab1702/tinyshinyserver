@@ -1,20 +1,22 @@
 ## Submission
 
 This is an update to version 0.3.0. The current CRAN version is 0.2.1,
-published on 2026-09-24 (CRAN package index checked on 2026-11-20).
+published on 2026-09-24 (CRAN package index checked on 2026-11-22).
 
 ## CRAN check problems in 0.2.1
 
-The CRAN check results for 0.2.1 show an ERROR on
-r-devel-linux-x86_64-debian-clang and in the noLD additional check (as seen
-on 2026-11-20). Both are the same failure of one test in
-`tests/testthat/test-utils.R`, "is_port_in_use detects open and closed ports
-without warnings". The test stopped an httpuv server and expected its port to
-be closed straight away, but `httpuv::stopServer()` closes the listening
-socket on a background thread after it returns, so the port can still accept
-a connection for a moment. This was a timing fault in the test, not in the
-package, and it is fixed in this release: the test now waits up to 5 seconds
-for the port to close.
+The CRAN check results for 0.2.1 showed an ERROR on
+r-devel-linux-x86_64-debian-clang (as seen on 2026-11-20), and the noLD
+additional check still shows one (its output is from 2026-11-17). On
+2026-11-22, all 13 CRAN check flavors report OK for 0.2.1, including
+r-devel-linux-x86_64-debian-clang. Both errors are the same failure of one
+test in `tests/testthat/test-utils.R`, "is_port_in_use detects open and
+closed ports without warnings". The test stopped an httpuv server and
+expected its port to be closed straight away, but `httpuv::stopServer()`
+closes the listening socket on a background thread after it returns, so the
+port can still accept a connection for a moment. This was a timing fault in
+the test, not in the package, and it is fixed in this release: the test now
+waits up to 5 seconds for the port to close.
 
 ## Changes in this release
 
@@ -141,6 +143,11 @@ documented in NEWS.md and README.md.
   older than another file in the app directory, instead of on every start.
   The app's own process makes that check, so reading a large app directory
   does not hold up the other apps' traffic.
+* A configuration in which two apps serve the same Quarto document, or the
+  same prerendered R Markdown document, is rejected when it is loaded or
+  reloaded. Such documents are rendered into their own directory, and two
+  renders at once could leave a broken page, which was then served at every
+  start.
 * An on-demand app that is still starting is no longer stopped as unused 30
   seconds after the last request. It is left to finish, for up to 10 minutes
   from its start. A start slower than the two minutes for which the
@@ -195,10 +202,10 @@ documented in NEWS.md and README.md.
 * Local: Windows 11 x64 (build 26300), x86_64-w64-mingw32,
   R 4.6.2 (2026-10-29 ucrt).
   Checked with `R CMD check --as-cran` on the source tarball built from
-  commit 2332e5e, including the PDF manual and the CRAN incoming
+  commit 2ba3432, including the PDF manual and the CRAN incoming
   feasibility check.
-* R-hub (commit 2332e5e, run
-  https://github.com/lab1702/tinyshinyserver/actions/runs/45055914702):
+* R-hub (commit 2ba3432, run
+  https://github.com/lab1702/tinyshinyserver/actions/runs/45062198086):
   linux (R-devel), windows (R-devel), macos-arm64 (R-devel), gcc16, and
   ubuntu-gcc12.
 
@@ -209,13 +216,13 @@ from the build, so the package checked is identical.
 
 Local: 0 errors | 0 warnings | 0 notes.
 
-R-hub at commit 2332e5e: 0 errors | 0 warnings | 0 notes on all five platforms.
+R-hub at commit 2ba3432: 0 errors | 0 warnings | 0 notes on all five platforms.
 
-Test results: 2127 passes locally and on all five R-hub platforms, with 8
+Test results: 2139 passes locally and on all five R-hub platforms, with 8
 intentional skips on CRAN (a timing check of the port test and seven tests
 that start real R processes). All runs had 0 failures and 0 warnings. One
 test's expectation count depends on timing.
 
 ## Downstream dependencies
 
-The CRAN package index checked on 2026-11-20 (UTC) lists no reverse dependencies.
+The CRAN package index checked on 2026-11-22 (UTC) lists no reverse dependencies.
