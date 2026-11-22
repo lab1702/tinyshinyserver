@@ -25,7 +25,8 @@ reject_large_request_body <- function(req, max_bytes) {
 handle_http_request <- function(req, config, template_manager, connection_manager, process_manager = NULL) {
   "Main HTTP request handler with routing"
 
-  respond_safely(answer_http_request(req, config, template_manager, connection_manager, process_manager))
+  response <- respond_safely(answer_http_request(req, config, template_manager, connection_manager, process_manager))
+  without_head_body(req, response)
 }
 
 answer_http_request <- function(req, config, template_manager, connection_manager, process_manager = NULL) {

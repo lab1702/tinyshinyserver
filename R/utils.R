@@ -25,6 +25,23 @@ respond_safely <- function(response) {
   })
 }
 
+# A response to HEAD has the status and headers of the response to GET, but no
+# body. httpuv sends whatever body a response holds, and a client that reuses
+# the connection would read those bytes as the start of the next response.
+# An empty body is no answer either: httpuv compresses it for a client that
+# accepts gzip and sends the result.
+without_head_body <- function(req, response) {
+  if (!identical(req$REQUEST_METHOD, "HEAD")) {
+    return(response)
+  }
+  strip <- function(response) {
+    discard_response_body(response$body)
+    response["body"] <- list(NULL)
+    response
+  }
+  if (promises::is.promise(response)) promises::then(response, strip) else strip(response)
+}
+
 # A request's headers under the names the client sent, in lower case. httpuv
 # also stores every header as HTTP_<NAME> with "-" written as "_", where a
 # header that a client spells with an underscore, such as "Content_Length" or

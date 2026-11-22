@@ -471,6 +471,21 @@ test_that("management static files answer only GET and HEAD", {
   expect_equal(route_management_request("/templates/styles/main.css", "HEAD", list(), config, list(), tm)$status, 200)
 })
 
+test_that("management answers to HEAD keep their headers but send no body", {
+  config <- ShinyServerConfig$new()
+  tm <- list(serve_static_file = function(path, if_none_match = NULL) create_html_response("file"))
+  request <- function(path, method) list(PATH_INFO = path, REQUEST_METHOD = method, QUERY_STRING = "")
+  for (path in c("/templates/styles/main.css", "/unknown")) {
+    get <- handle_management_request(request(path, "GET"), config, list(), tm)
+    head <- handle_management_request(request(path, "HEAD"), config, list(), tm)
+    expect_equal(head$status, get$status, info = path)
+    expect_equal(head$headers, get$headers, info = path)
+    expect_equal(head$headers[["X-Frame-Options"]], "DENY", info = path)
+    expect_true("body" %in% names(head), info = path)
+    expect_null(head$body, info = path)
+  }
+})
+
 test_that("handle_app_restart returns 404 for an unknown app", {
   config <- ShinyServerConfig$new()
   config$config <- list(apps = list(list(name = "app1", path = "/path", port = 3001, resident = TRUE)))

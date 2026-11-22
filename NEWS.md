@@ -8,6 +8,8 @@
 
 * The proxy's public `/api/apps` endpoint now returns only each app's name, status, mode, and connection count. App paths, ports, and process IDs are available only from the loopback management API.
 
+* **App processes now start in their app directory and read the `.Rprofile` there,** as R does when the app is run on its own, so an app's profile, such as one that activates renv, now applies to it. They read the `.Rprofile` of the R working directory that `start_tss()` was called from instead, and every app shared it; an app that relied on that file needs its own copy. As at R's startup, an error in the profile is written to the app's error log and the app still starts.
+
 * On-demand apps now stop 30 seconds after their last WebSocket connection closes instead of immediately. Reloading or navigating within an on-demand app previously stopped it between pages, forcing a cold restart that could make the new page's requests fail with HTTP 503.
 
 ## Security
@@ -47,6 +49,8 @@
 * `POST /api/apps/{name}/restart` returns HTTP 404 instead of 500 for an app name that is not configured, and accepts only that path. A path with extra segments, such as `/api/apps/a/b/restart`, restarted app `a`; it now returns HTTP 400.
 
 * The proxy's own pages and endpoints (`/`, `/health`, `/api/apps`, and the files under `/templates/`) answer methods other than `GET` and `HEAD` with HTTP 405. They answered every method as if it were a `GET`.
+
+* Every answer to a `HEAD` request that the proxy or the management server makes itself is sent without a body, such as the landing page, `/health`, the pages' style sheet, and the 503 for an app that is starting. The body was sent after the headers, so a client that sent another request on the same connection, as uptime monitors and HTTP libraries do, read it as the start of the next answer and failed.
 
 * Requests for a directory under `/templates/` return HTTP 404 instead of 500.
 
@@ -146,7 +150,7 @@
 
 * A directory with several documents serves the one that `rmarkdown` picks, instead of the first in alphabetical order. Files whose names start with `_`, which are partials that other documents include, are never served; such a file, such as `_child.Rmd`, could be served in place of the app, and a directory holding only partials now says so in `server.log`. An `index` or `ui` document is preferred, then one whose front matter sets `runtime: shiny` or `server: shiny`, so a static page no longer displaces the app. Among the rest, a document spelled `.Rmd` or `.qmd` comes before other letter cases, so a child document such as `appendix.rmd` does not displace `report.Rmd`.
 
-* A Quarto document is rendered only when its rendered page is missing or older than another file in the app directory, instead of on every start. On-demand Quarto apps and restarts no longer wait for a full render each time. Delete the document's `.html` file to force a render. The check runs in the app's own process, so reading a large app directory does not hold up the other apps' traffic, and the app's error log records whether the document was rendered.
+* A Quarto document is rendered only when its rendered page is missing or older than another file in the app directory, instead of on every start. On-demand Quarto apps and restarts no longer wait for a full render each time. Delete the document's `.html` file to force a render. The check runs in the app's own process, so reading a large app directory does not hold up the other apps' traffic, and the app's error log records whether the document was rendered. When `log_dir` lies in the app directory, the server's log files there do not count as changes, since they are written at every start.
 
 * A configuration in which two apps serve the same Quarto document, or the same prerendered R Markdown document (`runtime: shinyrmd` or `shiny_prerendered`, or `server: shiny`), is rejected when it is loaded or reloaded. Such documents are rendered into their own directory, and two renders at once could leave a broken page or none, which was then served at every start because it was newer than the document. The README explains how to recover, and that two server instances must not share such a directory either.
 

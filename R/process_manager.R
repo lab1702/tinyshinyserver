@@ -148,9 +148,10 @@ app_start_problem <- function(app_config) {
 # seconds on every start, including each start of an on-demand app. The
 # rendered page stays valid while it is newer than every other file in the
 # app directory, so render only when it is missing or something has changed.
-# start_app() hands this function to the app's own process, which need not
-# load this package, so it may call only base R.
-quarto_needs_render <- function(qmd_file) {
+# The server's logs are not sources: when log_dir lies in the app directory,
+# they change at every start. start_app() hands this function to the app's
+# own process, which need not load this package, so it may call only base R.
+quarto_needs_render <- function(qmd_file, log_dir = NULL) {
   # Quarto names the page "doc.html" for "doc.qmd" and "doc.QMD" alike
   output <- sub("\\.qmd$", ".html", qmd_file, ignore.case = TRUE)
   if (!file.exists(output)) {
@@ -162,6 +163,24 @@ quarto_needs_render <- function(qmd_file) {
   generated <- c(basename(output), sub("\\.qmd$", "_files", basename(qmd_file), ignore.case = TRUE), ".quarto")
   sources <- list.files(app_dir, recursive = TRUE, all.files = TRUE)
   sources <- sources[!sub("/.*$", "", sources) %in% generated]
+
+  # The .log files directly in log_dir: server.log and every app's logs
+  if (!is.null(log_dir)) {
+    windows <- .Platform$OS.type == "windows"
+    canonical <- function(path) {
+      path <- sub("/$", "", normalizePath(path, winslash = "/", mustWork = FALSE))
+      if (windows) tolower(path) else path
+    }
+    root <- canonical(app_dir)
+    logs <- canonical(log_dir)
+    if (identical(logs, root) || startsWith(logs, paste0(root, "/"))) {
+      prefix <- if (identical(logs, root)) "" else paste0(substring(logs, nchar(root) + 2), "/")
+      listed <- if (windows) tolower(sources) else sources
+      in_logs <- startsWith(listed, prefix) & !grepl("/", substring(listed, nchar(prefix) + 1), fixed = TRUE)
+      sources <- sources[!(in_logs & endsWith(listed, ".log"))]
+    }
+  }
+
   # A file as new as the page may have changed after it was rendered
   changed <- file.mtime(file.path(app_dir, sources)) >= file.mtime(output)
   any(is.na(changed) | changed)
@@ -202,11 +221,13 @@ ProcessManager <- setRefClass("ProcessManager",
       # Recreate log_dir if it was removed while the server runs; app
       # processes cannot start without their log files
       dir.create(config$config$log_dir, recursive = TRUE, showWarnings = FALSE)
+      # The app process starts in its own directory, so it gets absolute paths
+      log_dir <- normalizePath(config$config$log_dir, mustWork = FALSE)
 
       # Prepare log files, keeping the previous run's logs (e.g. a crash
       # traceback) for one restart
-      output_log <- file.path(config$config$log_dir, paste0(app_name, "_output.log"))
-      error_log <- file.path(config$config$log_dir, paste0(app_name, "_error.log"))
+      output_log <- file.path(log_dir, paste0(app_name, "_output.log"))
+      error_log <- file.path(log_dir, paste0(app_name, "_error.log"))
       for (log_file in c(output_log, error_log)) {
         if (file.exists(log_file)) {
           previous_log <- sub("\\.log$", ".prev.log", log_file)
@@ -230,10 +251,24 @@ ProcessManager <- setRefClass("ProcessManager",
       # Start the app process. Its stdout and stderr go straight to the log
       # files so that output from child processes and native code is captured
       # and can never fill an unread pipe.
+      #
+      # The process starts in the app directory and reads the .Rprofile there,
+      # as R does for a project, so that an app's own profile, such as one that
+      # activates renv, applies as it would if the app were run on its own.
+      # callr's profile option would read the .Rprofile of this session's
+      # working directory instead, so it is turned off. The app's profile runs
+      # after callr has set the library paths, which renv then replaces. As at
+      # R's own startup, an error in the profile is reported and the app still
+      # starts.
       process <- callr::r_bg(
-        function(app_path, port, type, file, needs_render) {
+        function(app_path, port, type, file, needs_render, log_dir) {
+          if (file.exists(".Rprofile")) {
+            tryCatch(source(".Rprofile"), error = function(e) {
+              message("Error in ", file.path(getwd(), ".Rprofile"), ": ", conditionMessage(e))
+            })
+          }
           if (type == "qmd") {
-            render <- needs_render(file)
+            render <- needs_render(file, log_dir)
             message(if (render) "Rendering " else "Serving the rendered page of ", file)
             quarto::quarto_serve(
               input = file,
@@ -265,10 +300,14 @@ ProcessManager <- setRefClass("ProcessManager",
           port = app_port,
           type = app$type,
           file = app$file,
-          needs_render = needs_render
+          needs_render = needs_render,
+          log_dir = log_dir
         ),
         stdout = output_log,
         stderr = error_log,
+        user_profile = FALSE,
+        # Passed on to processx: the directory the app's R session starts in
+        wd = app_path,
         # Stop the app even if this R session dies without cleaning up
         supervise = TRUE
       )
@@ -460,6 +499,12 @@ ProcessManager <- setRefClass("ProcessManager",
         },
         error = function(e) {
           logger::log_error("Failed to restart app {app_name}: {error}", app_name = app_name, error = e$message)
+          # The dashboard shows this message, so that a restart that cannot
+          # start the app says why, such as a missing app directory, even
+          # though the reason can name files on the server. Only the
+          # management server answers with it, and only on the loopback
+          # address, to the same people who can read server.log. The proxy
+          # never sends start errors to visitors.
           return(list(success = FALSE, message = paste0("Failed to restart app ", app_name, ": ", e$message)))
         }
       )

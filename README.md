@@ -314,7 +314,7 @@ Detection prefers standard Shiny files, then R Markdown, then Quarto. Document e
 
 An app whose directory is missing, or contains none of these entry points, is not started. The reason is written to `server.log`: when a resident app is started, and for on-demand apps when the configuration is loaded and again when someone opens the app. Until the directory is fixed, such an on-demand app is shown as **unavailable** and its landing page tile is disabled. The status changes as soon as files are added to or removed from the directory, or within 30 seconds for a change that leaves the directory's modification time alone, such as a fixed permission or a file copied to a FAT or exFAT drive.
 
-A Quarto document is rendered before it is served, which can take many seconds. To keep on-demand starts and restarts fast, the server renders it only when the rendered page (`{name}.html`, next to the `.qmd`) is missing or older than another file in the app directory. Changes outside that directory, such as an upgraded package, are not noticed; delete the `.html` file to force a render at the next start. The app's error log records whether the document was rendered.
+A Quarto document is rendered before it is served, which can take many seconds. To keep on-demand starts and restarts fast, the server renders it only when the rendered page (`{name}.html`, next to the `.qmd`) is missing or older than another file in the app directory. The server's own `.log` files do not count when `log_dir` lies in the app directory. Changes outside that directory, such as an upgraded package, are not noticed; delete the `.html` file to force a render at the next start. The app's error log records whether the document was rendered.
 
 Quarto documents, and R Markdown documents that `rmarkdown` serves prerendered (`runtime: shinyrmd` or `runtime: shiny_prerendered`, or `server: shiny`), are rendered into their own directory, as `{name}.html` and a `{name}_files` directory. Two renders of one document at once overwrite each other's files and can leave a broken page, which is then served at every start because it is newer than the document. A configuration in which two apps use the same such directory is therefore rejected. Do not serve one from two server instances either; give each instance its own copy of the directory. If a page is broken, delete its `.html` file so that it is rendered again. Other R Markdown documents are rendered into a temporary directory for each visit, so their directories may be shared.
 
@@ -370,6 +370,8 @@ The `log_level` setting chooses the least severe level that is written (default:
 ## Architecture
 
 The R process running `start_tss()` serves the proxy and management interfaces. Each active app runs in a separate background R process on its assigned localhost port. The proxy forwards HTTP requests and WebSocket messages to that app.
+
+An app's R process starts in the app's directory and reads the `.Rprofile` there, as R does when the app is run on its own, so a profile that activates renv gives the app its own project library. Without one, the app uses the library paths of the R session that runs `start_tss()`. The `.Rprofile` of the directory that `start_tss()` is called from does not apply to apps. As at R's startup, an error in an app's profile is written to its error log, and the app still starts.
 
 Periodic checks detect exited app processes and restart resident apps. These checks do not assess whether a running app is responsive or producing correct results.
 

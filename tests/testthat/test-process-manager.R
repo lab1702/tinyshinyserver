@@ -1380,6 +1380,54 @@ test_that("a Quarto document with an upper-case extension finds its rendered pag
   expect_false(quarto_needs_render(qmd))
 })
 
+test_that("the server's logs in an app directory do not make its Quarto page stale", {
+  # A rendered page, older than the logs written since
+  rendered_app <- function() {
+    app_dir <- tempfile("tss-qmd-logs")
+    dir.create(file.path(app_dir, "logs"), recursive = TRUE)
+    qmd <- file.path(app_dir, "doc.qmd")
+    for (file in c(qmd, file.path(app_dir, "doc.html"))) writeLines("", file)
+    Sys.setFileTime(qmd, Sys.time() - 300)
+    Sys.setFileTime(file.path(app_dir, "doc.html"), Sys.time() - 200)
+    app_dir
+  }
+
+  app_dir <- rendered_app()
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  qmd <- file.path(app_dir, "doc.qmd")
+  for (name in c("server.log", "app_output.log", "app_error.prev.log")) {
+    writeLines("", file.path(app_dir, "logs", name))
+  }
+  expect_false(quarto_needs_render(qmd, file.path(app_dir, "logs")))
+  # Without log_dir, the logs count as sources
+  expect_true(quarto_needs_render(qmd))
+  # log_dir as the configuration spells it, relative and with a trailing slash
+  old_dir <- setwd(app_dir)
+  on.exit(setwd(old_dir), add = TRUE, after = FALSE)
+  expect_false(quarto_needs_render(qmd, "logs/"))
+  # Only the .log files directly in log_dir are the server's
+  writeLines("", file.path(app_dir, "logs", "notes.csv"))
+  expect_true(quarto_needs_render(qmd, "logs"))
+  unlink(file.path(app_dir, "logs", "notes.csv"))
+  dir.create(file.path(app_dir, "logs", "archive"))
+  writeLines("", file.path(app_dir, "logs", "archive", "old.log"))
+  expect_true(quarto_needs_render(qmd, "logs"))
+
+  # log_dir is the app directory itself
+  same_dir <- rendered_app()
+  on.exit(unlink(same_dir, recursive = TRUE), add = TRUE)
+  writeLines("", file.path(same_dir, "server.log"))
+  expect_false(quarto_needs_render(file.path(same_dir, "doc.qmd"), same_dir))
+  writeLines("", file.path(same_dir, "logs", "server.log"))
+  expect_true(quarto_needs_render(file.path(same_dir, "doc.qmd"), same_dir))
+
+  # A log_dir elsewhere leaves the app directory's files alone
+  elsewhere <- rendered_app()
+  on.exit(unlink(elsewhere, recursive = TRUE), add = TRUE)
+  writeLines("", file.path(elsewhere, "notes.log"))
+  expect_true(quarto_needs_render(file.path(elsewhere, "doc.qmd"), tempdir()))
+})
+
 test_that("start_app leaves the Quarto render decision to the app's own process", {
   app_dir <- tempfile("tss-qmd")
   dir.create(app_dir)
@@ -1468,6 +1516,68 @@ test_that("start_app supervises app processes", {
   # Retire the fake process so its scheduled readiness check does nothing
   config$remove_app_process("app")
   expect_true(args$supervise)
+})
+
+test_that("start_app starts an app process in the app's directory", {
+  app_dir <- make_test_app_dir()
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", path = app_dir, port = 1, resident = TRUE)),
+    log_dir = tempdir())
+  args <- NULL
+  local_mocked_bindings(r_bg = function(...) {
+    args <<- list(...)
+    list(is_alive = function() TRUE)
+  }, .package = "callr")
+  ProcessManager$new(config)$start_app(config$config$apps[[1]])
+  config$remove_app_process("app")
+  expect_identical(args$wd, normalizePath(app_dir))
+  # callr would read the .Rprofile of the server's working directory
+  expect_false(args$user_profile)
+  # Paths stay valid from the app's directory
+  expect_identical(args$stdout, file.path(normalizePath(tempdir()), "app_output.log"))
+  expect_identical(args$args$log_dir, normalizePath(tempdir()))
+})
+
+test_that("an app process reads its own .Rprofile, not the server's", {
+  skip_on_cran() # Starts an R session that loads shiny
+  server_dir <- tempfile("tss-server-dir")
+  app_dir <- tempfile("tss-profile-app")
+  dir.create(server_dir)
+  dir.create(app_dir)
+  on.exit(unlink(c(server_dir, app_dir), recursive = TRUE), add = TRUE)
+  marker <- file.path(app_dir, "profiles")
+  writeLines("options(tss.test.profile = 'server')", file.path(server_dir, ".Rprofile"))
+  writeLines("options(tss.test.profile = 'app')", file.path(app_dir, ".Rprofile"))
+  writeLines(c(
+    sprintf("writeLines(getOption('tss.test.profile', 'none'), %s)", deparse(marker)),
+    "Sys.sleep(60)"
+  ), file.path(app_dir, "app.R"))
+
+  # A relative log_dir is still found from the app's directory
+  old_dir <- setwd(server_dir)
+  on.exit(setwd(old_dir), add = TRUE, after = FALSE)
+  config <- ShinyServerConfig$new()
+  on.exit(stop_test_app_processes(config), add = TRUE, after = FALSE)
+  config$config <- list(apps = list(list(name = "app", path = app_dir, port = 1, resident = TRUE)),
+    log_dir = "logs")
+  ProcessManager$new(config)$start_app(config$config$apps[[1]])
+
+  deadline <- Sys.time() + 30
+  while (!file.exists(marker) && Sys.time() < deadline) Sys.sleep(0.1)
+  expect_equal(readLines(marker), "app")
+  expect_true(file.exists(file.path(server_dir, "logs", "app_error.log")))
+
+  # An error in the profile is reported, and the app still starts
+  stop_test_app_processes(config)
+  unlink(marker)
+  writeLines("stop('broken profile')", file.path(app_dir, ".Rprofile"))
+  ProcessManager$new(config)$start_app(config$config$apps[[1]])
+  deadline <- Sys.time() + 30
+  while (!file.exists(marker) && Sys.time() < deadline) Sys.sleep(0.1)
+  expect_equal(readLines(marker), "none")
+  expect_match(paste(readLines(file.path(server_dir, "logs", "app_error.log")), collapse = "\n"),
+    "broken profile", fixed = TRUE)
 })
 
 test_that("app output from child processes reaches the log without blocking", {

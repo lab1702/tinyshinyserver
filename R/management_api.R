@@ -10,7 +10,7 @@ handle_management_request <- function(req, config, process_manager, template_man
   response <- respond_safely(handle_management_request_unframed(req, config, process_manager, template_manager))
   response$headers[["X-Frame-Options"]] <- "DENY"
   response$headers[["Content-Security-Policy"]] <- "frame-ancestors 'none'"
-  response
+  without_head_body(req, response)
 }
 
 handle_management_request_unframed <- function(req, config, process_manager, template_manager) {
@@ -260,7 +260,8 @@ handle_app_restart <- function(path, process_manager) {
       return(create_json_response(result, status = if (result$success) 200 else 500))
     },
     error = function(e) {
-      # The message can name files on the server, so it stays in the log
+      # An error nobody anticipated can say anything, so its message stays in
+      # the log. restart_app() reports why a start failed in its own answer.
       logger::log_error("Error restarting app {app_name}: {error}", app_name = app_name, error = conditionMessage(e))
       return(create_error_response("Unexpected error; see server.log for the reason", 500))
     }

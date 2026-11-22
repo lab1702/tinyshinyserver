@@ -658,6 +658,65 @@ test_that("the proxy's own pages and endpoints answer only GET and HEAD", {
   expect_equal(route("/unknown", "POST")$status, 404)
 })
 
+test_that("the proxy's own answers to HEAD keep their headers but send no body", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "testapp", path = "/path", port = 3001, resident = TRUE)))
+  tm <- create_mock_template_manager()
+  request <- function(path, method) {
+    list(PATH_INFO = path, REQUEST_METHOD = method, QUERY_STRING = "", HTTP_HOST = "127.0.0.1:3838")
+  }
+  for (path in c("/", "/health", "/api/apps", "/templates/style.css", "/unknown", "/proxy/testapp")) {
+    get <- handle_http_request(request(path, "GET"), config, tm, list())
+    head <- handle_http_request(request(path, "HEAD"), config, tm, list())
+    expect_equal(head$status, get$status, info = path)
+    expect_equal(head$headers, get$headers, info = path)
+    # httpuv sends a body element of NULL as no body, and compresses ""
+    expect_true("body" %in% names(head), info = path)
+    expect_null(head$body, info = path)
+  }
+})
+
+test_that("an answer to HEAD that the proxy makes for a starting app has no body", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "testapp", path = "/path", port = 3001, resident = TRUE)))
+  local_mocked_bindings(wait_for_backend = function(url, wait_seconds) promises::promise_resolve(FALSE))
+  req <- list(PATH_INFO = "/proxy/testapp/", REQUEST_METHOD = "HEAD", QUERY_STRING = "", HTTP_HOST = "127.0.0.1:3838")
+  result <- await_response(handle_http_request(req, config, NULL, ConnectionManager$new(config)))
+  expect_equal(result$status, 503)
+  expect_equal(result$headers[["Retry-After"]], "2")
+  expect_null(result$body)
+})
+
+test_that("a connection that answered HEAD can carry the next request", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "testapp", path = "/path", port = 3001, resident = TRUE)))
+  proxy <- start_test_http_server(function(req) handle_http_request(req, config, create_mock_template_manager(), list()))
+  on.exit(httpuv::stopServer(proxy$server), add = TRUE)
+  con <- socketConnection("127.0.0.1", proxy$port, blocking = FALSE, open = "r+b")
+  on.exit(close(con), add = TRUE, after = FALSE)
+  # Read until `until` arrives, and briefly after it for any bytes that follow
+  exchange <- function(request, until) {
+    writeBin(charToRaw(request), con)
+    received <- raw()
+    deadline <- Sys.time() + 5
+    settle <- NULL
+    while (Sys.time() < deadline && (is.null(settle) || Sys.time() < settle)) {
+      later::run_now(0.01)
+      received <- c(received, readBin(con, "raw", 65536))
+      if (is.null(settle) && grepl(until, rawToChar(received), fixed = TRUE)) settle <- Sys.time() + 0.3
+    }
+    rawToChar(received)
+  }
+
+  head <- exchange("HEAD /health HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept-Encoding: gzip\r\n\r\n", "\r\n\r\n")
+  expect_match(head, "^HTTP/1.1 200")
+  # Anything after the headers would be read as the start of the next answer
+  expect_match(head, "\r\n\r\n$")
+  get <- exchange("GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n", "healthy")
+  expect_match(get, "^HTTP/1.1 200")
+  expect_match(get, "healthy", fixed = TRUE)
+})
+
 test_that("forward_request returns 503 when backend is unavailable", {
   config <- ShinyServerConfig$new()
   local_mocked_bindings(wait_for_backend = function(url, wait_seconds) promises::promise_resolve(FALSE))
