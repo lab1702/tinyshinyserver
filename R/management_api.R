@@ -18,7 +18,7 @@ handle_management_request_unframed <- function(req, config, process_manager, tem
 
   # The management server listens on loopback only. Rejecting other Host
   # names stops DNS-rebinding pages from becoming same-origin with it.
-  if (!is_loopback_host_header(req$HTTP_HOST)) {
+  if (!is_loopback_host_header(request_header(req, "host"))) {
     return(create_error_response("Invalid Host header", 403))
   }
 
@@ -113,7 +113,7 @@ route_management_request <- function(path, method, req, config, process_manager,
 
   # Static files for management interface
   if (startsWith(path, "/templates/")) {
-    return(handle_static_file(path, template_manager, req$HTTP_IF_NONE_MATCH))
+    return(handle_static_file(path, template_manager, request_header(req, "if-none-match")))
   }
 
   # 404 for unknown paths

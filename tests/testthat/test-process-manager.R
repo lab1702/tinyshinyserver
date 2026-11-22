@@ -1111,7 +1111,7 @@ test_that("check_app_ready returns TRUE when port is listening", {
   expect_false(config$is_app_starting("app1"))
 })
 
-test_that("check_app_ready returns FALSE when max attempts exceeded", {
+test_that("check_app_ready returns FALSE once the startup window has passed", {
   config <- ShinyServerConfig$new()
   config$config <- list(apps = list())
 
@@ -1129,8 +1129,9 @@ test_that("check_app_ready returns FALSE when max attempts exceeded", {
     wait_for_backend = function(url, wait_seconds = 0) promises::promise_resolve(FALSE)
   )
 
-  # Call with max attempts already reached
-  result <- await_response(pm$check_app_ready("app1", 3001, live_process, attempt = 10, max_attempts = 10))
+  # The app started longer ago than the startup window
+  started_at <- Sys.time() - config$APP_STARTUP_TIMEOUT_SECONDS - 1
+  result <- await_response(pm$check_app_ready("app1", 3001, live_process, started_at = started_at))
 
   expect_false(result)
   # Startup state should be cleared (timed out)
@@ -1148,10 +1149,10 @@ test_that("readiness checks continue for apps with a longer appstart_timeout", {
     wait_for_backend = function(url, wait_seconds = 0) promises::promise_resolve(FALSE)
   )
   later::with_loop(later::create_loop(), {
-    expect_false(await_response(pm$check_app_ready("app1", 3001, list(), attempt = 60)))
+    expect_false(await_response(pm$check_app_ready("app1", 3001, list(), started_at = Sys.time() - 31)))
     expect_true(config$is_app_starting("app1"))
 
-    expect_false(await_response(pm$check_app_ready("app1", 3001, list(), attempt = 80)))
+    expect_false(await_response(pm$check_app_ready("app1", 3001, list(), started_at = Sys.time() - 41)))
     expect_false(config$is_app_starting("app1"))
   })
 })
@@ -1166,14 +1167,34 @@ test_that("readiness checks cover the full startup window for short appstart_tim
     is_process_alive = function(process) TRUE,
     wait_for_backend = function(url, wait_seconds = 0) promises::promise_resolve(FALSE)
   )
-  last_attempt <- config$APP_STARTUP_TIMEOUT_SECONDS / 0.5
+  window <- config$APP_STARTUP_TIMEOUT_SECONDS
   later::with_loop(later::create_loop(), {
-    # A slow app (e.g. Quarto rendering) is still starting after 10 attempts
-    expect_false(await_response(pm$check_app_ready("app1", 3001, list(), attempt = 10)))
+    # A slow app (e.g. Quarto rendering) is still starting after 5 seconds
+    expect_false(await_response(pm$check_app_ready("app1", 3001, list(), started_at = Sys.time() - 5)))
     expect_true(config$is_app_starting("app1"))
 
-    expect_false(await_response(pm$check_app_ready("app1", 3001, list(), attempt = last_attempt)))
+    expect_false(await_response(pm$check_app_ready("app1", 3001, list(), started_at = Sys.time() - window - 1)))
     expect_false(config$is_app_starting("app1"))
+  })
+})
+
+test_that("the readiness window is measured in time, not in probes", {
+  # A probe of a port that nothing listens on can take a second, as on
+  # Windows, so counting probes would stretch the window
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app1")))
+  config$set_app_starting("app1")
+  pm <- ProcessManager$new(config)
+  config$add_app_process("app1", list())
+  local_mocked_bindings(
+    is_process_alive = function(process) TRUE,
+    wait_for_backend = function(url, wait_seconds = 0) promises::promise_resolve(FALSE)
+  )
+  started_at <- Sys.time() - config$APP_STARTUP_TIMEOUT_SECONDS - 1
+  later::with_loop(later::create_loop(), {
+    # Only the second probe, long before 60 half-second attempts
+    expect_false(await_response(pm$check_app_ready("app1", 3001, list(), attempt = 2, started_at = started_at)))
+    expect_equal(config$get_app_startup_state("app1")$state, "timeout")
   })
 })
 
@@ -1191,7 +1212,7 @@ test_that("readiness checks keep watching an app that is still starting after th
     process_owns_port = function(process, port) TRUE,
     wait_for_backend = function(url, wait_seconds = 0) promises::promise_resolve(ready)
   )
-  last_attempt <- config$APP_STARTUP_TIMEOUT_SECONDS / 0.5
+  after_window <- Sys.time() - config$APP_STARTUP_TIMEOUT_SECONDS - 1
   # Whether another check is scheduled, once the promise callbacks that are
   # already due have run
   check_scheduled <- function() {
@@ -1202,16 +1223,21 @@ test_that("readiness checks keep watching an app that is still starting after th
     # A long render outlasts the window in which requests wait: the next
     # request reports the timeout, but the app is not given up on
     log <- capture_test_log(expect_false(await_response(pm$check_app_ready("app1", 3001, process,
-      attempt = last_attempt))))
+      started_at = after_window))))
     expect_equal(config$get_app_startup_state("app1")$state, "timeout")
     expect_match(paste(log, collapse = "\n"), "still waiting for it to start", fixed = TRUE)
     expect_no_match(paste(log, collapse = "\n"), "failed to become ready", fixed = TRUE)
     expect_true(check_scheduled())
 
+    # Later checks do not report the timeout again
+    log <- capture_test_log(expect_false(await_response(pm$check_app_ready("app1", 3001, process,
+      started_at = after_window, timed_out = TRUE))))
+    expect_no_match(paste(log, collapse = "\n"), "still waiting for it to start", fixed = TRUE)
+
     # Once it listens, it is ready
     ready <- TRUE
     log <- capture_test_log(expect_true(await_response(pm$check_app_ready("app1", 3001, process,
-      attempt = last_attempt + 5))))
+      started_at = after_window, timed_out = TRUE))))
     expect_null(config$get_app_startup_state("app1"))
     expect_match(paste(log, collapse = "\n"), "App app1 is ready", fixed = TRUE)
   })
@@ -1221,7 +1247,7 @@ test_that("readiness checks keep watching an app that is still starting after th
   started <- Sys.time() - config$ON_DEMAND_START_LIMIT_SECONDS
   later::with_loop(later::create_loop(), {
     log <- capture_test_log(expect_false(await_response(pm$check_app_ready("app1", 3001, process,
-      attempt = last_attempt + 300))))
+      started_at = started, timed_out = TRUE))))
     expect_match(paste(log, collapse = "\n"), "failed to become ready", fixed = TRUE)
     expect_false(check_scheduled())
   })
@@ -1408,6 +1434,39 @@ test_that("a Quarto document is rendered only when its page is out of date", {
   # A change in the same instant as the page may have come after it
   age(data, 200)
   expect_true(quarto_needs_render(qmd))
+})
+
+test_that("hidden files and renv's packages do not make a Quarto page stale", {
+  app_dir <- tempfile("tss-qmd-hidden")
+  dir.create(app_dir)
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  qmd <- file.path(app_dir, "doc.qmd")
+  html <- file.path(app_dir, "doc.html")
+  for (file in c(qmd, html)) writeLines("", file)
+  Sys.setFileTime(qmd, Sys.time() - 300)
+  Sys.setFileTime(html, Sys.time() - 200)
+  add <- function(name) {
+    path <- file.path(app_dir, name)
+    dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+    writeLines("", path)
+    path
+  }
+
+  # Version control, the IDE, and renv write these without the document changing
+  for (name in c(".Rhistory", ".git/FETCH_HEAD", ".Rproj.user/shared/notebooks/state", "data/.DS_Store",
+    "renv/library/R-4.6/x86_64/pkg/DESCRIPTION", "renv/staging/1/pkg/DESCRIPTION")) {
+    add(name)
+  }
+  expect_false(quarto_needs_render(qmd))
+
+  # The profile and environment of the rendering R session, and renv's own
+  # files, are sources
+  for (name in c(".Rprofile", ".Renviron", "renv.lock", "renv/activate.R", "_quarto.yml")) {
+    path <- add(name)
+    expect_true(quarto_needs_render(qmd), info = name)
+    Sys.setFileTime(path, Sys.time() - 300)
+  }
+  expect_false(quarto_needs_render(qmd))
 })
 
 test_that("a Quarto document with an upper-case extension finds its rendered page", {
@@ -1761,8 +1820,10 @@ test_that("old readiness callbacks cannot remove or mark replacements ready", {
 test_that("removing a starting process allows the next on-demand launch", {
   for (removal in c("health", "stop")) {
     config <- ShinyServerConfig$new()
+    # A failed process is replaced only after restart_delay, which a later
+    # test covers; this one is about the state that the removal leaves
     config$config <- list(apps = list(list(name = "app", port = 3001,
-      resident = FALSE, appstart_timeout = 60)))
+      resident = FALSE, appstart_timeout = 60)), restart_delay = 0)
     old <- list(is_alive = function() FALSE)
     config$add_app_process("app", old)
     config$set_app_starting("app")
@@ -1942,6 +2003,111 @@ test_that("a restart that cannot start the app reports the reason", {
   # The dashboard shows this message as it is, so it names the app
   expect_match(result$message, "^Failed to restart app app: App directory not found")
   expect_null(config$get_app_process("app"))
+})
+
+test_that("a restart that cannot stop the app leaves its users connected", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = TRUE)), restart_delay = 0)
+  config$add_app_process("app", list(is_alive = function() TRUE))
+  closed <- 0
+  socket <- list(close = function() closed <<- closed + 1)
+  config$add_ws_connection("s", list(app_name = "app", ws = socket))
+  config$add_backend_connection("s", list(app_name = "app", ws = socket))
+  local_mocked_bindings(kill_process_safely = function(process) FALSE)
+  pm <- ProcessManager$new(config)
+
+  expect_false(pm$restart_app("app")$success)
+  expect_equal(closed, 0)
+  expect_false(is.null(config$get_ws_connection("s")))
+  expect_false(is.null(config$get_backend_connection("s")))
+  expect_equal(config$get_app_connection_count("app"), 1)
+})
+
+# ============================================================================
+# On-demand starts after a failure
+# ============================================================================
+
+test_that("an on-demand app whose process failed starts again only after restart_delay", {
+  # The failure is found by the readiness check, the health check, or the
+  # next on-demand start
+  for (found_by in c("readiness", "health", "on_demand")) {
+    config <- ShinyServerConfig$new()
+    config$config <- list(apps = list(list(name = "app", port = 3001, resident = FALSE)), restart_delay = 60)
+    dead <- list(is_alive = function() FALSE)
+    config$add_app_process("app", dead)
+    config$set_app_starting("app")
+    pm <- ProcessManager$new(config)
+    starts <- 0
+    assign("start_app", function(app_config) { starts <<- starts + 1; TRUE }, envir = pm)
+
+    switch(found_by, readiness = pm$check_app_ready("app", 3001, dead), health = pm$health_check(),
+      on_demand = NULL)
+    # Every request in the delay is refused without starting a process
+    expect_false(pm$start_app_on_demand("app"), info = found_by)
+    expect_false(pm$start_app_on_demand("app"), info = found_by)
+    expect_equal(starts, 0, info = found_by)
+    expect_null(config$get_app_process("app"), info = found_by)
+    expect_gt(config$start_backoff_seconds("app"), 55)
+
+    # Once restart_delay has passed, the next request starts it
+    assign("app", Sys.time() - 61, envir = config$start_failures)
+    expect_equal(config$start_backoff_seconds("app"), 0)
+    expect_true(pm$start_app_on_demand("app"), info = found_by)
+    expect_equal(starts, 1, info = found_by)
+  }
+})
+
+test_that("an app forgets its last failure once it listens, is restarted, or is reloaded", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", port = 3001, resident = FALSE)), restart_delay = 60)
+  pm <- ProcessManager$new(config)
+
+  # A new process that listens on the app's port has started
+  config$note_start_failure("app")
+  config$add_app_process("app", list(is_alive = function() TRUE))
+  local_mocked_bindings(process_owns_port = function(process, port) TRUE)
+  expect_true(config$app_backend_verified("app"))
+  expect_equal(config$start_backoff_seconds("app"), 0)
+  config$remove_app_process("app")
+
+  # A restart from the dashboard does not wait
+  config$note_start_failure("app")
+  expect_true(pm$restart_app("app")$success)
+  expect_equal(config$start_backoff_seconds("app"), 0)
+
+  # Neither does the first start after a reload
+  config$note_start_failure("app")
+  config$reset_app_state()
+  expect_equal(config$start_backoff_seconds("app"), 0)
+
+  # Stopping a process is not a failure
+  config$add_app_process("app", list(is_alive = function() FALSE))
+  expect_true(pm$stop_app("app")$success)
+  expect_equal(config$start_backoff_seconds("app"), 0)
+})
+
+test_that("an on-demand app whose process has exited is shown as dormant, not crashed", {
+  app_dir <- make_test_app_dir()
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(
+    list(name = "on_demand", path = app_dir, port = 3001, resident = FALSE),
+    list(name = "broken", path = file.path(tempdir(), "tss-no-such-app"), port = 3002, resident = FALSE),
+    list(name = "resident", path = app_dir, port = 3003, resident = TRUE)
+  ))
+  for (name in c("on_demand", "broken", "resident")) {
+    config$add_app_process(name, list(get_pid = function() 111, is_alive = function() FALSE))
+  }
+  pm <- ProcessManager$new(config)
+
+  # Opening it starts it again, so the landing page links to it
+  expect_equal(pm$get_app_status("on_demand")$status, "dormant")
+  expect_equal(pm$get_app_status("broken")$status, "unavailable")
+  # A resident app is restarted by the health check, or from the dashboard
+  expect_equal(pm$get_app_status("resident")$status, "crashed")
+  for (name in c("on_demand", "broken", "resident")) {
+    expect_null(pm$get_app_status(name)$pid, info = name)
+  }
 })
 
 # ============================================================================

@@ -518,6 +518,59 @@ test_that("handle_proxy_request returns 502 when app fails to start", {
   expect_match(result$body, "Failed to start app")
 })
 
+test_that("a request for an app that failed moments ago is asked to retry after restart_delay", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "myapp", path = "/path", port = 3001, resident = FALSE)),
+    restart_delay = 60)
+  config$note_start_failure("myapp")
+  pm <- ProcessManager$new(config)
+  assign("start_app", function(app_config) stop("must wait for restart_delay"), envir = pm)
+  tm <- create_template_manager()
+
+  # A script receives JSON with Retry-After
+  result <- handle_proxy_request("/proxy/myapp/", "GET", NULL, httpuv_request(list(accept = "*/*")), config, pm, NULL, tm)
+  expect_equal(result$status, 503)
+  expect_match(result$body, "restarting after a failure")
+  retry <- as.numeric(result$headers[["Retry-After"]])
+  expect_true(retry >= 59 && retry <= 60)
+
+  # A browser receives the page that reloads itself, after the same delay
+  browser <- httpuv_request(list(accept = "text/html,*/*;q=0.8"))
+  page <- handle_proxy_request("/proxy/myapp/", "GET", NULL, browser, config, pm, NULL, tm)
+  expect_equal(page$status, 503)
+  expect_equal(page$headers[["Content-Type"]], "text/html")
+  expect_match(page$body, paste0("var retryMs = ", page$headers[["Retry-After"]], " * 1000;"), fixed = TRUE)
+})
+
+test_that("request decisions read headers under the names the client sent", {
+  # An underscore spelling replaces the HTTP_ entry, but not the header
+  tm <- create_template_manager()
+  first <- route_http_request("/templates/styles/main.css", "GET", "", httpuv_request(list(host = "localhost")),
+    ShinyServerConfig$new(), tm, NULL)
+  etag <- first$headers$ETag
+  cached <- httpuv_request(list("if-none-match" = etag))
+  expect_equal(route_http_request("/templates/styles/main.css", "GET", "", cached,
+    ShinyServerConfig$new(), tm, NULL)$status, 304L)
+  spoofed <- httpuv_request(list("if_none_match" = etag))
+  expect_equal(spoofed$HTTP_IF_NONE_MATCH, etag)
+  expect_equal(route_http_request("/templates/styles/main.css", "GET", "", spoofed,
+    ShinyServerConfig$new(), tm, NULL)$status, 200)
+  expect_equal(route_management_request("/templates/styles/main.css", "GET", spoofed,
+    ShinyServerConfig$new(), list(), tm)$status, 200)
+
+  # The proxy and management Host checks, and the WebSocket Origin check
+  config <- ShinyServerConfig$new()
+  config$config <- list(proxy_host = "127.0.0.1")
+  expect_false(is_allowed_proxy_host(httpuv_request(list(host = "evil.example")), config))
+  expect_true(is_allowed_proxy_host(httpuv_request(list(host = "localhost:3838")), config))
+  expect_equal(handle_management_request(httpuv_request(list(host = "evil.example"),
+    REQUEST_METHOD = "GET", PATH_INFO = "/"), config, list(), tm)$status, 403)
+  expect_true(is_same_origin_websocket(httpuv_request(list(host = "localhost:3838",
+    origin = "http://localhost:3838"))))
+  expect_false(is_same_origin_websocket(httpuv_request(list(host = "localhost:3838",
+    origin = "http://evil.example"))))
+})
+
 # ============================================================================
 # forward_request() tests
 # ============================================================================

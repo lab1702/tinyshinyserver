@@ -101,7 +101,7 @@ route_http_request <- function(path, method, query_string, req, config, template
 
   # Static files (CSS, JS, images)
   if (startsWith(path, "/templates/")) {
-    return(handle_static_file(path, template_manager, req$HTTP_IF_NONE_MATCH))
+    return(handle_static_file(path, template_manager, request_header(req, "if-none-match")))
   }
 
   # 404 for unknown paths
@@ -223,6 +223,14 @@ handle_proxy_request <- function(path, method, query_string, req, config, proces
   }
 
   if (!ensure_on_demand_app_started(app_config, config, process_manager, "HTTP request")) {
+    # An app whose process just failed starts again after restart_delay
+    backoff <- ceiling(config$start_backoff_seconds(app_name))
+    if (backoff > 0) {
+      return(as_starting_page(
+        create_503_response(sprintf("App '%s' is restarting after a failure, please retry", app_name), backoff),
+        req, method, app_name, template_manager, backoff
+      ))
+    }
     return(create_error_response("Failed to start app on demand", 502))
   }
 
@@ -288,6 +296,30 @@ forwarded_request_headers <- function(req, skip = character()) {
   headers
 }
 
+# The proxy's own answers that mean "try again shortly". A browser opening the
+# app's page cannot act on a JSON error or a Retry-After header, so it receives
+# a page that reloads itself, with the same status and headers; every other
+# client receives the JSON.
+as_starting_page <- function(response, req, method, app_name, template_manager, retry_seconds) {
+  opens_page <- identical(method, "GET") &&
+    grepl("text/html", request_header(req, "accept") %||% "", fixed = TRUE)
+  if (is.null(template_manager) || !opens_page) {
+    return(response)
+  }
+  page <- tryCatch(
+    template_manager$generate_starting_page(app_name, retry_seconds),
+    error = function(e) {
+      logger::log_error("Error generating the starting page: {error}", error = conditionMessage(e))
+      NULL
+    }
+  )
+  if (!is.null(page)) {
+    response$body <- page
+    response$headers[["Content-Type"]] <- "text/html"
+  }
+  response
+}
+
 forward_request <- function(method, target_url, req, app_name, config, template_manager = NULL) {
   "Forward HTTP requests without blocking the server's event loop"
 
@@ -299,29 +331,9 @@ forward_request <- function(method, target_url, req, app_name, config, template_
     create_error_response("Bad Gateway", 502)
   }
 
-  # The proxy's own answers that mean "try again shortly". A browser opening
-  # the app's page cannot act on a JSON error or a Retry-After header, so it
-  # receives a page that reloads itself, with the same status and headers;
-  # every other client receives the JSON.
   retry_seconds <- 2
   for_browser <- function(response) {
-    opens_page <- identical(method, "GET") &&
-      grepl("text/html", req$HTTP_ACCEPT %||% "", fixed = TRUE)
-    if (is.null(template_manager) || !opens_page) {
-      return(response)
-    }
-    page <- tryCatch(
-      template_manager$generate_starting_page(app_name, retry_seconds),
-      error = function(e) {
-        logger::log_error("Error generating the starting page: {error}", error = conditionMessage(e))
-        NULL
-      }
-    )
-    if (!is.null(page)) {
-      response$body <- page
-      response$headers[["Content-Type"]] <- "text/html"
-    }
-    response
+    as_starting_page(response, req, method, app_name, template_manager, retry_seconds)
   }
   unavailable <- function(message) {
     for_browser(create_503_response(message, retry_seconds))
@@ -701,7 +713,7 @@ is_allowed_proxy_host <- function(req, config) {
   # page could become same-origin with it and drive local apps
   proxy_host <- config$config$proxy_host %||% "127.0.0.1"
   if (proxy_host %in% c("127.0.0.1", "localhost", "::1")) {
-    return(is_loopback_host_header(req$HTTP_HOST))
+    return(is_loopback_host_header(request_header(req, "host")))
   }
   TRUE
 }
@@ -709,7 +721,7 @@ is_allowed_proxy_host <- function(req, config) {
 is_same_origin_websocket <- function(req) {
   "Whether a WebSocket handshake has no Origin or one matching the request host"
 
-  origin <- req$HTTP_ORIGIN
+  origin <- request_header(req, "origin")
   if (is.null(origin) || identical(origin, "")) {
     return(TRUE) # Non-browser clients do not send Origin
   }
@@ -724,7 +736,7 @@ is_same_origin_websocket <- function(req) {
   default_port <- if (match[2] == "https") "443" else "80"
   origin_authority <- normalize(match[3], default_port)
 
-  hosts <- req$HTTP_HOST
+  hosts <- request_header(req, "host")
   # A reverse proxy on this machine may rewrite Host but report the original
   remote_addr <- req$REMOTE_ADDR
   forwarded_host <- request_header(req, "x-forwarded-host")
@@ -743,7 +755,7 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
   logger::log_info("WebSocket connection opened")
 
   if (!is_allowed_proxy_host(ws$request, config)) {
-    logger::log_warn("Rejecting WebSocket with Host {host}", host = ws$request$HTTP_HOST)
+    logger::log_warn("Rejecting WebSocket with Host {host}", host = request_header(ws$request, "host"))
     ws$close()
     return()
   }
@@ -751,7 +763,7 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
   # Browsers attach cookies and cached credentials to cross-site WebSocket
   # handshakes, so only accept sessions opened by pages served from this host
   if (!is_same_origin_websocket(ws$request)) {
-    logger::log_warn("Rejecting cross-origin WebSocket from {origin}", origin = ws$request$HTTP_ORIGIN)
+    logger::log_warn("Rejecting cross-origin WebSocket from {origin}", origin = request_header(ws$request, "origin"))
     ws$close()
     return()
   }
@@ -807,7 +819,7 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
 
   # Get client connection info
   client_ip <- get_client_ip(ws$request)
-  user_agent <- ws$request$HTTP_USER_AGENT %||% "unknown"
+  user_agent <- request_header(ws$request, "user-agent") %||% "unknown"
 
   # Add connection to manager
   connection_manager$add_client_connection(session_id, ws, app_name, client_ip, user_agent)

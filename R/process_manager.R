@@ -146,8 +146,8 @@ app_start_problem <- function(app_config) {
 
 # quarto_serve() renders a document before serving it, which takes many
 # seconds on every start, including each start of an on-demand app. The
-# rendered page stays valid while it is newer than every other file in the
-# app directory, so render only when it is missing or something has changed.
+# rendered page stays valid while it is newer than every other source file in
+# the app directory, so render only when it is missing or something has changed.
 # The server's logs are not sources: when log_dir lies in the app directory,
 # they change at every start. start_app() hands this function to the app's
 # own process, which need not load this package, so it may call only base R.
@@ -163,6 +163,13 @@ quarto_needs_render <- function(qmd_file, log_dir = NULL) {
   generated <- c(basename(output), sub("\\.qmd$", "_files", basename(qmd_file), ignore.case = TRUE), ".quarto")
   sources <- list.files(app_dir, recursive = TRUE, all.files = TRUE)
   sources <- sources[!sub("/.*$", "", sources) %in% generated]
+  # Files that change without the document changing: hidden files and
+  # directories, such as .git, .Rproj.user, and .Rhistory, and the packages
+  # that renv installs. A top-level .Rprofile or .Renviron does count, as it
+  # configures the R session that renders the document.
+  hidden <- grepl("(^|/)[.]", sources) & !sources %in% c(".Rprofile", ".Renviron")
+  renv_owned <- grepl("^renv/(library|local|python|sandbox|staging)/", sources)
+  sources <- sources[!hidden & !renv_owned]
 
   # The .log files directly in log_dir: server.log and every app's logs
   if (!is.null(log_dir)) {
@@ -346,26 +353,28 @@ ProcessManager <- setRefClass("ProcessManager",
       config$add_app_process(app_name, process)
 
       # Mark app as starting (for non-blocking startup handling)
+      started_at <- Sys.time()
       config$set_app_starting(app_name)
 
       # Schedule async readiness check instead of blocking
       later::later(function() {
-        check_app_ready(app_name, app_port, process)
+        check_app_ready(app_name, app_port, process, started_at = started_at)
       }, delay = 0.5)
 
       # Return immediately - don't block
       logger::log_info("App {app_name} process started, checking readiness asynchronously", app_name = app_name)
       return(TRUE)
     },
-    check_app_ready = function(app_name, app_port, process, attempt = 1, max_attempts = NULL) {
+    check_app_ready = function(app_name, app_port, process, attempt = 1, started_at = Sys.time(),
+                               timed_out = FALSE) {
       "Check if app is ready to accept connections (async, non-blocking)"
 
-      if (is.null(max_attempts)) {
-        # Poll for the same window in which the app counts as starting up.
-        app_config <- config$get_app_config(app_name)
-        startup_timeout <- max(config$APP_STARTUP_TIMEOUT_SECONDS, app_config$appstart_timeout %||% 2)
-        max_attempts <- ceiling(startup_timeout / 0.5)
-      }
+      force(started_at)
+      # Poll often for the window in which the app counts as starting up,
+      # measured in time from its start: a probe of a port that nothing
+      # listens on can take a second, as on Windows
+      app_config <- config$get_app_config(app_name)
+      startup_timeout <- max(config$APP_STARTUP_TIMEOUT_SECONDS, app_config$appstart_timeout %||% 2)
 
       # Ignore callbacks from stopped or replaced process generations.
       if (!identical(config$get_app_process(app_name), process)) return(FALSE)
@@ -376,6 +385,7 @@ ProcessManager <- setRefClass("ProcessManager",
         if (!kill_process_safely(process)) return(FALSE)
         config$set_app_ready(app_name) # Remove startup state
         config$remove_app_process(app_name)
+        config$note_start_failure(app_name)
         return(FALSE)
       }
 
@@ -398,18 +408,19 @@ ProcessManager <- setRefClass("ProcessManager",
           return(TRUE)
         }
 
-        # If not ready and haven't exceeded max attempts, schedule another check
-        if (attempt < max_attempts) {
+        # If not ready and still within the startup window, schedule another check
+        elapsed <- as.numeric(difftime(Sys.time(), started_at, units = "secs"))
+        if (elapsed < startup_timeout) {
           later::later(function() {
-            check_app_ready(app_name, app_port, process, attempt + 1, max_attempts)
+            check_app_ready(app_name, app_port, process, attempt + 1, started_at)
           }, delay = 0.5)
-          logger::log_debug("App {app_name} not ready yet, will retry (attempt {attempt}/{max})",
-            app_name = app_name, attempt = attempt, max = max_attempts
+          logger::log_debug("App {app_name} not ready yet, will retry (attempt {attempt}, {elapsed} of {timeout} seconds)",
+            app_name = app_name, attempt = attempt, elapsed = round(elapsed, 1), timeout = startup_timeout
           )
           return(FALSE)
         }
 
-        if (attempt == max_attempts) {
+        if (!timed_out) {
           # The next request for the app reports the timeout and ends this state
           config$set_app_start_timed_out(app_name)
         }
@@ -418,17 +429,17 @@ ProcessManager <- setRefClass("ProcessManager",
         # may keep starting.
         uptime <- process_uptime_seconds(process)
         if (!is.null(uptime) && uptime < config$ON_DEMAND_START_LIMIT_SECONDS) {
-          if (attempt == max_attempts) {
-            logger::log_warn("App {app_name} is not ready after {max} attempts; still waiting for it to start",
-              app_name = app_name, max = max_attempts
+          if (!timed_out) {
+            logger::log_warn("App {app_name} is not ready after {seconds} seconds; still waiting for it to start",
+              app_name = app_name, seconds = round(elapsed)
             )
           }
           later::later(function() {
-            check_app_ready(app_name, app_port, process, attempt + 1, max_attempts)
+            check_app_ready(app_name, app_port, process, attempt + 1, started_at, timed_out = TRUE)
           }, delay = 2)
         } else {
-          logger::log_error("App {app_name} failed to become ready after {attempts} attempts",
-            app_name = app_name, attempts = attempt
+          logger::log_error("App {app_name} failed to become ready after {seconds} seconds",
+            app_name = app_name, seconds = round(elapsed)
           )
         }
 
@@ -461,12 +472,24 @@ ProcessManager <- setRefClass("ProcessManager",
         if (!kill_process_safely(process)) return(FALSE)
         cleanup_app_connections(app_name)
         config$remove_app_process(app_name)
+        config$note_start_failure(app_name)
       }
 
       # Check if app is currently starting
       if (config$is_app_starting(app_name)) {
         logger::log_debug("App {app_name} is already starting, not starting again", app_name = app_name)
         return(TRUE)
+      }
+
+      # An app whose process failed starts again only after restart_delay, as
+      # a resident app does, rather than at every request: a visitor's starting
+      # page asks every few seconds, and each start loads a new R process
+      backoff <- config$start_backoff_seconds(app_name)
+      if (backoff > 0) {
+        logger::log_info("Not starting app {app_name} yet: its process failed; it can start again in {seconds} seconds",
+          app_name = app_name, seconds = ceiling(backoff)
+        )
+        return(FALSE)
       }
 
       logger::log_info("Starting app {app_name} on demand", app_name = app_name)
@@ -519,19 +542,22 @@ ProcessManager <- setRefClass("ProcessManager",
 
       tryCatch(
         {
-          # Close existing connections for this app
-          cleanup_app_connections(app_name)
-
-          # Stop existing process
+          # Stop existing process. Its users are disconnected only once it has
+          # stopped, so a restart that cannot stop it leaves them connected.
           process <- config$get_app_process(app_name)
           if (!is.null(process)) {
             if (!kill_process_safely(process)) {
               return(list(success = FALSE, message = paste("Failed to stop app", app_name)))
             }
           }
+
+          # Close existing connections for this app
+          cleanup_app_connections(app_name)
           config$remove_app_process(app_name)
-          # This restart replaces one that a failure had scheduled
+          # This restart replaces one that a failure had scheduled, and an
+          # on-demand app may start again as soon as it is next opened
           assign(app_name, NULL, envir = pending_restarts)
+          config$clear_start_failure(app_name)
 
           # An on-demand app has no users left to serve, so it starts again
           # when it is next opened
@@ -617,6 +643,7 @@ ProcessManager <- setRefClass("ProcessManager",
 
               # Remove dead process
               config$remove_app_process(app_name)
+              config$note_start_failure(app_name)
 
               # Only restart if it's a resident app
               if (app_config$resident) {
@@ -788,18 +815,18 @@ ProcessManager <- setRefClass("ProcessManager",
         return(NULL)
       }
 
-      status <- if (is.null(process)) {
-        if (app_config$resident) {
-          "stopped" # Resident app should be running
-        } else if (is.null(config$cached_start_problem(app_config))) {
-          "dormant" # Non-resident app is normally stopped
-        } else {
-          "unavailable" # Opening the app could not start it
-        }
-      } else if (is_process_alive(process)) {
+      # An on-demand app whose process has exited but not yet been cleaned up
+      # is not shown as crashed: opening it starts it again, while a restart
+      # from the dashboard would only stop it
+      alive <- !is.null(process) && is_process_alive(process)
+      status <- if (alive) {
         "running"
+      } else if (app_config$resident) {
+        if (is.null(process)) "stopped" else "crashed" # Resident app should be running
+      } else if (is.null(config$cached_start_problem(app_config))) {
+        "dormant" # Non-resident app is normally stopped
       } else {
-        "crashed"
+        "unavailable" # Opening the app could not start it
       }
 
       app_status <- list(

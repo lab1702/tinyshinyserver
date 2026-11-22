@@ -117,7 +117,7 @@ Each entry in `apps` has these settings:
 | `management_port` | `3839` | Port for the management dashboard and API, which listen only on `127.0.0.1` |
 | `base_path` | `""` | Public URL prefix, such as `"/shiny"`, when a reverse proxy serves the apps under a path; see [Serving under a URL prefix](#serving-under-a-url-prefix) |
 | `title` | `"Tiny Shiny Server"` | Name shown in the browser tab and top bar of the landing and management pages; up to 100 characters |
-| `restart_delay` | `5` | Seconds to wait before restarting a failed resident app. A restart requested from the dashboard or API does not wait |
+| `restart_delay` | `5` | Seconds to wait before restarting a failed app: a resident app restarts then, and an on-demand app at the next request after that. A restart requested from the dashboard or API does not wait |
 | `health_check_interval` | `10` | Seconds between health checks, which find app processes that have exited |
 | `max_request_size_mb` | `100` | Largest request body, in megabytes, that the proxy accepts; see [Limits and timeouts](#limits-and-timeouts) |
 | `idle_timeout_minutes` | `30` | Minutes without a WebSocket message, in either direction, after which a session is closed; `0` keeps idle sessions open |
@@ -162,7 +162,7 @@ An app's R process starts in the app's directory and reads the `.Renviron` and `
 
 ### R Markdown and Quarto documents
 
-A Quarto document is rendered before it is served, which can take many seconds. To keep starts and restarts fast, the server renders it only when the rendered page (`{name}.html`, next to the `.qmd`) is missing or older than another file in the app directory. The server's own `.log` files do not count when `log_dir` lies in the app directory. The app's error log records whether the document was rendered.
+A Quarto document is rendered before it is served, which can take many seconds. To keep starts and restarts fast, the server renders it only when the rendered page (`{name}.html`, next to the `.qmd`) is missing or older than another file in the app directory. The server's own `.log` files do not count when `log_dir` lies in the app directory. Neither do hidden files and directories, such as `.git`, `.Rproj.user`, and `.Rhistory`, except a top-level `.Rprofile` or `.Renviron`, nor the packages that renv installs (`renv/library`, `renv/staging`, and renv's other package directories); `renv.lock` does count. The app's error log records whether the document was rendered.
 
 This check does not notice:
 
@@ -216,7 +216,7 @@ An on-demand app stops once it has had no WebSocket connection and no HTTP reque
 
 An app that is still starting at that point is left to finish, for up to 10 minutes from its start, and stops within 30 seconds after it is ready if it is still unused. A slow start, such as a Quarto render, is therefore not thrown away when the visitor's page stops waiting. On platforms where the `ps` package cannot list a process's sockets, the server cannot tell that an app is still starting, and stops it.
 
-A failed on-demand app starts again at the next request.
+A failed on-demand app, such as one that stops with an error at startup, starts again at the first request that comes at least `restart_delay` seconds after the failure. An earlier request receives HTTP 503 with a `Retry-After` header for the time that is left, and a browser receives the page that reloads itself, so a failing app is not started again by every reload.
 
 ### Startup
 
@@ -242,10 +242,10 @@ Both pages refresh their status every 5 seconds. They follow the system's light 
 | Status | Meaning |
 |--------|---------|
 | **running** | The app's process is running |
-| **dormant** | An on-demand app that is not running; opening it starts it |
+| **dormant** | An on-demand app that is not running, including one whose process has exited; opening it starts it |
 | **unavailable** | An on-demand app whose directory cannot be served; `server.log` gives the reason |
 | **stopped** | A resident app that is not running, such as one waiting to be restarted |
-| **crashed** | The app's process has exited and has not yet been cleaned up by a health check |
+| **crashed** | A resident app whose process has exited and has not yet been cleaned up by a health check |
 
 The landing page links to running and dormant apps. Tiles for unavailable, stopped, and crashed apps are disabled, and all tiles are disabled while the server is unreachable.
 
@@ -255,7 +255,7 @@ Memory figures are the resident memory (RSS) of the server's own R process and o
 
 ### Restarting an app
 
-Running, stopped, and crashed apps can be restarted from the management dashboard. A restart disconnects the app's users. A resident app starts again at once, without waiting for `restart_delay`; an on-demand app stops and starts again when it is next opened. Dormant apps start when opened, and an unavailable app becomes dormant once its directory can be served.
+Running, stopped, and crashed apps can be restarted from the management dashboard. A restart disconnects the app's users once their app's process has stopped; if it cannot be stopped, the restart fails and they stay connected. A resident app starts again at once, without waiting for `restart_delay`; an on-demand app stops and starts again when it is next opened. Dormant apps start when opened, and an unavailable app becomes dormant once its directory can be served.
 
 ### Reloading the configuration
 

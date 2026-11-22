@@ -50,6 +50,10 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     app_startup_state = "environment", # Track app startup progress (starting/ready)
     verified_backends = "environment", # Process generations confirmed to own their app port
     start_problems = "environment", # Recent app_start_problem() results, by app name
+    # When each app's process last exited without being stopped, until the app
+    # next listens on its port. An on-demand app is started again only once
+    # restart_delay has passed, as a resident app is.
+    start_failures = "environment",
     shutdown_requested = "logical", # Set by the management API; read by the event loop
     reload_requested = "logical", # Set by the management API; read by the event loop
     last_reload = "list", # Outcome of the latest reload; empty while one is pending
@@ -94,6 +98,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       app_startup_state <<- new.env(hash = TRUE, parent = emptyenv())
       verified_backends <<- new.env(hash = TRUE, parent = emptyenv())
       start_problems <<- new.env(hash = TRUE, parent = emptyenv())
+      start_failures <<- new.env(hash = TRUE, parent = emptyenv())
       shutdown_requested <<- FALSE
       reload_requested <<- FALSE
       last_reload <<- list()
@@ -220,6 +225,26 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       app_startup_state <<- new.env(hash = TRUE, parent = emptyenv())
       verified_backends <<- new.env(hash = TRUE, parent = emptyenv())
       start_problems <<- new.env(hash = TRUE, parent = emptyenv())
+      start_failures <<- new.env(hash = TRUE, parent = emptyenv())
+    },
+    note_start_failure = function(app_name) {
+      "Record that an app's process exited without being stopped"
+      assign(app_name, Sys.time(), envir = start_failures)
+    },
+    clear_start_failure = function(app_name) {
+      "Forget an app's last process failure"
+      if (exists(app_name, envir = start_failures, inherits = FALSE)) {
+        rm(list = app_name, envir = start_failures)
+      }
+    },
+    start_backoff_seconds = function(app_name) {
+      "Seconds until an app whose process failed may be started on demand again, or 0"
+      failed_at <- start_failures[[app_name]]
+      if (is.null(failed_at)) {
+        return(0)
+      }
+      delay <- config$restart_delay %||% 5
+      max(0, delay - as.numeric(difftime(Sys.time(), failed_at, units = "secs")))
     },
     cached_start_problem = function(app_config) {
       "Why an app's directory cannot be served, or NULL, looked up again only once the directory changes"
@@ -469,6 +494,8 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       if (identical(verified_backends[[app_name]], process)) return(TRUE)
       if (!process_owns_port(process, port)) return(FALSE)
       assign(app_name, process, envir = verified_backends)
+      # An app that listens has started, whatever happened to its last process
+      clear_start_failure(app_name)
       TRUE
     },
     add_ws_connection = function(session_id, connection_info) {

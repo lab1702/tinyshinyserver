@@ -919,7 +919,8 @@ test_that("the proxy never forwards to another program holding an app's port", {
 
   config$set_app_starting("app")
   pm <- ProcessManager$new(config)
-  expect_false(await_response(pm$check_app_ready("app", backend$port, app, max_attempts = 1)))
+  expect_false(await_response(pm$check_app_ready("app", backend$port, app,
+    started_at = Sys.time() - config$APP_STARTUP_TIMEOUT_SECONDS - 1)))
   request <- function() {
     await_response(forward_request("GET", backend$url, list(HTTP_COOKIE = "session=secret"), "app", config))
   }
