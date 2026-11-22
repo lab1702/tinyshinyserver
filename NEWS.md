@@ -196,7 +196,7 @@
 
 * The package now requires `httpuv` 1.5.2 or later, the first version whose `startServer()` has the `quiet` argument; with an older `httpuv`, every port was reported as in use and the server did not start. It also requires `later` 1.4.0 (for `later_fd()`, which the faster transfers use), `curl` 3.3 (for `file_writer()`, which writes large responses to disk), `websocket` 1.1.0 (whose client accepts the `maxMessageSize` that large app messages need), and `ps` 1.2.0 (for `ps_connections()`, which identifies the process listening on an app's port).
 
-* Removed the unused `future` dependency, and `digest`: session IDs are 256 random bits from `openssl`, and hashing them with request details added nothing. `tools` and `utils` are now declared imports, as is `glue`, which `logger` needs to format the package's log messages. Added `ps`, already required by `callr`.
+* Removed the unused `future` dependency, and `digest` and `openssl`: session IDs only key the server's own connection tables and are never read from a request, so they are now numbered in order instead of hashed from random bits and request details. `tools` and `utils` are now declared imports, as is `glue`, which `logger` needs to format the package's log messages. Added `ps`, already required by `callr`.
 
 * The browser tests in `tests/browser`, which need Node.js and Playwright, are no longer included in the built package.
 

@@ -108,11 +108,18 @@ get_client_ip <- function(req) {
 }
 
 
-# Generate session ID
-generate_session_id <- function() {
-  "Generate a session ID: 256 cryptographically secure random bits as 64 hex characters"
+# Session IDs only key the server's own connection tables. No request carries
+# one or is looked up by one (the management API merely lists them), so they
+# must be unique but need not be secret. A counter guarantees that without
+# touching the caller's random number stream, as sample() would.
+session_counter <- new.env(parent = emptyenv())
+session_counter$last <- 0
 
-  paste(as.character(openssl::rand_bytes(32)), collapse = "")
+generate_session_id <- function() {
+  "Generate a session ID that no other connection in this R session has had"
+
+  session_counter$last <- session_counter$last + 1
+  sprintf("ws-%.0f", session_counter$last)
 }
 
 # Logging setup

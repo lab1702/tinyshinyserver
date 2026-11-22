@@ -42,7 +42,8 @@ that can affect existing users are:
 * The package now requires R >= 4.1.0, as its `promises` and `quarto`
   dependencies already do, and newer minimum versions of `httpuv` (1.5.2),
   `later` (1.4.0), `curl` (3.3), `websocket` (1.1.0), and `ps` (1.2.0) for
-  functions it now uses. It no longer imports `future` or `digest`.
+  functions it now uses. It no longer imports `future`, `digest`, or
+  `openssl`.
 
 ## Test environments
 

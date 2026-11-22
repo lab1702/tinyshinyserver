@@ -72,17 +72,36 @@ test_that("get_client_ip returns unknown for missing info", {
 # generate_session_id() tests
 # ============================================================================
 
-test_that("generate_session_id creates 64-character hex string", {
-  session_id <- generate_session_id()
+test_that("generate_session_id numbers sessions in order", {
+  first <- generate_session_id()
+  second <- generate_session_id()
 
-  expect_equal(nchar(session_id), 64)
-  expect_match(session_id, "^[a-f0-9]{64}$")
+  expect_match(c(first, second), "^ws-[0-9]+$")
+  expect_equal(as.numeric(sub("ws-", "", second)), as.numeric(sub("ws-", "", first)) + 1)
 })
 
 test_that("generate_session_id creates unique IDs", {
   ids <- vapply(1:50, function(i) generate_session_id(), "")
 
   expect_equal(length(unique(ids)), 50)
+})
+
+test_that("generate_session_id leaves the random number stream alone", {
+  old_seed <- get0(".Random.seed", envir = globalenv(), inherits = FALSE)
+  on.exit(
+    if (is.null(old_seed)) {
+      rm(".Random.seed", envir = globalenv())
+    } else {
+      assign(".Random.seed", old_seed, envir = globalenv())
+    },
+    add = TRUE
+  )
+  set.seed(1)
+  seed <- get(".Random.seed", envir = globalenv())
+
+  generate_session_id()
+
+  expect_identical(get(".Random.seed", envir = globalenv()), seed)
 })
 
 # ============================================================================
