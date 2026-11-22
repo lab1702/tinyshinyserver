@@ -283,5 +283,8 @@ CLAUDE.md
 # Claude Code local settings and session files
 .claude/
 
+# Page snapshots saved by the Playwright MCP plugin
+.playwright-mcp/
+
 # CRAN specific
 CRAN-SUBMISSION

@@ -4,6 +4,7 @@
 ^\.Rcheck$
 ^\.\.Rcheck$
 ^\.claude$
+^\.playwright-mcp$
 ^.*\.Rproj$
 ^\.Rproj\.user$
 ^README\.Rmd$
