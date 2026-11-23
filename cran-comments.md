@@ -39,6 +39,13 @@ that can affect existing users are:
   process IDs.
 * On-demand apps stop 30 seconds after their last WebSocket closes instead
   of immediately, so reloading a page no longer cold-starts the app.
+* Configuration files that give a field twice, or a `restart_delay`,
+  `health_check_interval`, or `appstart_timeout` above one day, are
+  rejected. A timer of about 1e12 seconds stopped the server from answering.
+* An R Markdown app serves only its entry document; requests for its
+  directory's other `.Rmd` and `.qmd` documents receive HTTP 404.
+* If an unexpected error stops the server, `start_tss()` signals an error
+  once the server and apps have stopped, instead of returning normally.
 * The package now requires R >= 4.1.0, as its `promises` and `quarto`
   dependencies already do, and newer minimum versions of `httpuv` (1.5.2),
   `later` (1.4.0), `curl` (3.3), `websocket` (1.1.0), and `ps` (1.2.0) for
@@ -50,10 +57,10 @@ that can affect existing users are:
 * Local: Windows 11 x64 (build 26300), x86_64-w64-mingw32,
   R 4.6.2 (2026-10-29 ucrt).
   Checked with `R CMD check --as-cran` on the source tarball built from
-  commit 6be7e49, including the PDF manual and the CRAN incoming
+  commit 66fa014, including the PDF manual and the CRAN incoming
   feasibility check.
-* R-hub (commit 6be7e49, run
-  https://github.com/lab1702/tinyshinyserver/actions/runs/45080106067):
+* R-hub (commit 66fa014, run
+  https://github.com/lab1702/tinyshinyserver/actions/runs/45086869979):
   linux (R-devel), windows (R-devel), macos-arm64 (R-devel), gcc16, and
   ubuntu-gcc12.
 
@@ -64,12 +71,16 @@ from the build, so the package checked is identical.
 
 Local: 0 errors | 0 warnings | 0 notes.
 
-R-hub at commit 6be7e49: 0 errors | 0 warnings | 0 notes on all five platforms.
+R-hub at commit 66fa014: 0 errors | 0 warnings | 0 notes on all five platforms.
 
-Test results: 2380 passes locally and on all five R-hub platforms, with 9
-intentional skips on CRAN (a timing check of the port test and eight tests
-that start real R processes). All runs had 0 failures and 0 warnings. One
-test's expectation count depends on timing.
+Test results: 2493 passes locally and on R-hub's windows (R-devel), with 9
+intentional skips on CRAN (a timing check of the port test, and eight tests
+that run R processes, such as apps that load shiny, and check their output,
+memory use, or cleanup). The other four R-hub platforms have 2492 passes and
+one more skip: a test of keeping an app's log when it is held open runs only
+on Windows, the one platform that refuses to rename an open file. All runs
+had 0 failures and 0 warnings. One test's expectation count depends on
+timing.
 
 ## Downstream dependencies
 
