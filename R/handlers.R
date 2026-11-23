@@ -209,7 +209,11 @@ is_other_document_path <- function(document, backend_path, websocket = FALSE) {
     return(FALSE)
   }
   path <- tryCatch(utils::URLdecode(backend_path), error = function(e) backend_path)
-  # A decoded path that is not UTF-8 cannot be compared, and is refused
+  # A decoded path that is not UTF-8 cannot be compared, and is refused. It
+  # is found first: comparing it would warn as well as fail, on Windows.
+  if (!validUTF8(path)) {
+    return(TRUE)
+  }
   tryCatch({
     if (websocket) path <- sub("/websocket/$", "", path)
     if (path %in% c("", "/") || is_document_name(path, document$file)) {
