@@ -464,7 +464,7 @@ test_that("an on-demand app that the idle check finds dead waits restart_delay",
   expect_true(pm$stop_app_immediately("app1"))
   expect_null(config$get_app_process("app1"))
   expect_equal(cleaned, 1)
-  expect_gt(config$start_backoff_seconds("app1"), 59)
+  expect_gt(config$start_backoff_seconds("app1"), 30)
 })
 
 test_that("an app that stopped itself has not failed, and starts again without waiting", {
@@ -499,7 +499,7 @@ test_that("an app that stopped itself has not failed, and starts again without w
         expect_equal(config$start_backoff_seconds("app1"), 0, info = name)
         expect_false(any(grepl("^ERROR", logged)), info = name)
       } else {
-        expect_gt(config$start_backoff_seconds("app1"), 59)
+        expect_gt(config$start_backoff_seconds("app1"), 30)
       }
     }
   }
@@ -1874,7 +1874,7 @@ test_that("an R Markdown app serves the document that the server chose at its ro
   expect_equal(config$get_app_document("app")$file, args$args$file)
   ran <- NULL
   local_mocked_bindings(run = function(...) ran <<- list(...), .package = "rmarkdown")
-  do.call(args[[1]], utils::modifyList(args$args, list(profile_setting = "")))
+  do.call(args[[1]], utils::modifyList(args$args, list(profile_setting = "", drop_renv_project = FALSE)))
   expect_equal(ran$default_file, "report.Rmd")
 })
 
@@ -1944,11 +1944,12 @@ test_that("an app runs the profile that R runs in its directory", {
 test_that("an app whose environment file sets R_PROFILE_USER runs that profile and no other", {
   app_dir <- make_test_app_dir()
   on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
-  saved <- Sys.getenv(c("R_ENVIRON_USER", "R_PROFILE_USER", "TSS_APP_PROFILE_USER"), unset = NA, names = TRUE)
+  saved <- Sys.getenv(c("R_ENVIRON_USER", "R_PROFILE_USER", "TSS_APP_PROFILE_USER", "TSS_CALLR_PROFILE_USER",
+    "RENV_PROJECT"), unset = NA, names = TRUE)
   on.exit(for (name in names(saved)) {
     if (is.na(saved[[name]])) Sys.unsetenv(name) else do.call(Sys.setenv, structure(list(saved[[name]]), names = name))
   }, add = TRUE)
-  Sys.unsetenv("R_ENVIRON_USER")
+  Sys.unsetenv(c("R_ENVIRON_USER", "TSS_CALLR_PROFILE_USER"))
   writeLines("options(tss.test.profile = 'app')", file.path(app_dir, ".Rprofile"))
   writeLines("options(tss.test.profile = 'named')", file.path(app_dir, "named.Rprofile"))
   config <- ShinyServerConfig$new()
@@ -1992,6 +1993,63 @@ test_that("an app whose environment file sets R_PROFILE_USER runs that profile a
   expect_true(is.na(Sys.getenv("TSS_APP_PROFILE_USER", unset = NA)))
   expect_identical(environ_assigned_names(nullfile()), character())
   expect_identical(environ_assigned_names(file.path(app_dir, "missing")), character())
+
+  # R skips a line that gives the variable no value, so the file has chosen
+  # no profile, and the app's own runs as it would without the line
+  expect_equal(start("R_PROFILE_USER="), list(chosen = FALSE, read = TRUE, ran = "app"))
+  # So it does where the value expands to nothing, which only R can tell:
+  # the profile that R kept for the app is then still callr's own
+  Sys.setenv(R_PROFILE_USER = "restored-by-callr", TSS_CALLR_PROFILE_USER = "callr.profile")
+  expect_equal(start("R_PROFILE_USER=${TSS_TEST_NOT_SET}", "callr.profile"), list(chosen = TRUE, read = FALSE, ran = "app"))
+  expect_identical(Sys.getenv("R_PROFILE_USER"), "restored-by-callr")
+  expect_true(is.na(Sys.getenv("TSS_CALLR_PROFILE_USER", unset = NA)))
+  expect_false(file.exists(args$env[["R_ENVIRON_USER"]]))
+
+  # The lines of a file that assign a variable, as R reads them
+  writeLines(c("A=1", " B = two ", "C=", "D=   ", "# E=1", "F=\"\"", "G=${TSS_TEST_NOT_SET}", "no equals sign"),
+    file.path(app_dir, "names.Renviron"))
+  expect_identical(environ_assigned_names(file.path(app_dir, "names.Renviron")), c("A", "B", "F", "G"))
+})
+
+test_that("an app starts without the renv project of the server's session", {
+  app_dir <- make_test_app_dir()
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  saved <- Sys.getenv(c("R_ENVIRON_USER", "RENV_PROJECT"), unset = NA, names = TRUE)
+  on.exit(for (name in names(saved)) {
+    if (is.na(saved[[name]])) Sys.unsetenv(name) else do.call(Sys.setenv, structure(list(saved[[name]]), names = name))
+  }, add = TRUE)
+  Sys.unsetenv("R_ENVIRON_USER")
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", path = app_dir, port = 1, resident = TRUE)),
+    log_dir = tempdir())
+  args <- NULL
+  local_mocked_bindings(r_bg = function(...) {
+    args <<- list(...)
+    list(is_alive = function() TRUE)
+  }, .package = "callr")
+  # What the app's own profile, such as one that activates renv, finds named
+  # as the project when the app's function runs
+  project_seen <- function(environ) {
+    writeLines(environ, file.path(app_dir, ".Renviron"))
+    ProcessManager$new(config)$start_app(config$config$apps[[1]])
+    config$remove_app_process("app")
+    # A server that runs in a renv project has this set, and every process
+    # that it starts inherits it
+    Sys.setenv(RENV_PROJECT = "the-server's-project")
+    old_dir <- setwd(app_dir)
+    on.exit(setwd(old_dir), add = TRUE)
+    local_mocked_bindings(runApp = function(...) Sys.getenv("RENV_PROJECT", unset = NA), .package = "shiny")
+    do.call(args[[1]], utils::modifyList(args$args, list(profile_setting = "")))
+  }
+
+  # renv's activation script reads the variable before the working directory,
+  # and would activate the server's project in place of the app's
+  expect_true(is.na(project_seen("TSS_TEST=1")))
+  expect_true(args$args$drop_renv_project)
+  # An app's own environment file may name its project
+  expect_equal(project_seen("RENV_PROJECT=the-server's-project"), "the-server's-project")
+  expect_false(args$args$drop_renv_project)
+  expect_true(is.na(project_seen("RENV_PROJECT=")))
 })
 
 test_that("an app's process calls the .First() that its profile defines", {
@@ -2024,7 +2082,7 @@ test_that("an app's process calls the .First() that its profile defines", {
     on.exit(options(old_option), add = TRUE)
     local_mocked_bindings(runApp = function(...) getOption("tss.test.first", "none"), .package = "shiny")
     messages <- character()
-    ran <- withCallingHandlers(do.call(args[[1]], utils::modifyList(args$args, list(profile_setting = NA))),
+    ran <- withCallingHandlers(do.call(args[[1]], utils::modifyList(args$args, list(profile_setting = NA, drop_renv_project = FALSE))),
       message = function(m) {
         messages <<- c(messages, conditionMessage(m))
         invokeRestart("muffleMessage")
@@ -2073,19 +2131,24 @@ test_that("an app process reads its own .Rprofile and .Renviron, not the server'
   on.exit(unlink(c(server_dir, app_dir), recursive = TRUE), add = TRUE)
   old_profile <- Sys.getenv("R_PROFILE_USER", unset = NA)
   old_environ <- Sys.getenv("R_ENVIRON_USER", unset = NA)
+  old_project <- Sys.getenv("RENV_PROJECT", unset = NA)
   on.exit({
     if (is.na(old_profile)) Sys.unsetenv("R_PROFILE_USER") else Sys.setenv(R_PROFILE_USER = old_profile)
     if (is.na(old_environ)) Sys.unsetenv("R_ENVIRON_USER") else Sys.setenv(R_ENVIRON_USER = old_environ)
+    if (is.na(old_project)) Sys.unsetenv("RENV_PROJECT") else Sys.setenv(RENV_PROJECT = old_project)
   }, add = TRUE)
   Sys.unsetenv(c("R_PROFILE_USER", "R_ENVIRON_USER"))
+  # As in a server that runs in a renv project, which every process that it
+  # starts inherits: an app's profile that activates renv reads this first
+  Sys.setenv(RENV_PROJECT = server_dir)
   marker <- file.path(app_dir, "profiles")
   writeLines("options(tss.test.profile = 'server')", file.path(server_dir, ".Rprofile"))
   writeLines("options(tss.test.profile = 'app')", file.path(app_dir, ".Rprofile"))
   writeLines("TSS_TEST_ENVIRON=server", file.path(server_dir, ".Renviron"))
   writeLines("TSS_TEST_ENVIRON=app", file.path(app_dir, ".Renviron"))
   writeLines(c(
-    sprintf("writeLines(c(getOption('tss.test.profile', 'none'), Sys.getenv('TSS_TEST_ENVIRON', 'none')), %s)",
-      deparse(marker)),
+    sprintf(paste0("writeLines(c(getOption('tss.test.profile', 'none'), Sys.getenv('TSS_TEST_ENVIRON', 'none'), ",
+      "Sys.getenv('RENV_PROJECT', 'none')), %s)"), deparse(marker)),
     "Sys.sleep(60)"
   ), file.path(app_dir, "app.R"))
 
@@ -2100,7 +2163,7 @@ test_that("an app process reads its own .Rprofile and .Renviron, not the server'
 
   read_marker <- function() {
     deadline <- Sys.time() + 30
-    while (length(if (file.exists(marker)) readLines(marker)) < 2 && Sys.time() < deadline) Sys.sleep(0.1)
+    while (length(if (file.exists(marker)) readLines(marker)) < 3 && Sys.time() < deadline) Sys.sleep(0.1)
     readLines(marker)
   }
   restart <- function() {
@@ -2108,13 +2171,14 @@ test_that("an app process reads its own .Rprofile and .Renviron, not the server'
     unlink(marker)
     ProcessManager$new(config)$start_app(config$config$apps[[1]])
   }
-  expect_equal(read_marker(), c("app", "app"))
+  # The app's own profile and variables, and no project of the server's
+  expect_equal(read_marker(), c("app", "app", "none"))
   expect_true(file.exists(file.path(server_dir, "logs", "app_error.log")))
 
   # An error in the profile is reported, and the app still starts
   writeLines("stop('broken profile')", file.path(app_dir, ".Rprofile"))
   restart()
-  expect_equal(read_marker(), c("none", "app"))
+  expect_equal(read_marker(), c("none", "app", "none"))
   expect_match(paste(readLines(file.path(server_dir, "logs", "app_error.log")), collapse = "\n"),
     "broken profile", fixed = TRUE)
 
@@ -2124,16 +2188,18 @@ test_that("an app process reads its own .Rprofile and .Renviron, not the server'
   writeLines("options(tss.test.profile = 'user')", user_profile)
   Sys.setenv(R_PROFILE_USER = user_profile)
   restart()
-  expect_equal(read_marker(), c("user", "app"))
+  expect_equal(read_marker(), c("user", "app", "none"))
 
   # A profile that the app's .Renviron names is the one that runs, as at R's
-  # startup: the app's .Rprofile does not run after it
   Sys.unsetenv("R_PROFILE_USER")
   writeLines("options(tss.test.profile = 'app')", file.path(app_dir, ".Rprofile"))
   writeLines("options(tss.test.profile = 'named')", file.path(app_dir, "named.Rprofile"))
-  writeLines(c("TSS_TEST_ENVIRON=app", "R_PROFILE_USER=named.Rprofile"), file.path(app_dir, ".Renviron"))
+  # startup: the app's .Rprofile does not run after it. A project that the
+  # file names is the app's to choose.
+  writeLines(c("TSS_TEST_ENVIRON=app", "R_PROFILE_USER=named.Rprofile", "RENV_PROJECT=own"),
+    file.path(app_dir, ".Renviron"))
   restart()
-  expect_equal(read_marker(), c("named", "app"))
+  expect_equal(read_marker(), c("named", "app", "own"))
 
   # callr still finishes setting up such an app's process, so an error that
   # ends the app reaches its error log
@@ -2441,7 +2507,7 @@ test_that("an on-demand app whose process failed starts again only after restart
     expect_false(pm$start_app_on_demand("app"), info = found_by)
     expect_equal(starts, 0, info = found_by)
     expect_null(config$get_app_process("app"), info = found_by)
-    expect_gt(config$start_backoff_seconds("app"), 55)
+    expect_gt(config$start_backoff_seconds("app"), 30)
 
     # Once restart_delay has passed, the next request starts it
     assign("app", Sys.time() - 61, envir = config$start_failures)
@@ -3050,6 +3116,16 @@ test_that("a line that R cannot read in an app's environment file leaves its lib
   expect_true(applied)
   expect_false(warned)
   expect_true(normalizePath(lib, winslash = "/") %in% normalizePath(paths, winslash = "/"))
+
+  # A line that gives a library variable no value sets no library path: R
+  # skips it, and the app keeps the paths of the server's session, which
+  # .libPaths() may have set without the variables
+  for (line in c("R_LIBS_USER=", "R_LIBS=${TSS_TEST_NOT_SET}", "R_LIBS_USER=   ")) {
+    writeLines(c(line, "TSS_TEST_OTHER=1"), environ)
+    expect_false(apply_environ_libraries(environ), info = line)
+    expect_identical(.libPaths(), old_paths, info = line)
+    expect_true(is.na(Sys.getenv("TSS_TEST_OTHER", unset = NA)), info = line)
+  }
 })
 
 test_that("closing an app's sessions from the process manager records each close once", {

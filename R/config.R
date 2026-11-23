@@ -23,6 +23,12 @@ DEFAULT_MAX_RESPONSE_SIZE_MB <- 1024
 # a message from the browser in between, before the session is closed
 DEFAULT_MAX_UNANSWERED_MB <- 256
 
+# The elapsed time of proc.time(), which the server's own clock follows, and
+# the most seconds that one reading of that clock adds to it; see
+# clock_seconds()
+raw_elapsed_seconds <- function() proc.time()[["elapsed"]]
+CLOCK_MAX_STEP_SECONDS <- 60
+
 duplicated_config_fields <- function(config) {
   "Describe the fields that a configuration gives more than once, at its top level or in an app"
 
@@ -89,23 +95,24 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     # When each session last carried a message. Kept apart from the connection
     # lists so that a message does not rewrite them.
     session_activity = "environment",
-    # The same in seconds of proc.time()'s elapsed clock, which decides when a
-    # session is idle: a system clock set back or forward does not move it
+    # The same in seconds of the server's own clock, which decides when a
+    # session is idle: a system clock set back or forward does not move it;
+    # see clock_seconds()
     session_activity_clock = "environment",
     # The bytes that the app has sent each session since the browser's last
     # message on it, which the proxy may still hold for a browser that does
     # not read them; see max_unanswered_mb
     session_unanswered = "environment",
     active_http_requests = "environment",
-    # When, in seconds of proc.time()'s elapsed clock, a slow browser may
-    # still be receiving the last large response of each app
+    # When, in seconds of the server's own clock, a slow browser may still be
+    # receiving the last large response of each app
     http_transfer_ends = "environment",
     pending_session_checks = "environment",
     app_startup_state = "environment", # Track app startup progress (starting/ready)
     verified_backends = "environment", # Process generations confirmed to own their app port
     start_problems = "environment", # Recent app_start_problem() results, by app name
-    # When, in seconds of proc.time()'s elapsed clock, each app's start
-    # problem was last logged for a request; see note_start_problem()
+    # When, in seconds of the server's own clock, each app's start problem
+    # was last logged for a request; see note_start_problem()
     start_problems_logged = "environment",
     # When each app's process last exited without being stopped, until the app
     # next listens on its port. An on-demand app is started again only once
@@ -120,6 +127,10 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     interrupt_requested = "logical",
     last_reload = "list", # Outcome of the latest reload; empty while one is pending
     started_at = "ANY", # When the server was created, for the reported uptime
+    # The server's own clock: its seconds so far, and the reading of
+    # proc.time()'s elapsed time that it last added; see clock_seconds()
+    clock_total = "numeric",
+    clock_reading = "numeric",
 
     # Constants. Limits on request paths, query strings, and methods are the
     # defaults of the validation functions in validation.R.
@@ -188,11 +199,32 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       interrupt_requested <<- FALSE
       last_reload <<- list()
       started_at <<- Sys.time()
+      clock_reading <<- raw_elapsed_seconds()
+      clock_total <<- clock_reading
 
       # Initialize empty config (to be loaded via load_config)
       config <<- list()
       config_file <<- NA_character_
       ignored_fields <<- character()
+    },
+    clock_seconds = function() {
+      "Seconds on the server's own clock, which never runs backwards and adds at most CLOCK_MAX_STEP_SECONDS between two readings"
+
+      # R has no clock that cannot be set. The elapsed time of proc.time()
+      # follows the system clock on Unix, and on Windows it starts again from
+      # zero once the server has run for 49.7 days. This clock adds up the
+      # steps of that one between its own readings: a step back counts as
+      # none, and a step longer than CLOCK_MAX_STEP_SECONDS, which a system
+      # clock set forward gives, counts as that long. The event loop reads the
+      # clock at every turn, so the steps of a running server are short.
+      reading <- raw_elapsed_seconds()
+      step <- reading - clock_reading
+      if (is.na(step) || step < 0) {
+        step <- 0
+      }
+      clock_reading <<- reading
+      clock_total <<- clock_total + min(step, CLOCK_MAX_STEP_SECONDS)
+      clock_total
     },
     load_config = function(config_file = "config.json") {
       "Load and validate configuration from file"
@@ -255,7 +287,9 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         stop(half_surrogate_message(file), call. = FALSE)
       }
       parsed_config <- tryCatch(
-        jsonlite::parse_json(config_text, simplifyVector = TRUE, simplifyDataFrame = FALSE),
+        # An array of arrays stays a list, which no field accepts. As a matrix,
+        # "title": [["x"]] would pass for a single string.
+        jsonlite::parse_json(config_text, simplifyVector = TRUE, simplifyDataFrame = FALSE, simplifyMatrix = FALSE),
         error = function(e) {
           stop("Configuration file ", file, " is not valid JSON: ", conditionMessage(e), call. = FALSE)
         }
@@ -296,7 +330,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       new_config$base_path <- new_config$base_path %||% ""
       new_config$idle_timeout_minutes <- new_config$idle_timeout_minutes %||% CONNECTION_TIMEOUT_MINUTES
       new_config$max_unanswered_mb <- new_config$max_unanswered_mb %||% DEFAULT_MAX_UNANSWERED_MB
-      new_config$log_level <- toupper(new_config$log_level %||% "INFO")
+      new_config$log_level <- ascii_upper(new_config$log_level %||% "INFO")
 
       # Set default values for optional app fields
       for (i in seq_along(new_config$apps)) {
@@ -314,8 +348,8 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
 
       return(new_config)
     },
-    read_reload_config = function() {
-      "Read the configuration file again, rejecting changes that need a server restart"
+    read_reload_config = function(check_ports = TRUE) {
+      "Read the configuration file again, rejecting changes that need a server restart. check_ports = FALSE leaves out the search for the apps' ports."
 
       if (is.na(config_file)) {
         return(list(valid = FALSE, error = "No configuration file was loaded"))
@@ -353,8 +387,11 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       # Ports are assigned once the apps have stopped. Look for them now, with
       # the running apps' ports taken to be free, so that apps that cannot
       # all be given a port, because other programs hold the ports after
-      # starting_port, are reported before any app is stopped.
-      port_error <- tryCatch(
+      # starting_port, are reported before any app is stopped. The search
+      # waits for every port that nothing answers on, on the thread that
+      # serves every app, so the reload itself does not repeat the search
+      # that the request for it has just made.
+      port_error <- if (!isTRUE(check_ports)) NULL else tryCatch(
         {
           find_app_ports(new_config, free_ports = running_app_ports())
           NULL
@@ -461,7 +498,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
 
       # A page, in any visitor's browser and on any website, can ask for such
       # an app in a loop, which would otherwise fill the server log
-      now <- proc.time()[["elapsed"]]
+      now <- clock_seconds()
       logged_at <- start_problems_logged[[app_name]]
       if (!is.null(logged_at) && now >= logged_at && now - logged_at < START_PROBLEM_LOG_SECONDS) {
         logger::log_debug("On-demand app {app_name} cannot start: {problem}", app_name = app_name, problem = problem)
@@ -469,6 +506,25 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       }
       assign(app_name, now, envir = start_problems_logged)
       logger::log_warn("On-demand app {app_name} cannot start: {problem}", app_name = app_name, problem = problem)
+      invisible(TRUE)
+    },
+    note_start_wait = function(app_name, seconds) {
+      "Log that an on-demand app whose process failed is not started yet: at INFO once every START_PROBLEM_LOG_SECONDS for each app, otherwise at DEBUG"
+
+      # As in note_start_problem(): every request for the app during the wait,
+      # which may last up to a day, would otherwise write a line. The record
+      # is kept under a name that no app can have.
+      text <- sprintf("Not starting app %s yet: its process failed; it can start again in %d seconds",
+        app_name, as.integer(ceiling(seconds)))
+      key <- paste("wait", app_name)
+      now <- clock_seconds()
+      logged_at <- start_problems_logged[[key]]
+      if (!is.null(logged_at) && now >= logged_at && now - logged_at < START_PROBLEM_LOG_SECONDS) {
+        logger::log_debug("{text}", text = text)
+        return(invisible(FALSE))
+      }
+      assign(key, now, envir = start_problems_logged)
+      logger::log_info("{text}", text = text)
       invisible(TRUE)
     },
     validate_config = function(config) {
@@ -542,7 +598,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
 
       if ("log_level" %in% names(config)) {
         level <- config$log_level
-        if (!is.character(level) || length(level) != 1 || is.na(level) || !toupper(level) %in% LOG_LEVELS) {
+        if (!is.character(level) || length(level) != 1 || is.na(level) || !ascii_upper(level) %in% LOG_LEVELS) {
           return(list(valid = FALSE, error = paste("log_level must be one of:", paste(LOG_LEVELS, collapse = ", "))))
         }
       }
@@ -609,7 +665,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
 
         # Names that differ only in case would share log files on
         # case-insensitive file systems (Windows, macOS)
-        if (tolower(app$name) %in% tolower(app_names)) {
+        if (ascii_lower(app$name) %in% ascii_lower(app_names)) {
           return(list(valid = FALSE, error = paste(
             "Duplicate app name:", app$name, "(names must differ by more than letter case)"
           )))
@@ -789,15 +845,15 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     touch_session = function(session_id) {
       "Record that a session carried a message, in either direction"
       assign(session_id, Sys.time(), envir = session_activity)
-      assign(session_id, proc.time()[["elapsed"]], envir = session_activity_clock)
+      assign(session_id, clock_seconds(), envir = session_activity_clock)
     },
     session_idle_seconds = function(session_id, connection) {
       "How long a session has carried no message, or NULL for a record that does not say when it opened"
       clock <- session_activity_clock[[session_id]] %||% connection$opened_clock
       if (!is.null(clock)) {
-        return(proc.time()[["elapsed"]] - clock)
+        return(max(0, clock_seconds() - clock))
       }
-      # A record without the elapsed clock goes by the system clock
+      # A record without the server's clock goes by the system clock
       last_activity <- get_session_activity(session_id, connection$last_activity)
       if (is.null(last_activity)) {
         return(NULL)

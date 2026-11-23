@@ -1095,7 +1095,7 @@ test_that("long appstart_timeout extends startup state lifetime", {
 
 test_that("a clock set back prolongs neither a startup nor the wait after a failure", {
   config <- ShinyServerConfig$new()
-  config$config <- list(apps = list(list(name = "app", appstart_timeout = 2)), restart_delay = 5)
+  config$config <- list(apps = list(list(name = "app", appstart_timeout = 2)), restart_delay = 7200)
   # Times an hour from now, as a clock set back an hour leaves them
   assign("app", list(state = "starting", started_at = Sys.time() + 3600), envir = config$app_startup_state)
   state <- config$get_app_startup_state("app")
@@ -1109,7 +1109,73 @@ test_that("a clock set back prolongs neither a startup nor the wait after a fail
   assign("app", Sys.time() + 3600, envir = config$start_failures)
   expect_equal(config$start_backoff_seconds("app"), 0)
   config$note_start_failure("app")
-  expect_gt(config$start_backoff_seconds("app"), 4)
+  expect_gt(config$start_backoff_seconds("app"), 7000)
+})
+
+test_that("the server's own clock never runs backwards and takes no long step", {
+  reading <- 1000
+  local_mocked_bindings(raw_elapsed_seconds = function() reading)
+  config <- ShinyServerConfig$new()
+  expect_equal(config$clock_seconds(), 1000)
+
+  # It follows the clock that it reads, step by step
+  reading <- 1012.5
+  expect_equal(config$clock_seconds(), 1012.5)
+  expect_equal(config$clock_seconds(), 1012.5)
+
+  # A system clock set back on Unix, or proc.time() starting again from zero
+  # after 49.7 days on Windows: no time has passed, and it goes on from there
+  reading <- 3
+  expect_equal(config$clock_seconds(), 1012.5)
+  reading <- 13
+  expect_equal(config$clock_seconds(), 1022.5)
+
+  # A system clock set two hours forward counts as one long step at most
+  reading <- 13 + 7200
+  expect_equal(config$clock_seconds(), 1022.5 + CLOCK_MAX_STEP_SECONDS)
+  reading <- reading + 1
+  expect_equal(config$clock_seconds(), 1022.5 + CLOCK_MAX_STEP_SECONDS + 1)
+})
+
+test_that("a system clock set forward or back neither closes sessions nor keeps apps", {
+  reading <- 5000
+  local_mocked_bindings(raw_elapsed_seconds = function() reading)
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", port = 3001, resident = FALSE)))
+  cm <- ConnectionManager$new(config)
+  cm$add_client_connection("s", list(close = function() NULL), "app", "127.0.0.1", "test")
+  session <- config$get_ws_connection("s")
+
+  # Set two hours forward: the session has not been idle for two hours
+  reading <- reading + 7200
+  expect_lte(config$session_idle_seconds("s", session), CLOCK_MAX_STEP_SECONDS)
+  # Set back by more than it ever ran: no negative idle time, which would
+  # keep the session open for as long as the clock was set back
+  reading <- 10
+  idle <- config$session_idle_seconds("s", session)
+  expect_gte(idle, 0)
+  reading <- 10 + 45
+  expect_equal(config$session_idle_seconds("s", session), idle + 45)
+
+  # A large response's download time is counted from the same clock, and is
+  # never longer than the longest download allowed for
+  cm$end_http_request("app", response_bytes = 1e12)
+  expect_equal(cm$transfer_seconds_left("app"), config$HTTP_TRANSFER_MAX_SECONDS)
+  reading <- 1
+  expect_equal(cm$transfer_seconds_left("app"), config$HTTP_TRANSFER_MAX_SECONDS)
+  assign("app", config$clock_seconds() + 4e6, envir = config$http_transfer_ends)
+  expect_equal(cm$transfer_seconds_left("app"), config$HTTP_TRANSFER_MAX_SECONDS)
+
+  # Refused handshakes are logged again once their interval has passed,
+  # whatever the system clock has done since
+  logged <- capture_test_log({
+    cm$note_rejected_handshake("origin", "refused")
+    reading <- 0
+    cm$note_rejected_handshake("origin", "refused")
+    reading <- REJECTED_HANDSHAKE_LOG_SECONDS + 1
+    cm$note_rejected_handshake("origin", "refused")
+  })
+  expect_equal(sum(grepl("^WARN", logged)), 2)
 })
 
 test_that("title must be a non-empty string of at most 100 characters", {

@@ -21,6 +21,157 @@ reject_large_request_body <- function(req, max_bytes) {
   NULL
 }
 
+# Whether a request's headers declare a body, which httpuv then receives
+request_declares_body <- function(req) {
+  size <- suppressWarnings(as.numeric(request_header(req, "content-length") %||% 0))
+  !is.na(size) && size > 0
+}
+
+# httpuv keeps one of the R session's connections open for every request body
+# that it is receiving and, for a request to an app, until the app has
+# answered. R has 128 connections in all, and writing the server log, reading
+# a page's file, and starting an app each need one. A client that began
+# uploads and never finished them could otherwise take them all, so no more
+# than this many requests with a body are received or awaited at a time,
+# on the proxy and the management server together. Further ones are answered
+# with HTTP 503 from their headers.
+MAX_PENDING_REQUEST_BODIES <- 64
+
+# The record of the requests with a body that are in progress: their number,
+# when unfinished ones were last collected, and when a refusal was last logged
+new_request_bodies <- function() {
+  bodies <- new.env(parent = emptyenv())
+  bodies$count <- 0L
+  bodies$collected_at <- NULL
+  bodies$warned_at <- NULL
+  bodies
+}
+
+# Count a request whose body httpuv is about to receive, or answer FALSE when
+# MAX_PENDING_REQUEST_BODIES are in progress. The request is released when it
+# has its response, see release_request_body_after(), or, for a client that
+# left before its body arrived, when R collects the request: httpuv tells the
+# server nothing of such a request, and closes its connection only then too.
+admit_request_body <- function(req, bodies, limit = MAX_PENDING_REQUEST_BODIES) {
+  # Only a request object of httpuv, an environment, can be followed to its end
+  if (!is.environment(req) || !is.environment(bodies) || isTRUE(req$.tss_body_pending)) {
+    return(TRUE)
+  }
+  if (bodies$count >= limit) {
+    # Collect the requests that clients abandoned, but not for every request
+    # that is refused: a collection takes far longer than a refusal
+    now <- Sys.time()
+    waited <- if (is.null(bodies$collected_at)) Inf else as.numeric(difftime(now, bodies$collected_at, units = "secs"))
+    if (waited < 0 || waited >= 1) {
+      bodies$collected_at <- now
+      gc(verbose = FALSE)
+    }
+    if (bodies$count >= limit) {
+      return(FALSE)
+    }
+  }
+  req$.tss_body_pending <- TRUE
+  bodies$count <- bodies$count + 1L
+  reg.finalizer(req, request_body_finalizer(bodies))
+  TRUE
+}
+
+# Made here, where the function does not hold the request it is called for
+request_body_finalizer <- function(bodies) {
+  function(req) release_request_body(req, bodies)
+}
+
+release_request_body <- function(req, bodies) {
+  if (is.environment(req) && is.environment(bodies) && isTRUE(req$.tss_body_pending)) {
+    req$.tss_body_pending <- FALSE
+    bodies$count <- max(0L, bodies$count - 1L)
+  }
+  invisible(NULL)
+}
+
+# Release a request that was admitted with a body once its response is ready,
+# at once or when its promise settles. The response is returned.
+release_request_body_after <- function(req, bodies, response) {
+  if (!is.environment(req) || !isTRUE(req$.tss_body_pending)) {
+    return(response)
+  }
+  if (promises::is.promise(response)) {
+    return(promises::then(response,
+      onFulfilled = function(value) {
+        release_request_body(req, bodies)
+        value
+      },
+      onRejected = function(error) {
+        release_request_body(req, bodies)
+        stop(error)
+      }
+    ))
+  }
+  release_request_body(req, bodies)
+  response
+}
+
+# The answer to a request with a body that is refused because too many are in
+# progress. Logged at WARN at most once every REJECTED_HANDSHAKE_LOG_SECONDS,
+# as refused handshakes are: any client can send such requests in a loop.
+too_many_request_bodies_response <- function(bodies, limit = MAX_PENDING_REQUEST_BODIES) {
+  now <- Sys.time()
+  since <- if (is.null(bodies$warned_at)) Inf else as.numeric(difftime(now, bodies$warned_at, units = "secs"))
+  if (since < 0 || since >= REJECTED_HANDSHAKE_LOG_SECONDS) {
+    bodies$warned_at <- now
+    logger::log_warn("Refusing requests with a body: {limit} are already being received or answered", limit = limit)
+  } else {
+    logger::log_debug("Refusing a request with a body: {limit} are already in progress", limit = limit)
+  }
+  create_503_response("Too many requests with a body are in progress, please retry", 5)
+}
+
+# Whether the proxy passes a request on to an app, as far as its headers tell
+is_forwarded_to_app <- function(req, config) {
+  if (!is_allowed_proxy_host(req, config)) {
+    return(FALSE)
+  }
+  validation <- validate_request_inputs(
+    strip_base_path(req$PATH_INFO, config$config$base_path %||% ""),
+    req$REQUEST_METHOD,
+    req$QUERY_STRING
+  )
+  if (!validation$valid) {
+    return(FALSE)
+  }
+  route <- parse_proxy_path(validation$path)
+  route$valid && route$backend_path != "" && !is.null(config$get_app_config(route$app_name))
+}
+
+# What the proxy decides from a request's headers, before httpuv receives the
+# body: NULL to receive it, or the response that ends the request there.
+answer_request_headers <- function(req, config, bodies, template_manager = NULL, connection_manager = NULL,
+                                   process_manager = NULL) {
+  rejected <- reject_large_request_body(req, (config$config$max_request_size_mb %||% 100) * 1024^2)
+  if (!is.null(rejected)) {
+    return(without_head_body(req, rejected))
+  }
+  if (!request_declares_body(req)) {
+    return(NULL)
+  }
+  # A request that no app receives is refused whatever its body holds: one
+  # under another host's name, for an unknown path or app, or in a method
+  # that the proxy's own pages do not serve. The refusal is sent now, so that
+  # any page or client cannot have the server receive, and write to disk,
+  # bodies of up to max_request_size_mb that nothing reads. A request that is
+  # answered otherwise, such as with a redirect, is received as before.
+  if (!is_forwarded_to_app(req, config)) {
+    response <- handle_http_request(req, config, template_manager, connection_manager, process_manager)
+    if (!promises::is.promise(response) && isTRUE(response$status >= 400)) {
+      return(response)
+    }
+  }
+  if (!admit_request_body(req, bodies)) {
+    return(without_head_body(req, too_many_request_bodies_response(bodies)))
+  }
+  NULL
+}
+
 # HTTP request handler
 handle_http_request <- function(req, config, template_manager, connection_manager, process_manager = NULL) {
   "Main HTTP request handler with routing"
@@ -208,7 +359,9 @@ is_other_document_path <- function(document, backend_path, websocket = FALSE) {
   if (is.null(document) || !document$type %in% c("rmd", "qmd")) {
     return(FALSE)
   }
-  path <- tryCatch(utils::URLdecode(backend_path), error = function(e) backend_path)
+  # URLdecode() warns of an escape that is none, such as "%zz", which any
+  # client can send; the path is then compared as it decodes it
+  path <- tryCatch(suppressWarnings(utils::URLdecode(backend_path)), error = function(e) backend_path)
   # A decoded path that is not UTF-8 cannot be compared, and is refused. It
   # is found first: comparing it would warn as well as fail, on Windows.
   if (!validUTF8(path)) {
@@ -383,14 +536,14 @@ forwarded_request_headers <- function(req, skip = character()) {
   # Selected in one pass: a request may carry thousands of headers, and
   # building the list one header at a time took seconds of the event loop
   sent_names <- names(sent)
-  header_names <- toupper(sent_names)
+  header_names <- ascii_upper(sent_names)
   keys <- gsub("-", "_", header_names, fixed = TRUE)
   # The headers that the client's Connection header names belong to its
   # connection to the proxy, as the fixed ones above do. A name that is not
   # ASCII names no header, and trimws() cannot read one that is not UTF-8.
-  connection <- as.character(unlist(sent[tolower(sent_names) == "connection"], use.names = FALSE))
+  connection <- as.character(unlist(sent[ascii_lower(sent_names) == "connection"], use.names = FALSE))
   nominated <- unlist(strsplit(connection, ",", fixed = TRUE, useBytes = TRUE))
-  nominated <- toupper(trimws(nominated[is_ascii(nominated)]))
+  nominated <- ascii_upper(trimws(nominated[is_ascii(nominated)]))
   nominated <- gsub("-", "_", nominated[nominated != ""], fixed = TRUE)
   # An app's own server reads "X_Forwarded_User" as X-Forwarded-User, in
   # place of the value a reverse proxy set, so no header whose name has an
@@ -410,8 +563,9 @@ forwarded_request_headers <- function(req, skip = character()) {
 # can start, after a failure; the page's own limit on its wait begins then.
 as_starting_page <- function(response, req, method, app_name, template_manager, retry_seconds,
                              answer_seconds = 2, delay_seconds = 0) {
+  # Compared as bytes: a header that is not valid UTF-8 would otherwise warn
   opens_page <- identical(method, "GET") &&
-    grepl("text/html", request_header(req, "accept") %||% "", fixed = TRUE)
+    grepl("text/html", request_header(req, "accept") %||% "", fixed = TRUE, useBytes = TRUE)
   if (is.null(template_manager) || !opens_page) {
     return(response)
   }
@@ -482,6 +636,13 @@ forward_request <- function(method, target_url, req, app_name, config, template_
     # Capture the request body while the httpuv input stream is available.
     # A new curl handle below owns all transport state for this request only.
     headers <- forwarded_request_headers(req)
+    # libcurl adds "Accept: */*" to a request without that header, and the
+    # curl package a User-Agent that names this server's R version and
+    # platform. A header with an empty value keeps each from being sent, so
+    # the app receives neither from a client that sent neither.
+    for (name in c("Accept", "User-Agent")) {
+      if (!ascii_upper(name) %in% names(headers)) headers[[name]] <- ""
+    }
     body <- NULL
     if (!method %in% c("GET", "HEAD", "OPTIONS")) {
       if (!is.null(req$rook.input)) body <- req$rook.input$read()
@@ -510,7 +671,7 @@ forward_request <- function(method, target_url, req, app_name, config, template_
         (probe && !is.null(request_process) && !is_process_alive(request_process))
     }
     backend_ready <- if (probe) {
-      wait_for_backend(target_url, wait_seconds, stop_waiting = process_ended)
+      wait_for_backend(target_url, wait_seconds, stop_waiting = process_ended, config = config)
     } else {
       promises::promise_resolve(TRUE)
     }
@@ -582,7 +743,7 @@ forward_request <- function(method, target_url, req, app_name, config, template_
         curl::handle_setopt(handle, postfields = body)
       }
       max_response_bytes <- (config$config$max_response_size_mb %||% DEFAULT_MAX_RESPONSE_SIZE_MB) * 1024^2
-      promises::then(fetch_backend_async(target_url, handle, max_response_bytes), function(response) {
+      promises::then(fetch_backend_async(target_url, handle, max_response_bytes, config), function(response) {
         response_headers <- proxy_response_headers(
           response$headers, target_url, app_name, method, config$config$base_path %||% ""
         )
@@ -653,7 +814,7 @@ parse_response_headers <- function(raw_headers) {
   names <- substr(lines, 1, colon - 1)
   fields <- colon > 1 & grepl("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$", names, useBytes = TRUE)
   values <- as.list(trimws(substr(lines[fields], colon[fields] + 1, nchar(lines[fields], type = "bytes"))))
-  names(values) <- tolower(names[fields])
+  names(values) <- ascii_lower(names[fields])
   values
 }
 
@@ -668,7 +829,7 @@ proxy_response_headers <- function(raw_headers, target_url, app_name, method, ba
   headers <- parse_response_headers(raw_headers)
   connection <- as.character(unlist(headers[names(headers) == "connection"], use.names = FALSE))
   nominated <- trimws(unlist(strsplit(connection, ",", fixed = TRUE, useBytes = TRUE)))
-  nominated <- tolower(nominated[is_ascii(nominated)])
+  nominated <- ascii_lower(nominated[is_ascii(nominated)])
   # httpuv adds its own Date to every response; the app's would be a second one
   excluded <- c("connection", "keep-alive", "transfer-encoding", "te", "trailer",
     "upgrade", "proxy-authenticate", "proxy-authorization", "date", nominated)
@@ -685,7 +846,7 @@ proxy_response_headers <- function(raw_headers, target_url, app_name, method, ba
         ignore.case = TRUE, perl = TRUE))[[1]]
       backend_authority <- sub("^https?://", "", authority)
       backend_local <- length(parts) == 3 && is_ascii(parts[2]) &&
-        tolower(parts[2]) == tolower(backend_authority)
+        ascii_lower(parts[2]) == ascii_lower(backend_authority)
       if (backend_local) {
         value <- parts[3]
         if (!startsWith(value, "/")) value <- paste0("/", value)
@@ -888,13 +1049,20 @@ discard_response_body <- function(body) {
 # the transfer: the proxy sends nothing before it has the whole response, so
 # an app that streams without end, or that the visitor has stopped waiting
 # for, would otherwise fill the disk and keep an on-demand app in use.
-fetch_backend_async <- function(url, handle, max_bytes = Inf) {
+fetch_backend_async <- function(url, handle, max_bytes = Inf, config = NULL) {
+  # The curl package runs these callbacks where no handler of the server's
+  # reaches: a Ctrl-C that R notices while one runs, as it may while a large
+  # response arrives, only fails the transfer. Given the server's config, the
+  # callbacks note the interrupt for the event loop; see note_interrupts().
+  noting <- function(callback) {
+    if (is.null(config)) callback else note_interrupts(config, callback)
+  }
   promises::promise(function(resolve, reject) {
     pool <- curl::new_pool()
     body <- response_body_collector(max_bytes = max_bytes)
     curl::curl_fetch_multi(url, handle = handle, pool = pool,
-      data = body$write,
-      done = function(response) {
+      data = noting(body$write),
+      done = noting(function(response) {
         content <- if (is.null(body$error())) body$finish()
         if (!is.null(body$error())) {
           reject(body$error())
@@ -902,11 +1070,11 @@ fetch_backend_async <- function(url, handle, max_bytes = Inf) {
         }
         response$content <- content
         resolve(response)
-      },
-      fail = function(message) {
+      }),
+      fail = noting(function(message) {
         body$discard()
         reject(backend_fetch_error(message, handle))
-      }
+      })
     )
     # later_fd() passes the sockets' readiness, which multi_run() finds itself
     pump <- function(...) {
@@ -944,7 +1112,8 @@ fetch_backend_async <- function(url, handle, max_bytes = Inf) {
 # Probe TCP readiness without sending an HTTP request (in particular, never
 # replay a POST while waiting for startup). Both the probe and retry are async.
 # The wait ends early, with FALSE, once stop_waiting(), if given, is TRUE.
-wait_for_backend <- function(url, wait_seconds = 0, stop_waiting = NULL) {
+# config is passed on to fetch_backend_async().
+wait_for_backend <- function(url, wait_seconds = 0, stop_waiting = NULL, config = NULL) {
   promises::promise(function(resolve, reject) {
     # R has no clock that cannot be set back, so the wait adds up the steps of
     # the clock between probes and counts a step back as none: a clock set
@@ -965,7 +1134,7 @@ wait_for_backend <- function(url, wait_seconds = 0, stop_waiting = NULL) {
       # garbage collection.
       handle <- new_backend_handle(connect_only = TRUE, forbid_reuse = TRUE,
         timeout_ms = ceiling(timeout_ms))
-      promises::then(fetch_backend_async(url, handle),
+      promises::then(fetch_backend_async(url, handle, config = config),
         onFulfilled = function(response) resolve(TRUE),
         onRejected = function(error) {
           remaining <- seconds_left()
@@ -1005,13 +1174,13 @@ is_same_origin_websocket <- function(req) {
   if (!is_ascii(origin)) {
     return(FALSE)
   }
-  origin <- tolower(trimws(origin))
+  origin <- ascii_lower(trimws(origin))
   match <- regmatches(origin, regexec("^(https?)://([^/]+)$", origin))[[1]]
   if (length(match) != 3) {
     return(FALSE)
   }
   normalize <- function(authority, default_port) {
-    sub(paste0(":", default_port, "$"), "", tolower(trimws(authority)))
+    sub(paste0(":", default_port, "$"), "", ascii_lower(trimws(authority)))
   }
   default_port <- if (match[2] == "https") "443" else "80"
   origin_authority <- normalize(match[3], default_port)
@@ -1025,17 +1194,28 @@ is_same_origin_websocket <- function(req) {
   # page, and a client that sets it only makes the check stricter.
   forwarded_proto <- request_header(req, "x-forwarded-proto")
   if (!is.null(forwarded_proto) && is_ascii(forwarded_proto) && match[2] == "http" &&
-      identical(tolower(trimws(strsplit(forwarded_proto, ",", fixed = TRUE)[[1]][1])), "https")) {
+      identical(ascii_lower(trimws(strsplit(forwarded_proto, ",", fixed = TRUE)[[1]][1])), "https")) {
     return(FALSE)
   }
 
   hosts <- request_header(req, "host")
-  # A reverse proxy on this machine may rewrite Host but report the original
+  # A reverse proxy on this machine may rewrite Host but report the original.
+  # The page's origin is then the host that it reports, and no longer Host,
+  # which names this machine's own address: a page that anything serves at
+  # that address on the visitor's own machine, such as http://127.0.0.1:3838,
+  # could otherwise open the public site's apps with the visitor's credentials.
+  # A browser cannot add this header to a handshake, so a visitor who reaches
+  # the proxy directly is still matched by Host.
   remote_addr <- req$REMOTE_ADDR
   forwarded_host <- request_header(req, "x-forwarded-host")
   if (!is.null(remote_addr) && remote_addr %in% c("127.0.0.1", "::1", "::ffff:127.0.0.1") &&
       !is.null(forwarded_host)) {
-    hosts <- c(hosts, strsplit(forwarded_host, ",", fixed = TRUE, useBytes = TRUE)[[1]])
+    forwarded <- strsplit(forwarded_host, ",", fixed = TRUE, useBytes = TRUE)[[1]]
+    forwarded <- forwarded[!is.na(forwarded) & is_ascii(forwarded)]
+    forwarded <- forwarded[trimws(forwarded) != ""]
+    if (length(forwarded) > 0) {
+      hosts <- forwarded
+    }
   }
   hosts <- hosts[!is.na(hosts) & is_ascii(hosts)]
   hosts <- hosts[trimws(hosts) != ""]

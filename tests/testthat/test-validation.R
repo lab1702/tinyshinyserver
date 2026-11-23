@@ -91,6 +91,26 @@ test_that("validate_path rejects dangerous control characters", {
   expect_match(result$error, "invalid characters")
 })
 
+test_that("a fragment in a path or query is rejected", {
+  # httpuv passes "#" on as part of the path or query, and libcurl would cut
+  # the request there: the app would receive another path than the one checked
+  for (path in c("/proxy/app/_child.Rmd#x", "/proxy/app/a#frag/b", "#", "/proxy/app/#")) {
+    result <- validate_path(path)
+    expect_false(result$valid, info = path)
+    expect_match(result$error, "fragment", info = path)
+  }
+  for (query in c("?q=1#frag&z=2", "#", "a=b#")) {
+    result <- validate_query_string(query)
+    expect_false(result$valid, info = query)
+    expect_match(result$error, "fragment", info = query)
+  }
+  # An encoded one is the app's to read
+  expect_true(validate_path("/proxy/app/a%23b")$valid)
+  expect_true(validate_query_string("?q=%23")$valid)
+  expect_equal(validate_request_inputs("/proxy/app/x#y", "GET")$response$status, 400)
+  expect_equal(validate_request_inputs("/proxy/app/x", "GET", "?a#b")$response$status, 400)
+})
+
 # ============================================================================
 # validate_http_method() tests
 # ============================================================================

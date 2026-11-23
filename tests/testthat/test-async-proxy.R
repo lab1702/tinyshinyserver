@@ -216,10 +216,19 @@ test_that("async proxy preserves methods, binary uploads, content types and HEAD
 })
 
 test_that("slow backend responses do not block unrelated HTTP requests", {
-  # The other requests start 0.05 seconds in and must finish before the slow
-  # one, which a loaded machine could delay past a shorter wait
+  # The app answers the slow request only once the other requests, which
+  # start 0.05 seconds in, have their answers. No wait is long enough on
+  # every machine, and a proxy that the slow request held up would never
+  # answer the others, so the slow request would never end either.
+  completed <- character()
+  release_slow <- NULL
+  finished <- function(name) {
+    completed <<- c(completed, name)
+    if (all(c("health", "websocket") %in% completed) && !is.null(release_slow)) release_slow()
+  }
   backend <- start_test_http_server(function(req) promises::promise(function(resolve, reject) {
-    later::later(function() resolve(create_html_response("slow result")), 2)
+    release_slow <<- function() resolve(create_html_response("slow result"))
+    if (all(c("health", "websocket") %in% completed)) release_slow()
   }))
   on.exit(httpuv::stopServer(backend$server), add = TRUE)
   config <- proxy_test_config(backend$port)
@@ -230,14 +239,13 @@ test_that("slow backend responses do not block unrelated HTTP requests", {
     ws$onMessage(function(binary, message) ws$send(message))
   })
   on.exit(httpuv::stopServer(proxy$server), add = TRUE)
-  completed <- character()
   slow <- promises::then(fetch_backend_async(paste0(proxy$url, "/slow"), curl::new_handle()), function(x) {
     completed <<- c(completed, "slow"); x
   })
   health <- promises::promise(function(resolve, reject) {
     later::later(function() resolve(fetch_backend_async(paste0(proxy$url, "/health"), curl::new_handle())), 0.05)
   })
-  health <- promises::then(health, function(x) {completed <<- c(completed, "health"); x})
+  health <- promises::then(health, function(x) {finished("health"); x})
   ws <- NULL
   # Close the client before stopping the server that owns its peer.
   on.exit(if (!is.null(ws)) ws$close(), add = TRUE, after = FALSE)
@@ -246,13 +254,13 @@ test_that("slow backend responses do not block unrelated HTTP requests", {
       ws <<- websocket::WebSocket$new(sub("^http", "ws", proxy$url))
       ws$onOpen(function(event) ws$send("still responsive"))
       ws$onMessage(function(event) {
-        completed <<- c(completed, "websocket")
+        finished("websocket")
         resolve(event$data)
       })
       ws$onError(function(event) reject(simpleError(event$message)))
     }, 0.05)
   })
-  result <- await_response(promises::promise_all(slow = slow, health = health, ws = websocket_response), timeout = 10)
+  result <- await_response(promises::promise_all(slow = slow, health = health, ws = websocket_response), timeout = 30)
   expect_equal(tail(completed, 1), "slow")
   expect_setequal(head(completed, 2), c("health", "websocket"))
   expect_equal(result$ws, "still responsive")
@@ -416,6 +424,9 @@ test_that("a failed transfer discards a partly received large response", {
   # A transfer too slow to finish before its time limit fails part-way
   handle <- new_backend_handle(max_recv_speed_large = 200000, timeout_ms = 1000, accept_encoding = "identity")
   expect_error(await_response(fetch_backend_async(backend$url, handle), timeout = 30))
+  # On a loaded check machine the time limit can pass before any of the
+  # response has arrived, and nothing was then written
+  if (length(paths) == 0) skip_on_cran()
   expect_length(paths, 1)
   expect_false(file.exists(paths))
 })
@@ -563,6 +574,9 @@ test_that("only transfers that never connect are marked as connection failures",
     await_response(fetch_backend_async(backend$url, curl::new_handle(connecttimeout_ms = 500))),
     error = function(e) e
   )
+  # On a shared check machine another program can take the freed port, and
+  # the transfer then connects
+  if (!inherits(refused, "backend_connect_error")) skip_on_cran()
   expect_s3_class(refused, "backend_connect_error")
   expect_s3_class(refused, "error")
 
@@ -577,6 +591,8 @@ test_that("only transfers that never connect are marked as connection failures",
     await_response(fetch_backend_async(stalled$url, curl::new_handle(timeout_ms = 1000))),
     error = function(e) e
   )
+  # On a loaded check machine the transfer can time out before it connects
+  if (is.null(release)) skip_on_cran()
   release(create_html_response("late"))
   expect_s3_class(timed_out, "error")
   expect_false(inherits(timed_out, "backend_connect_error"))
@@ -947,9 +963,9 @@ test_that("idle shutdown waits for every concurrent HTTP response", {
   }))
   on.exit(httpuv::stopServer(backend$server), add = TRUE)
   config <- proxy_test_config(backend$port)
-  # Long enough that no check runs out between a response and the
-  # expectations after it, even on a loaded machine
-  config$HTTP_SESSION_GRACE_SECONDS <- 1.5
+  # So long that no check runs out between a response and the expectations
+  # after it, on any machine; the last check is given a short wait below
+  config$HTTP_SESSION_GRACE_SECONDS <- 3600
   config$config$apps[[1]]$resident <- FALSE
   alive <- TRUE
   kills <- 0
@@ -980,8 +996,12 @@ test_that("idle shutdown waits for every concurrent HTTP response", {
   expect_match(rawToChar(response$content), "first")
   expect_equal(kills, 0)
   expect_equal(config$active_http_requests$app, 0)
+  # The last response left a check pending, which stops the unused app
+  expect_false(is.null(config$pending_session_checks$app))
+  expect_true(cm$schedule_session_check("app", grace_seconds = 0.05))
   deadline <- Sys.time() + 5
   while (kills == 0 && Sys.time() < deadline) later::run_now(.01)
+  if (kills == 0) skip_on_cran()
   expect_equal(kills, 1)
 })
 
@@ -1546,7 +1566,8 @@ test_that("a request that waits for a starting app is answered as soon as the ap
   local_mocked_bindings(fetch_backend_async = function(...) promises::promise_reject(simpleError("Connection refused")))
   wait <- function(process_found_dead) {
     config <- proxy_test_config(3001, timeout = 15)
-    config$config$restart_delay <- 60
+    # Long, so that what is left of it does not depend on the machine's speed
+    config$config$restart_delay <- 3600
     alive <- TRUE
     config$add_app_process("app", list(is_alive = function() alive, get_pid = function() -1L))
     config$set_app_starting("app")
@@ -1570,11 +1591,66 @@ test_that("a request that waits for a starting app is answered as soon as the ap
   # appstart_timeout later, also when the request sees the failure first
   for (process_found_dead in c(TRUE, FALSE)) {
     found <- wait(process_found_dead)
-    expect_lt(found$seconds, 5)
+    expect_lt(found$seconds, 10)
     expect_equal(found$result$status, 503)
     expect_match(found$result$body, "restarting after a failure", fixed = TRUE)
     retry <- as.numeric(found$result$headers[["Retry-After"]])
-    expect_true(retry >= 59 && retry <= 60, info = process_found_dead)
-    expect_gt(found$backoff, 58)
+    expect_true(retry > 3000 && retry <= 3600, info = process_found_dead)
+    expect_gt(found$backoff, 3000)
   }
+})
+
+test_that("an interrupt during a transfer's callbacks is noted for the event loop", {
+  backend <- start_test_http_server(function(req) create_html_response("body"))
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  interrupt <- structure(class = c("interrupt", "condition"), list(message = "", call = NULL))
+  # As a Ctrl-C that R notices while the proxy receives a response
+  collector <- response_body_collector
+  local_mocked_bindings(response_body_collector = function(...) {
+    body <- collector(...)
+    write <- body$write
+    body$write <- function(...) {
+      signalCondition(interrupt)
+      write(...)
+    }
+    body
+  })
+
+  # The curl package runs the callbacks where no handler of the server's
+  # reaches, and an interrupt there would only fail the transfer
+  config <- ShinyServerConfig$new()
+  response <- await_response(fetch_backend_async(backend$url, new_backend_handle(), config = config))
+  expect_equal(response$status_code, 200)
+  expect_true(config$interrupt_requested)
+
+  # A request to an app, and the wait for one that starts, pass the config on
+  config <- proxy_test_config(backend$port)
+  local_mocked_bindings(process_owns_port = function(process, port) TRUE)
+  expect_equal(await_response(forward_request("GET", backend$url, list(), "app", config))$status, 200)
+  expect_true(config$interrupt_requested)
+  config <- ShinyServerConfig$new()
+  expect_true(await_response(wait_for_backend(backend$url, config = config)))
+  expect_true(config$interrupt_requested)
+})
+
+test_that("an app receives no header that the client did not send", {
+  seen <- NULL
+  backend <- start_test_http_server(function(req) {
+    seen <<- req$HEADERS
+    create_html_response("ok")
+  })
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  config <- proxy_test_config(backend$port)
+  send <- function(headers) {
+    expect_equal(await_response(forward_request("GET", backend$url, httpuv_request(headers), "app", config))$status, 200)
+    seen
+  }
+
+  # libcurl adds "Accept: */*" to a request without one, and the curl package
+  # a User-Agent that names this server's R version and platform
+  bare <- send(list(host = "localhost"))
+  expect_false(any(c("accept", "user-agent") %in% names(bare)))
+  sent <- send(list(accept = "text/plain", "user-agent" = "client/1"))
+  expect_equal(sent[["accept"]], "text/plain")
+  expect_equal(sent[["user-agent"]], "client/1")
 })

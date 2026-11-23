@@ -541,6 +541,22 @@ test_that("generate_starting_page renders a page that reloads itself for the app
   expect_no_match(html, "{{", fixed = TRUE)
 })
 
+test_that("a number in a page's script is written the same whatever the session's decimal mark", {
+  old <- options(OutDec = ",")
+  on.exit(options(old), add = TRUE)
+  tm <- create_template_manager()
+  # A fractional appstart_timeout: "2,5 * 1000" is no expression, and the
+  # page that says it reloads itself would never do so
+  html <- tm$generate_starting_page("sales", retry_seconds = 2, answer_seconds = 2.5, delay_seconds = 0)
+  expect_match(html, "var answerMs = 2.5 * 1000 + 10000;", fixed = TRUE)
+  expect_match(html, "var retryMs = 2 * 1000;", fixed = TRUE)
+  expect_match(html, "var delayMs = 0 * 1000;", fixed = TRUE)
+  # A long one is written in full
+  html <- tm$generate_starting_page("sales", answer_seconds = 86400, delay_seconds = 100000L)
+  expect_match(html, "var answerMs = 86400 * 1000 + 10000;", fixed = TRUE)
+  expect_match(html, "var delayMs = 100000 * 1000;", fixed = TRUE)
+})
+
 test_that("landing and management pages show the configured title escaped", {
   templates <- system.file("templates", package = "tinyshinyserver")
   config <- ShinyServerConfig$new()

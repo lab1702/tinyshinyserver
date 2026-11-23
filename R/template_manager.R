@@ -77,7 +77,15 @@ TemplateManager <- setRefClass("TemplateManager",
       # Perform variable substitution
       for (var_name in names(variables)) {
         placeholder <- paste0("{{", var_name, "}}")
-        replacement <- as.character(variables[[var_name]])
+        value <- variables[[var_name]]
+        # A number is written the same whatever options(OutDec) is: with a
+        # comma for its decimal mark, as.character() would write the "2.5"
+        # of the starting page's script as "2,5", which is not a number
+        replacement <- if (is.numeric(value)) {
+          format(value, scientific = FALSE, decimal.mark = ".", digits = 15, trim = TRUE)
+        } else {
+          as.character(value)
+        }
         template_content <- gsub(placeholder, replacement, template_content, fixed = TRUE)
       }
 
@@ -244,7 +252,7 @@ TemplateManager <- setRefClass("TemplateManager",
 
       # Determine content type
       file_ext <- tools::file_ext(normalized_path)
-      content_type <- switch(tolower(file_ext),
+      content_type <- switch(ascii_lower(file_ext),
         "css" = "text/css",
         "js" = "application/javascript",
         "html" = "text/html",

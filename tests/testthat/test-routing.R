@@ -1056,7 +1056,70 @@ test_that("requests for an on-demand app whose directory cannot be served start 
   expect_false(any(grepl("^ERROR", logged)))
 
   # Once the interval has passed, the reason is logged again
-  assign("broken", proc.time()[["elapsed"]] - config$START_PROBLEM_LOG_SECONDS, envir = config$start_problems_logged)
+  assign("broken", config$clock_seconds() - config$START_PROBLEM_LOG_SECONDS, envir = config$start_problems_logged)
   logged <- capture_test_log(handle_proxy_request("/proxy/broken/", "GET", NULL, list(), config, pm))
   expect_equal(sum(grepl("On-demand app broken cannot start", logged, fixed = TRUE)), 1)
+})
+
+test_that("requests for an on-demand app that waits out restart_delay log the wait once", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "crashy", path = tempdir(), port = 3001, resident = FALSE)),
+    log_dir = tempdir(), restart_delay = 3600)
+  config$note_start_failure("crashy")
+  pm <- ProcessManager$new(config)
+  assign("start_app", function(app_config) stop("No process may be started"), envir = pm)
+
+  # Any client can ask for the app throughout the wait, which may last a day
+  logged <- capture_test_log(for (i in 1:5) expect_false(pm$start_app_on_demand("crashy")))
+  expect_equal(sum(grepl("Not starting app crashy yet: its process failed; it can start again in 3600 seconds",
+    logged, fixed = TRUE)), 1)
+
+  # Once the interval has passed, the wait is logged again
+  assign("wait crashy", config$clock_seconds() - config$START_PROBLEM_LOG_SECONDS, envir = config$start_problems_logged)
+  logged <- capture_test_log(for (i in 1:2) pm$start_app_on_demand("crashy"))
+  expect_equal(sum(grepl("Not starting app crashy yet", logged, fixed = TRUE)), 1)
+})
+
+test_that("a request that finds an on-demand app's process gone logs that it died", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "crashy", path = tempdir(), port = 3001, resident = FALSE)),
+    log_dir = tempdir(), restart_delay = 3600)
+  config$add_app_process("crashy", list(is_alive = function() FALSE, get_exit_status = function() 1L,
+    get_pid = function() 0L))
+  pm <- ProcessManager$new(config)
+  assign("start_app", function(app_config) stop("No process may be started"), envir = pm)
+  local_mocked_bindings(kill_process_safely = function(process) TRUE)
+
+  logged <- capture_test_log(expect_false(pm$start_app_on_demand("crashy")))
+  expect_true(any(grepl("^ERROR.*Non-resident app crashy died", logged)))
+  expect_null(config$get_app_process("crashy"))
+  expect_gt(config$start_backoff_seconds("crashy"), 3000)
+})
+
+test_that("a request with a fragment never reaches an app", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "reports", path = tempdir(), port = 3001, resident = FALSE)))
+  config$set_app_document("reports", list(type = "rmd", file = file.path(tempdir(), "report.Rmd")))
+  pm <- list(start_app_on_demand = function(app_name) stop("The app was started"))
+  local_mocked_bindings(forward_request = function(...) stop("The request was forwarded"))
+
+  # libcurl would send "/_partial.Rmd", which the check of the path that
+  # ends in "#x" had not refused
+  for (target in list(c("/proxy/reports/_partial.Rmd#x", ""), c("/proxy/reports/page", "?a=1#frag"))) {
+    req <- list(PATH_INFO = target[1], QUERY_STRING = target[2], REQUEST_METHOD = "GET", HTTP_HOST = "localhost")
+    result <- answer_http_request(req, config, NULL, NULL, pm)
+    expect_equal(result$status, 400, info = paste(target, collapse = ""))
+  }
+})
+
+test_that("values that only a hand-written request holds raise no warning", {
+  # A warning stays with the session that runs the server, and is an error
+  # there under options(warn = 2)
+  req <- httpuv_request(list(accept = "text/html\xe9"))
+  response <- create_503_response("starting", 2)
+  expect_no_warning(as_starting_page(response, req, "GET", "app", NULL, 2))
+  document <- list(type = "rmd", file = file.path(tempdir(), "report.Rmd"))
+  for (path in c("/x%zz", "/report.Rmd%", "/_partial.Rmd%zz")) {
+    expect_no_warning(is_other_document_path(document, path))
+  }
 })

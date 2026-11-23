@@ -10,11 +10,18 @@ start_test_http_server <- function(call, on_ws = NULL) {
 # Stop a test server and wait until its port is closed. httpuv closes the
 # listening socket on its background thread after stopServer() returns, so a
 # test that probes or reuses the port straight away could still reach it.
+# The port is only connected to, never listened on: is_port_in_use() answers
+# for a free port by listening there itself, and httpuv closes that listener
+# a moment later too, so the port would be left open as it was found.
 stop_test_http_server <- function(backend) {
   httpuv::stopServer(backend$server)
   deadline <- Sys.time() + 5
-  while (is_port_in_use("127.0.0.1", backend$port) && Sys.time() < deadline) Sys.sleep(0.05)
-  if (is_port_in_use("127.0.0.1", backend$port)) skip("A stopped test server's port did not close")
+  repeat {
+    if (!loopback_port_accepts(backend$port)) return(invisible(TRUE))
+    if (Sys.time() >= deadline) break
+    Sys.sleep(0.05)
+  }
+  skip("A stopped test server's port did not close")
 }
 
 # Await async handlers in tests while continuing to service httpuv/later events.

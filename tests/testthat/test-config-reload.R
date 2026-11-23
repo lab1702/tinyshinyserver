@@ -509,10 +509,12 @@ test_that("the event loop runs a requested reload", {
   write_reload_config(path, list(list(name = "app", path = unused_app_path())))
   server <- reload_test_server(path)$server
   reloads <- 0
+  searched <- NULL
   # Install the loop method before replacing the method it calls
   run_event_loop <- server$run_event_loop
-  assign("reload", function() {
+  assign("reload", function(check_ports = TRUE) {
     reloads <<- reloads + 1
+    searched <<- check_ports
     server$config$shutdown_requested <- TRUE
     stop("reload failure is logged, not fatal")
   }, envir = server)
@@ -535,9 +537,78 @@ test_that("the event loop runs a requested reload", {
 
   expect_equal(turns, 1)
   expect_equal(reloads, 1)
+  # The request for the reload has just looked for the apps' ports
+  expect_false(searched)
   expect_false(server$config$reload_requested)
   expect_equal(server$config$last_reload, list(success = FALSE, message = "reload failure is logged, not fatal"))
   expect_true(server$is_shutting_down)
+})
+
+test_that("a reload looks for the apps' ports once before any app stops, and once after", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  apps <- list(list(name = "one", path = unused_app_path()), list(name = "two", path = unused_app_path()))
+  write_reload_config(path, apps)
+  test <- reload_test_server(path)
+  searches <- 0
+  find_ports <- find_app_ports
+  local_mocked_bindings(find_app_ports = function(...) {
+    searches <<- searches + 1
+    find_ports(...)
+  })
+
+  # Each search waits for every port that nothing answers on, on the thread
+  # that serves every app. The request looks, and the reload assigns.
+  expect_equal(jsonlite::fromJSON(handle_config_reload(test$server$config)$body)$success, TRUE)
+  expect_equal(searches, 1)
+  expect_true(test$server$reload(check_ports = FALSE)$valid)
+  expect_equal(searches, 2)
+
+  # Called by itself, a reload looks before it stops anything
+  expect_true(test$server$reload()$valid)
+  expect_equal(searches, 4)
+  expect_true(test$server$config$read_reload_config(check_ports = FALSE)$valid)
+  expect_equal(searches, 4)
+})
+
+test_that("a reload that fails after the apps have stopped restores the configuration and starts the apps", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  write_reload_config(path, list(list(name = "old", path = unused_app_path(), resident = TRUE)), title = "Before")
+  test <- reload_test_server(path)
+  server <- test$server
+  # The pages cannot take the new settings
+  titles <- character()
+  server$field("template_manager", list(field = function(name, value) {
+    if (name == "server_title") titles <<- c(titles, value)
+    if (identical(value, "After")) stop("the pages failed")
+  }))
+
+  write_reload_config(path, list(list(name = "new", path = unused_app_path(), resident = TRUE)),
+    title = "After", starting_port = 4001, health_check_interval = 99)
+  result <- server$reload()
+
+  expect_false(result$valid)
+  expect_equal(result$error, "the pages failed")
+  expect_equal(server$config$last_reload, list(success = FALSE, message = "the pages failed"))
+  # The previous configuration is whole again, for the pages as well
+  expect_equal(server$config$config$title, "Before")
+  expect_equal(vapply(server$config$config$apps, function(app) app$name, ""), "old")
+  expect_equal(server$config$config$apps[[1]]$port, 3001)
+  expect_equal(titles, c("After", "Before"))
+  # The apps were stopped, and do not wait for a health check to start again
+  expect_equal(test$calls$stopped, 1)
+  expect_equal(test$calls$started, "old")
+})
+
+test_that("an array of arrays is no value of a setting", {
+  # Read as a matrix, [["x"]] passed for a single string, and failed a reload
+  # only after the apps had stopped
+  expect_error(read_test_config(title = list(list("Matrix"))), "validation failed")
+  expect_error(read_test_config(base_path = list(list("/x"))), "validation failed")
+  expect_error(read_test_config(starting_port = list(list(3001))), "validation failed")
+  expect_error(read_test_config(log_level = list(list("INFO"))), "validation failed")
+  expect_equal(read_test_config(title = "Plain")$title, "Plain")
 })
 
 test_that("read_reload_config reports apps that share a rendered document", {

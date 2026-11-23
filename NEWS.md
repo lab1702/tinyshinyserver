@@ -16,7 +16,7 @@
 
 ## New features
 
-* The management dashboard has a **Reload Config & Restart All** button, also available as `POST /api/reload`. It reads the configuration file again, stops every app, and starts the resident apps under the new configuration, so apps can be added, removed, or changed without restarting the server. An invalid file, a `log_dir` where the server log cannot be written, apps that cannot all be given a port because other programs hold the ports after `starting_port`, or a change to `proxy_host`, `proxy_port`, or `management_port` is rejected before any app stops. If an app cannot be stopped, the previous configuration stays in effect, and the app that is still running keeps its users connected and its state, such as the document that an R Markdown app serves. A changed `health_check_interval` applies at once. The dashboard reports the reload's outcome, which `/api/status` also returns as `last_reload`. The landing page picks up added and removed apps.
+* The management dashboard has a **Reload Config & Restart All** button, also available as `POST /api/reload`. It reads the configuration file again, stops every app, and starts the resident apps under the new configuration, so apps can be added, removed, or changed without restarting the server. An invalid file, a `log_dir` where the server log cannot be written, apps that cannot all be given a port because other programs hold the ports after `starting_port`, or a change to `proxy_host`, `proxy_port`, or `management_port` is rejected before any app stops. If an app cannot be stopped, the previous configuration stays in effect, and the app that is still running keeps its users connected and its state, such as the document that an R Markdown app serves. If anything else fails once the apps have stopped, the previous configuration is put back in effect as a whole and the resident apps start again at once. A changed `health_check_interval` applies at once. The dashboard reports the reload's outcome, which `/api/status` also returns as `last_reload`. The landing page picks up added and removed apps.
 
 * New `base_path` option serves the landing page and apps under a URL prefix, such as `https://example.com/shiny/`, behind a reverse proxy. The proxy accepts requests with or without the prefix, so the reverse proxy may pass it through or strip it, and landing page links, redirects, and app cookie paths include it. The management dashboard now uses relative URLs, so it also works under a prefix that the reverse proxy strips.
 
@@ -46,7 +46,7 @@
 
 * The proxy and management server reject DNS-rebinding requests through the `Host` header checks above, so websites cannot read or control local apps through the proxy or use the management API. App processes still listen on their own loopback ports without these checks; see "Security model" in the README.
 
-* The proxy rejects app WebSocket connections whose browser `Origin` does not match the request host, so other websites can no longer open app sessions with a visitor's cookies or reverse-proxy credentials.
+* The proxy rejects app WebSocket connections whose browser `Origin` does not match the request host, so other websites can no longer open app sessions with a visitor's cookies or reverse-proxy credentials. Behind a reverse proxy on the same machine that reports the public host in `X-Forwarded-Host`, the `Origin` must match that host: the `Host` header then names the proxy's own address, such as `127.0.0.1:3838`, where anything on a visitor's own machine could serve a page.
 
 * Management responses send `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors 'none'` so the dashboard's restart controls cannot be clickjacked from a framing page.
 
@@ -71,6 +71,10 @@
 * An R Markdown or Quarto app serves only its entry document. `rmarkdown::run()`, which serves both, renders, and so runs the code of, any file under the app directory that a page or its WebSocket names, unless the document is prerendered, including partials whose names start with `_`, drafts in subdirectories, and R scripts, which it spins into reports. A request for another document's page is now refused with HTTP 404, and a WebSocket for any other file is closed. A WebSocket path that leaves the document's directory is refused without asking the file system about it, so that the refusal does not tell a client which files exist elsewhere on the server. The path is read as `rmarkdown` reads it, so a percent-encoded path, such as one ending in `%2Fwebsocket%2F`, names the same file. Such a request does not start an on-demand app, which nothing would then stop.
 
 * When a reverse proxy reports with `X-Forwarded-Proto: https` that a WebSocket arrived over HTTPS, the proxy refuses it if the page that opens it comes from the plain-HTTP site of the same host. A page injected into unencrypted traffic could otherwise use the HTTPS site's sessions and credentials.
+
+* A request or WebSocket handshake whose path or query string holds a `#` is refused with HTTP 400. Browsers keep a fragment to themselves, but the server passed one that a client did send on to the app without it, so the app received another path than the one that the proxy had checked: `/proxy/reports/_draft.Rmd#x` reached an R Markdown app as a request for the page of `_draft.Rmd`, which is otherwise answered with HTTP 404.
+
+* No more than 64 requests with a body are received or awaited at a time, on the proxy and the management server together; further ones receive HTTP 503 with `Retry-After` from their headers, and the first is logged as a warning. R's web server keeps one of the R session's 128 connections open for each request body that it is receiving and, for a request to an app, until the app has answered. A client that began some 125 uploads and never finished them took them all, and until it left, pages' styles and scripts answered HTTP 500, on-demand apps could not start, the dashboard did not load, and nothing reached `server.log`. A request with a body that no app receives, one under another host's name, for an unknown path or app, or in a method that the proxy's own pages do not serve, is now refused from its headers, before its body, of up to `max_request_size_mb`, is received and written to disk.
 
 * Request headers that the client names in its `Connection` header, and `Proxy-Connection`, are no longer passed on to apps, as response headers named in the app's `Connection` header already were not.
 
@@ -120,7 +124,7 @@
 
 * The answer to `POST /api/shutdown` now arrives whole before the server stops. The management server was stopped as soon as the request was handled, before it had sent the answer, so with `log_level` set to `"WARN"` or `"ERROR"` the client received only the answer's headers, `curl` reported an error, and the dashboard said that the shutdown had failed although the server stopped. Requests that arrive while the server shuts down are answered with HTTP 503, and requests that reached the server just before it stopped no longer run after `start_tss()` returns, where one could start an on-demand app that nothing then stopped.
 
-* Ctrl-C now stops the server also when R notices it while the proxy or the management server handles a request, a WebSocket handshake, or a WebSocket message, as it may while a request starts an app or an app streams updates. httpuv and the websocket package caught the interrupt there, and the server kept running.
+* Ctrl-C now stops the server also when R notices it while the proxy or the management server handles a request or its headers, a WebSocket handshake, or a WebSocket message, or while the proxy receives an app's response, as it may while a request starts an app, an app streams updates, or a large download passes through. httpuv, the websocket package, and the curl package caught the interrupt there, and the server kept running.
 
 * The server no longer sometimes takes a free port for one in use, which stopped `start_tss()` with an error that the port could not be opened, or gave an app another port than the one after its predecessor's. The check listened on the port briefly and then connected to it, and could reach its own listener, which httpuv closes a moment after it is stopped.
 
@@ -136,11 +140,15 @@
 
 * `R_ENVIRON_USER` and `R_PROFILE_USER` set to an empty value now keep apps from reading a user environment file or profile, as they do for R itself. Apps read the app directory's files, or the user's, instead. On Windows, which cannot hold an empty environment variable, such a value counts as not set, as it does for R there.
 
+* An app starts without the `RENV_PROJECT` variable of the server's session, unless the app's own environment file sets it. renv sets the variable in a session that has loaded a project, and the script that activates a project reads it before the working directory. Under a server that runs in a renv project, an app whose own profile activates renv would otherwise get the server's project library in place of its own.
+
+* A line of an app's `.Renviron` that gives `R_PROFILE_USER`, `R_LIBS`, or `R_LIBS_USER` no value, such as `R_LIBS_USER=` or one whose value expands to nothing, sets nothing, as when R reads the file: the app keeps the profile and the library paths that it has without the line. `R_PROFILE_USER=""` still names no profile.
+
 * An unused on-demand app whose process outlives the attempt to stop it is tried again after 30 seconds. It kept running until someone opened it and left it again.
 
 * Apps can now be stopped and restarted on platforms where the `ps` package cannot list processes. Stopping an app failed there, which also blocked restarts, reloads, and shutdown; on those platforms only the app's own process is stopped, not processes it started.
 
-* Assigning app ports no longer waits about a second for each app on Windows, which delayed startup and paused all apps' traffic during a configuration reload. A port now counts as in use when the server cannot listen on it, or, on Windows and macOS, when another program that listens on every interface accepts a connection on it within 100 milliseconds. Such a program did not keep an app from listening on `127.0.0.1` at its port, and then lost its loopback connections to the app. On Windows, where a connection to a free port waits for its timeout, this adds about a tenth of a second for each app to startup and to every reload.
+* Assigning app ports no longer waits about a second for each app on Windows, which delayed startup and paused all apps' traffic during a configuration reload. A port now counts as in use when the server cannot listen on it, or, on Windows and macOS, when another program that listens on every interface accepts a connection on it within 100 milliseconds. Such a program did not keep an app from listening on `127.0.0.1` at its port, and then lost its loopback connections to the app. On Windows, where a connection to a free port waits for its timeout, this adds about a tenth of a second for each app that is not running to startup, and twice that to a reload, which looks for the apps' ports once before it stops any app and once when it assigns them.
 
 * An on-demand app's finished HTTP requests no longer each leave a timer queued for 30 seconds; a newer idle check now replaces the pending one.
 
@@ -204,9 +212,13 @@
 
 * At startup, the proxy and management ports count as in use when another program listens on 127.0.0.1 or `[::1]` at them, whatever `proxy_host` is, since a browser may open `localhost` at either address. The server started, and `http://localhost:3838` could then reach the other program. A port that cannot be opened for another reason, such as a port below 1024 without the right to use it, or `"::1"` on a machine without IPv6, is now reported as such instead of as already in use.
 
-* A session is found idle by the time that has passed since its last message, which setting the system clock does not change. A clock set forward, as when a virtual machine's clock is corrected after a snapshot is restored, closed every open session at the next check, and a clock set back kept idle sessions open for as long.
+* A session is found idle by the time that has passed since its last message, which setting the system clock does not change. A clock set forward, as when a virtual machine's clock is corrected after a snapshot is restored, closed every open session at the next check, and a clock set back kept idle sessions open for as long. R has no clock that cannot be set, so the server keeps its own: it adds up the steps of R's elapsed time, counting a step back as none and a step of more than a minute as one minute. The time allowed for a slow browser to receive a large response, and the intervals at which repeated warnings are logged, are counted on the same clock. On Windows, R's elapsed time starts again from zero once a session has run for 49.7 days, which no longer keeps on-demand apps from stopping or sessions from being found idle.
 
 * An app that sets a cookie whose name starts with `__Host-` is reported once in `server.log`. Browsers keep such a cookie only with `Path=/`, and the proxy gives app cookies the app's path, so that apps do not share them; the app lost the cookie, often one that holds its session or its forms' token, without notice. See "Security model" in the README.
+
+* A request without an `Accept` or `User-Agent` header reaches the app without one. The proxy added `Accept: */*` and a `User-Agent` that named the server's R version and platform.
+
+* Header names, host names, log levels, and the other words that the server compares are matched the same way in every locale. R changes letter case by the locale's rules, and under a Turkish locale, where R uses the system's rules as on Linux, the capital of `i` is a dotted letter, so that `connection` is no longer `CONNECTION`.
 
 ## Server pages and management API
 
@@ -217,6 +229,8 @@
 * A request with a method that neither server supports on any page, such as `PROPFIND`, receives HTTP 501 (Not Implemented) instead of a 405 without the `Allow` header that a 405 requires. Method names are matched exactly, as HTTP defines them, so `get` is not taken for `GET`.
 
 * `POST /api/apps/{name}/restart` returns HTTP 404 instead of 500 for an app name that is not configured, and accepts only that path. A path with extra segments, such as `/api/apps/a/b/restart`, restarted app `a`; it now returns HTTP 400.
+
+* `POST /api/apps/{name}/restart` for an on-demand app that is not running answers `"success": true` and says that the app starts when it is next opened, which is what a restart is for. It answered `"success": false`, which the dashboard showed as an error when its Restart button was used on an app that had stopped since the page last refreshed.
 
 * The management API's `/api/apps` leaves out `pid` for an app that is not running. It returned `"pid": {}`, which the dashboard showed as "[object Object]"; it now shows "N/A".
 
@@ -280,6 +294,8 @@
 
 * A configuration file that holds a `\u` escape of half a UTF-16 surrogate pair, which is no character, is rejected. A first half alone was read as "?", which changed a path or title without notice, and a second half alone stopped the server with an error that named neither the file nor the field.
 
+* A setting given as an array inside an array, such as `"title": [["Reports"]]`, is rejected when the configuration is read. It passed for a single value, stopped the server at startup with an unrelated error, and failed a reload only after the apps had stopped.
+
 ## Logging
 
 * App processes now write their stdout and stderr directly to the per-app log files. Output from child processes and native code (for example, Pandoc) is now logged and can no longer fill an unread pipe and hang the app.
@@ -292,9 +308,11 @@
 
 * Port assignments are now written to `server.log`, not only to the console.
 
-* A request for an on-demand app whose directory cannot be served no longer starts the app, reads its directory again, and writes four lines, two of them errors, to `server.log`. The reason is logged as a warning at most once a minute for each app. A page in any visitor's browser, on any website, could otherwise fill the log with requests for such an app.
+* A request for an on-demand app whose directory cannot be served no longer starts the app, reads its directory again, and writes four lines, two of them errors, to `server.log`. The reason is logged as a warning at most once a minute for each app. A page in any visitor's browser, on any website, could otherwise fill the log with requests for such an app. Requests for an on-demand app that waits out `restart_delay` after a failure are likewise logged once a minute and not once each, and a request that finds such an app's process gone logs that the app died, as a health check does.
 
 * A refused WebSocket handshake is logged at WARN at most once every 10 seconds for each reason, with the number of others since then, which are logged at DEBUG, and handshakes are no longer each logged at INFO before they are checked. A handshake for an app that cannot start, that is still starting, or whose process is not listening on its port is refused the same way, for each app: such handshakes wrote an error, or a warning that named a port conflict and two more lines, at every attempt. A page that opened handshakes in a loop, from any visitor's browser, filled `server.log` with two lines for each. The log of a browser message that is too large or not valid UTF-8 names its app and session, and WebSocket messages in DEBUG logs have control characters replaced, as other logged request values do.
+
+* Errors on the server's WebSocket connections to apps are written to `server.log` only. The websocket package also printed each to the console, from its own thread, as when an app restarted or stopped with sessions open. A handshake that a busy app did not complete in time, and that the server tries again, is logged at INFO and no longer as an error, and an error on a connection that its session no longer uses is logged at DEBUG.
 
 ## Examples
 

@@ -28,6 +28,14 @@ validate_path <- function(path, max_length = 1000) {
     return(list(valid = FALSE, error = "Path contains invalid characters"))
   }
 
+  # A "#" begins a fragment, which a browser keeps to itself. httpuv passes
+  # one that a client does send on as part of the path, and libcurl would
+  # forward the request without it: the app would then receive another path
+  # than the one that was checked here.
+  if (grepl("#", path, fixed = TRUE)) {
+    return(list(valid = FALSE, error = "Path contains a fragment"))
+  }
+
   return(list(valid = TRUE, sanitized = path))
 }
 
@@ -64,6 +72,11 @@ validate_query_string <- function(query_string, max_length = 8192) {
   # httpuv includes the leading question mark, which does not count toward the limit.
   if (nchar(sub("^[?]", "", query_string)) > max_length) {
     return(list(valid = FALSE, error = "Query string too long"))
+  }
+
+  # As in a path, a "#" would cut the query short on its way to the app
+  if (grepl("#", query_string, fixed = TRUE)) {
+    return(list(valid = FALSE, error = "Query string contains a fragment"))
   }
 
   # The query is forwarded to the app verbatim, so its percent-encoding is the
@@ -136,7 +149,7 @@ validate_base_path <- function(base_path, max_length = 100) {
       "and may not be empty, . or .."
     )))
   }
-  if (tolower(segments[1]) %in% RESERVED_BASE_PATH_SEGMENTS) {
+  if (ascii_lower(segments[1]) %in% RESERVED_BASE_PATH_SEGMENTS) {
     return(list(valid = FALSE, error = paste0(
       "base_path may not start with /", segments[1], ", which the server already uses"
     )))

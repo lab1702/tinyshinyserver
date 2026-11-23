@@ -78,7 +78,7 @@ ConnectionManager <- setRefClass("ConnectionManager",
     note_rejected_handshake = function(reason, text) {
       "Log a refused WebSocket handshake: at WARN once per reason every REJECTED_HANDSHAKE_LOG_SECONDS, otherwise at DEBUG"
 
-      now <- proc.time()[["elapsed"]]
+      now <- config$clock_seconds()
       previous <- rejected_handshakes[[reason]]
       if (!is.null(previous) && now - previous$logged_at < REJECTED_HANDSHAKE_LOG_SECONDS) {
         previous$suppressed <- previous$suppressed + 1
@@ -151,10 +151,14 @@ ConnectionManager <- setRefClass("ConnectionManager",
       force(first_attempt)
 
       # Apps may send large outputs (e.g. htmlwidget data) as one message;
-      # don't impose the websocket package's 32 MiB default on them.
+      # don't impose the websocket package's 32 MiB default on them. The
+      # package would also print each socket's errors to the console itself,
+      # from its own thread and not to the server log, as when an app stops
+      # with sessions open; the callbacks below log them.
       backend_ws <- websocket::WebSocket$new(backend_url,
         headers = headers,
-        maxMessageSize = .Machine$integer.max
+        maxMessageSize = .Machine$integer.max,
+        errorLogChannels = "none"
       )
 
       # Store connection info with ready state and timestamp. A new attempt
@@ -167,7 +171,7 @@ ConnectionManager <- setRefClass("ConnectionManager",
         ready = FALSE,
         pending_messages = previous$pending_messages %||% list(),
         last_activity = Sys.time(),
-        opened_clock = proc.time()[["elapsed"]],
+        opened_clock = config$clock_seconds(),
         created_at = previous$created_at %||% Sys.time()
       ))
 
@@ -255,11 +259,14 @@ ConnectionManager <- setRefClass("ConnectionManager",
       }))
 
       backend_ws$onError(note_interrupts(config, function(event) {
-        logger::log_error("Backend connection error for app {app_name}: {error}",
-          app_name = app_name, error = event$message
-        )
         conn <- config$get_backend_connection(session_id)
-        if (is.null(conn) || !identical(conn$ws, backend_ws)) return()
+        if (is.null(conn) || !identical(conn$ws, backend_ws)) {
+          # The session has ended or has another socket by now: nothing failed
+          logger::log_debug("Error on a backend connection no longer in use for app {app_name}: {error}",
+            app_name = app_name, error = event$message
+          )
+          return()
+        }
         # The websocket package gives up on a handshake after 5 seconds. An
         # app's R process completes handshakes only between its computations,
         # so an app that is busy for longer, such as with another visitor's
@@ -277,7 +284,8 @@ ConnectionManager <- setRefClass("ConnectionManager",
             !is.null(config$get_ws_connection(session_id)) &&
             identical(config$get_app_process(app_name), process) && is_process_alive(process) &&
             config$app_backend_verified(app_name)) {
-          logger::log_info("Connecting to app {app_name} again for session {session_id}",
+          # A handshake that is tried again has not failed, so it is no error
+          logger::log_info("App {app_name} did not complete a handshake in time; connecting again for session {session_id}",
             app_name = app_name, session_id = session_id
           )
           later::later(function() {
@@ -296,6 +304,9 @@ ConnectionManager <- setRefClass("ConnectionManager",
           }, 0.5)
           return()
         }
+        logger::log_error("Backend connection error for app {app_name}: {error}",
+          app_name = app_name, error = event$message
+        )
         close_client_connection(session_id)
       }))
 
@@ -380,7 +391,7 @@ ConnectionManager <- setRefClass("ConnectionManager",
         client_ip = client_ip,
         user_agent = user_agent,
         last_activity = Sys.time(),
-        opened_clock = proc.time()[["elapsed"]],
+        opened_clock = config$clock_seconds(),
         created_at = Sys.time()
       ))
 
@@ -444,7 +455,7 @@ ConnectionManager <- setRefClass("ConnectionManager",
       transfer_seconds <- min(floor(response_bytes / config$HTTP_TRANSFER_BYTES_PER_SECOND),
         config$HTTP_TRANSFER_MAX_SECONDS)
       if (transfer_seconds > 0) {
-        ends <- proc.time()[["elapsed"]] + transfer_seconds
+        ends <- config$clock_seconds() + transfer_seconds
         assign(app_name, max(ends, config$http_transfer_ends[[app_name]] %||% 0), envir = config$http_transfer_ends)
       }
       # The response may be a new page whose WebSocket has not opened yet, so
@@ -459,7 +470,8 @@ ConnectionManager <- setRefClass("ConnectionManager",
       if (is.null(ends)) {
         return(0)
       }
-      max(0, ends - proc.time()[["elapsed"]])
+      # Never longer than the longest download that is allowed for
+      min(max(0, ends - config$clock_seconds()), config$HTTP_TRANSFER_MAX_SECONDS)
     },
     schedule_session_check = function(app_name, grace_seconds = config$HTTP_SESSION_GRACE_SECONDS) {
       "Reclaim an HTTP-only launch after allowing time for a browser session"

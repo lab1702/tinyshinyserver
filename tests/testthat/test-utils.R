@@ -482,6 +482,16 @@ test_that("absolute_path makes a path absolute without resolving it", {
   expect_equal(absolute_path("C:/tss/config.json"), "C:/tss/config.json")
   expect_equal(absolute_path("\\\\server\\share\\config.json"), "\\\\server\\share\\config.json")
   expect_equal(absolute_path("~/config.json"), path.expand("~/config.json"))
+  # On Windows, "C:name" is a file in the working directory of drive C, not
+  # one named "C:name" in this working directory; elsewhere it is such a name
+  if (.Platform$OS.type == "windows") {
+    drive <- substr(getwd(), 1, 2)
+    if (grepl("^[A-Za-z]:$", drive)) {
+      expect_equal(absolute_path(paste0(drive, "config.json")), file.path(getwd(), "config.json"))
+    }
+  } else {
+    expect_equal(absolute_path("C:config.json"), file.path(getwd(), "C:config.json"))
+  }
 })
 
 test_that("loopback_port_accepts finds a program that listens on a port", {
@@ -575,4 +585,30 @@ test_that("loopback_port_accepts reaches a program on [::1]", {
     accepts(port, timeout_ms = if (identical(address, "::1")) 5000 else timeout_ms, address = address)
   })
   expect_true(is_port_in_use("127.0.0.1", port, loopback = TRUE))
+})
+
+test_that("the names that the server compares change case the same way in every locale", {
+  # Under a Turkish locale, where R uses the system's tables, toupper("i") is
+  # a dotted capital and tolower("I") a dotless small letter
+  expect_equal(ascii_upper("connection"), "CONNECTION")
+  expect_equal(ascii_upper("x-forwarded-for"), "X-FORWARDED-FOR")
+  expect_equal(ascii_lower("If-None-Match"), "if-none-match")
+  expect_equal(ascii_lower("LOCALHOST"), "localhost")
+  # Only the letters a to z change, and the vector keeps its shape
+  expect_equal(ascii_upper("i\u0131\u00e9-9"), "I\u0131\u00e9-9")
+  expect_equal(ascii_lower("I\u0130\u00c9"), "i\u0130\u00c9")
+  expect_identical(ascii_upper(c(a = "x", b = NA)), c(a = "X", b = NA))
+  expect_identical(ascii_lower(character()), character())
+  expect_identical(ascii_lower(NULL), character())
+
+  # Request headers reach an app under ASCII names, and those of the
+  # client's connection to the proxy are still told apart
+  headers <- forwarded_request_headers(httpuv_request(list(connection = "keep-alive, X-Internal", cookie = "id=1",
+    authorization = "Basic eA==", "accept-encoding" = "gzip", "x-internal" = "1", "transfer-encoding" = "chunked",
+    "proxy-authorization" = "Basic eQ==", "if-none-match" = "\"v\"")))
+  expect_setequal(names(headers), c("COOKIE", "AUTHORIZATION", "ACCEPT-ENCODING", "IF-NONE-MATCH"))
+  expect_true(all(is_ascii(names(headers))))
+  # A log level and a reserved first segment of base_path, in any letter case
+  expect_equal(read_test_config(log_level = "info")$log_level, "INFO")
+  expect_false(validate_base_path("/API/x")$valid)
 })

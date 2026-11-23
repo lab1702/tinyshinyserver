@@ -538,7 +538,7 @@ test_that("handle_app_restart returns 404 for an unknown app", {
   expect_match(body$message, "not found")
 })
 
-test_that("handle_app_restart does not restart dormant apps", {
+test_that("handle_app_restart starts no dormant app, and reports no failure for one", {
   app_dir <- make_test_app_dir()
   on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
   config <- ShinyServerConfig$new()
@@ -548,13 +548,17 @@ test_that("handle_app_restart does not restart dormant apps", {
     )
   )
   pm <- ProcessManager$new(config)
+  local_mocked_bindings(r_bg = function(...) stop("A dormant app was started"), .package = "callr")
 
   result <- handle_app_restart("/api/apps/app1/restart", pm)
 
+  # The dashboard offers the restart from a page that may be seconds old, of
+  # an app that has stopped since: its next visitor gets a new process
   expect_equal(result$status, 200)
   body <- jsonlite::fromJSON(result$body)
-  expect_false(body$success)
-  expect_match(body$message, "dormant")
+  expect_true(body$success)
+  expect_equal(body$message, "App app1 is not running; it starts when it is next opened")
+  expect_null(config$get_app_process("app1"))
 })
 
 test_that("a restart through the API ends the wait of an on-demand app whose process failed", {
@@ -584,8 +588,8 @@ test_that("a restart through the API ends the wait of an on-demand app whose pro
 
   # Without a failure to wait out, a dormant app has nothing to restart
   body <- jsonlite::fromJSON(handle_app_restart("/api/apps/app1/restart", pm)$body)
-  expect_false(body$success)
-  expect_match(body$message, "dormant")
+  expect_true(body$success)
+  expect_match(body$message, "is not running")
 })
 
 test_that("handle_app_restart does not restart an on-demand app that cannot start", {

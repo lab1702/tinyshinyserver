@@ -81,7 +81,10 @@ test_that("started servers limit request bodies from their headers", {
     list(port = port)
   }, .package = "httpuv")
   server$start_servers()
-  status <- function(app, size) app$onHeaders(list(CONTENT_LENGTH = format(size, scientific = FALSE)))$status
+  status <- function(app, size) {
+    app$onHeaders(list(REQUEST_METHOD = "POST", PATH_INFO = "/proxy/app/upload",
+      CONTENT_LENGTH = format(size, scientific = FALSE)))$status
+  }
   expect_null(status(apps[["3838"]], 2 * 1024^2))
   expect_equal(status(apps[["3838"]], 2 * 1024^2 + 1), 413)
   expect_null(status(apps[["3839"]], 65536))
@@ -97,6 +100,146 @@ test_that("started servers limit request bodies from their headers", {
   expect_equal(management$status, 413)
   expect_null(management$body)
   expect_equal(management$headers[["X-Frame-Options"]], "DENY")
+})
+
+test_that("a request with a body that no app receives is refused from its headers", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  writeLines(jsonlite::toJSON(list(apps = list(list(name = "app", path = unused_app_path())),
+    log_dir = tempdir(), starting_port = 3001), auto_unbox = TRUE), path)
+  local_mocked_bindings(is_port_in_use = function(...) FALSE, setup_logging = function(...) NULL,
+    create_process_manager = function(config) list())
+  server <- TinyShinyServer$new(path)
+  apps <- list()
+  local_mocked_bindings(startServer = function(host, port, app, ...) {
+    apps[[as.character(port)]] <<- app
+    list(port = port)
+  }, .package = "httpuv")
+  server$start_servers()
+  # httpuv's request objects are environments, which the servers follow to
+  # their end
+  request <- function(path, method = "POST", host = "localhost:3838", length = "10") {
+    as.environment(httpuv_request(list(host = host, "content-length" = length),
+      PATH_INFO = path, REQUEST_METHOD = method, QUERY_STRING = ""))
+  }
+  proxy <- function(...) apps[["3838"]]$onHeaders(request(...))
+
+  # httpuv would receive each body, of up to max_request_size_mb, into a
+  # file, for any page or client that sends one, only for it to be refused
+  expect_equal(proxy("/nowhere")$status, 404)
+  expect_equal(proxy("/proxy/missing/upload")$status, 404)
+  expect_equal(proxy("/proxy/app/upload", host = "evil.example")$status, 403)
+  expect_equal(proxy("/proxy/app/upload#x")$status, 400)
+  expect_equal(proxy("/health")$status, 405)
+  expect_null(proxy("/health", method = "HEAD", length = "5000000000")$body)
+  expect_equal(server$request_bodies$count, 0L)
+
+  # A body is received for an app, and for a request that is answered
+  # otherwise, such as with a redirect that the client follows with its body
+  kept <- list(request("/proxy/app/upload"), request("/proxy/app"), request("/", method = "GET"))
+  for (req in kept) expect_null(apps[["3838"]]$onHeaders(req))
+  expect_equal(server$request_bodies$count, 3L)
+  # A request without a body takes none of the servers' connections
+  expect_null(proxy("/nowhere", length = "0"))
+  expect_equal(server$request_bodies$count, 3L)
+
+  # The management server receives a small body, but none under another name
+  management <- function(...) apps[["3839"]]$onHeaders(request(...))
+  refused <- management("/api/reload", host = "evil.example")
+  expect_equal(refused$status, 403)
+  expect_equal(refused$headers[["X-Frame-Options"]], "DENY")
+  expect_null(management("/api/reload", host = "evil.example", length = "0"))
+  last <- request("/api/reload", host = "127.0.0.1:3839")
+  expect_null(apps[["3839"]]$onHeaders(last))
+  expect_equal(server$request_bodies$count, 4L)
+
+  # Each request leaves the count once it is answered
+  local_mocked_bindings(
+    handle_http_request = function(...) create_html_response("ok"),
+    handle_management_request = function(...) create_html_response("ok")
+  )
+  for (req in kept) expect_equal(apps[["3838"]]$call(req)$status, 200)
+  expect_equal(apps[["3839"]]$call(last)$status, 200)
+  expect_equal(server$request_bodies$count, 0L)
+})
+
+test_that("no more requests with a body are in progress than the servers have connections for", {
+  bodies <- new_request_bodies()
+  first <- new.env()
+  second <- new.env()
+  third <- new.env()
+  expect_true(admit_request_body(first, bodies, limit = 2))
+  expect_true(admit_request_body(first, bodies, limit = 2))
+  expect_true(admit_request_body(second, bodies, limit = 2))
+  expect_equal(bodies$count, 2L)
+  expect_false(admit_request_body(third, bodies, limit = 2))
+
+  # A request leaves once it has its response, at once or when its promise
+  # settles, and is counted out only once
+  expect_identical(release_request_body_after(first, bodies, "response"), "response")
+  release_request_body(first, bodies)
+  expect_equal(bodies$count, 1L)
+  expect_true(admit_request_body(third, bodies, limit = 2))
+  settle <- NULL
+  answered <- release_request_body_after(second, bodies, promises::promise(function(resolve, reject) settle <<- resolve))
+  expect_equal(bodies$count, 2L)
+  settle("late")
+  expect_equal(await_response(answered), "late")
+  expect_equal(bodies$count, 1L)
+  failing <- release_request_body_after(third, bodies, promises::promise_reject(simpleError("no answer")))
+  expect_error(await_response(failing), "no answer")
+  expect_equal(bodies$count, 0L)
+
+  # A client that leaves before its body has arrived gives no sign of it:
+  # its request is counted out when R collects it, which a full count asks for
+  abandoned <- new.env()
+  expect_true(admit_request_body(abandoned, bodies, limit = 1))
+  expect_false(admit_request_body(new.env(), bodies, limit = 1))
+  rm(abandoned)
+  # Collections are a second apart, as each takes far longer than a refusal
+  bodies$collected_at <- NULL
+  expect_true(admit_request_body(first, bodies, limit = 1))
+  expect_equal(bodies$count, 1L)
+
+  # The refusal asks the client to try again, and is logged as a warning once
+  logged <- capture_test_log({
+    response <- too_many_request_bodies_response(bodies)
+    too_many_request_bodies_response(bodies)
+  })
+  expect_equal(response$status, 503)
+  expect_equal(response$headers[["Retry-After"]], "5")
+  expect_equal(sum(grepl("^WARN.*Refusing requests with a body", logged)), 1)
+
+  # The request objects of other tests are lists, which are not counted
+  expect_true(admit_request_body(list(), bodies, limit = 0))
+  expect_identical(release_request_body_after(list(), bodies, "response"), "response")
+})
+
+test_that("requests with a body are refused from their headers once too many are in progress", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", path = unused_app_path(), port = 3001, resident = TRUE)))
+  bodies <- new_request_bodies()
+  request <- function(path = "/proxy/app/upload") {
+    as.environment(httpuv_request(list(host = "localhost", "content-length" = "10"),
+      PATH_INFO = path, REQUEST_METHOD = "POST", QUERY_STRING = ""))
+  }
+  held <- lapply(seq_len(MAX_PENDING_REQUEST_BODIES), function(i) request())
+  for (req in held) expect_null(answer_request_headers(req, config, bodies))
+  expect_equal(bodies$count, MAX_PENDING_REQUEST_BODIES)
+
+  # Both servers count against the one limit: R has one set of connections
+  refused <- answer_request_headers(request(), config, bodies)
+  expect_equal(refused$status, 503)
+  expect_equal(refused$headers[["Retry-After"]], "5")
+  refused <- answer_management_headers(request("/api/reload"), bodies)
+  expect_equal(refused$status, 503)
+  expect_equal(refused$headers[["X-Frame-Options"]], "DENY")
+  # Requests without a body are served as before
+  bodiless <- as.environment(httpuv_request(list(host = "localhost"), PATH_INFO = "/proxy/app/", REQUEST_METHOD = "GET"))
+  expect_null(answer_request_headers(bodiless, config, bodies))
+
+  release_request_body(held[[1]], bodies)
+  expect_null(answer_request_headers(request(), config, bodies))
 })
 
 test_that("the management server closes every WebSocket", {
@@ -268,14 +411,19 @@ test_that("the event loop stops for an interrupt that a server handler caught", 
   local_mocked_bindings(
     handle_http_request = function(...) signalCondition(interrupt),
     handle_websocket_connection = function(...) signalCondition(interrupt),
-    handle_management_request = function(...) signalCondition(interrupt)
+    handle_management_request = function(...) signalCondition(interrupt),
+    answer_request_headers = function(...) signalCondition(interrupt),
+    answer_management_headers = function(...) signalCondition(interrupt)
   )
 
   # httpuv catches the interrupt and answers HTTP 500; the handler notes it
   handlers <- list(
     proxy = function() apps[["3838"]]$call(list()),
+    "proxy headers" = function() apps[["3838"]]$onHeaders(list()),
     websocket = function() apps[["3838"]]$onWSOpen(list()),
-    management = function() apps[["3839"]]$call(list())
+    management = function() apps[["3839"]]$call(list()),
+    "management headers" = function() apps[["3839"]]$onHeaders(list()),
+    "management websocket" = function() apps[["3839"]]$onWSOpen(list(close = function() signalCondition(interrupt)))
   )
   for (name in names(handlers)) {
     server$config$interrupt_requested <- FALSE

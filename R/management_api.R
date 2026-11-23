@@ -17,6 +17,22 @@ management_response <- function(req, response) {
   without_head_body(req, response)
 }
 
+# What the management server decides from a request's headers, before httpuv
+# receives the body: NULL to receive it, or the response that ends the request
+# there. Management requests need no body, so only a small one is received,
+# and none under a name that is not this machine's; see admit_request_body().
+answer_management_headers <- function(req, bodies) {
+  rejected <- reject_large_request_body(req, 65536)
+  if (is.null(rejected) && request_declares_body(req)) {
+    if (!is_loopback_host_header(request_header(req, "host"))) {
+      rejected <- create_error_response("Invalid Host header", 403)
+    } else if (!admit_request_body(req, bodies)) {
+      rejected <- too_many_request_bodies_response(bodies)
+    }
+  }
+  if (is.null(rejected)) NULL else management_response(req, rejected)
+}
+
 handle_management_request_unframed <- function(req, config, process_manager, template_manager) {
   "Validate and route a management request"
 
@@ -56,7 +72,7 @@ is_loopback_host_header <- function(host) {
   if (!is_ascii(host)) {
     return(FALSE)
   }
-  host <- tolower(trimws(host))
+  host <- ascii_lower(trimws(host))
   host <- sub("^(\\[[^]]*\\]):[0-9]+$", "\\1", host)
   host <- sub("^([^:]+):[0-9]+$", "\\1", host)
   host %in% c("localhost", "127.0.0.1", "[::1]")
@@ -262,15 +278,18 @@ handle_app_restart <- function(path, process_manager) {
     {
       # Check app status first. A dormant app starts when it is opened, so
       # there is nothing to restart, unless its process failed: it then waits
-      # restart_delay, which a restart ends.
+      # restart_delay, which a restart ends. Nothing has failed either: the
+      # app's next visitor gets a new process, which is what a restart is
+      # for. The dashboard's page may be seconds old, and offers the restart
+      # of an app that has stopped since, so this is no error to show there.
       app_status <- process_manager$get_app_status(app_name)
       if (is.null(app_status)) {
         return(create_json_response(list(success = FALSE, message = "App not found"), status = 404))
       }
       if (app_status$status == "dormant" && is.null(app_status$restart_in_seconds)) {
         return(create_json_response(list(
-          success = FALSE,
-          message = "Cannot restart dormant app. Dormant apps start automatically when accessed."
+          success = TRUE,
+          message = sprintf("App %s is not running; it starts when it is next opened", app_name)
         )))
       }
       if (app_status$status == "unavailable") {

@@ -32,7 +32,7 @@ detect_app_type <- function(app_path) {
 
   # shiny::runApp() also accepts these names in any letter case, and a
   # server.R whose page is www/index.html
-  if (any(tolower(list.files(app_path)) %in% c("app.r", "server.r"))) {
+  if (any(ascii_lower(list.files(app_path)) %in% c("app.r", "server.r"))) {
     return(list(type = "shiny"))
   }
 
@@ -60,7 +60,7 @@ pick_document <- function(app_path, extension) {
   if (length(files) == 0) {
     return(NULL)
   }
-  stem <- tolower(sub("\\.[^.]*$", "", files))
+  stem <- ascii_lower(sub("\\.[^.]*$", "", files))
   preferred <- stem %in% c("index", "ui")
   # Front matter is read only when it decides the choice
   shiny <- rep(FALSE, length(files))
@@ -388,9 +388,10 @@ apply_environ_libraries <- function(environ_file) {
     return(invisible(FALSE))
   }
   lines <- tryCatch(readLines(environ_file, warn = FALSE), error = function(e) character())
+  # As in environ_assigned_names(): a line that gives no value sets nothing
   assigned <- unique(sub(
     "^[[:space:]]*([^=[:space:]]+)[[:space:]]*=.*$", "\\1",
-    grep("^[[:space:]]*[^#=[:space:]]+[[:space:]]*=", lines, value = TRUE)
+    grep("^[[:space:]]*[^#=[:space:]]+[[:space:]]*=[[:space:]]*[^[:space:]]", lines, value = TRUE)
   ))
   library_vars <- intersect(c("R_LIBS", "R_LIBS_USER"), assigned)
   if (length(library_vars) == 0) {
@@ -398,6 +399,7 @@ apply_environ_libraries <- function(environ_file) {
   }
   others <- setdiff(assigned, library_vars)
   saved <- Sys.getenv(others, unset = NA, names = TRUE)
+  before <- Sys.getenv(c("R_LIBS", "R_LIBS_USER"), unset = NA, names = TRUE)
   # R skips a line that it cannot read, with a warning that it gave once
   # already, at the app's startup; the file's other lines still apply
   read <- tryCatch(
@@ -412,6 +414,12 @@ apply_environ_libraries <- function(environ_file) {
     }
   }
   if (!isTRUE(read)) {
+    return(invisible(FALSE))
+  }
+  # R also gives a variable no value from a line whose value expands to
+  # nothing, such as "R_LIBS=${UNSET}". The file has then set no library
+  # path, and the app keeps this session's.
+  if (identical(before, Sys.getenv(c("R_LIBS", "R_LIBS_USER"), unset = NA, names = TRUE))) {
     return(invisible(FALSE))
   }
   paths <- function(name) {
@@ -445,7 +453,8 @@ app_environ_file <- function(app_path, named = Sys.getenv("R_ENVIRON_USER", unse
 }
 
 # The names of the variables that an environment file assigns, in lines of the
-# form name=value, as R reads it
+# form name=value, as R reads it. R skips a line that gives no value, such as
+# "name=", so it names no variable here; name="" does assign an empty value.
 environ_assigned_names <- function(environ_file) {
   if (!is.character(environ_file) || length(environ_file) != 1 || is.na(environ_file) ||
     !file.exists(environ_file) || dir.exists(environ_file)) {
@@ -454,7 +463,7 @@ environ_assigned_names <- function(environ_file) {
   lines <- tryCatch(readLines(environ_file, warn = FALSE), error = function(e) character())
   unique(sub(
     "^[[:space:]]*([^=[:space:]]+)[[:space:]]*=.*$", "\\1",
-    grep("^[[:space:]]*[^#=[:space:]]+[[:space:]]*=", lines, value = TRUE)
+    grep("^[[:space:]]*[^#=[:space:]]+[[:space:]]*=[[:space:]]*[^[:space:]]", lines, value = TRUE)
   ))
 }
 
@@ -577,7 +586,15 @@ ProcessManager <- setRefClass("ProcessManager",
       # empty value (on Windows, which cannot hold an empty variable, the one
       # that R finds without it), and no other. R reads such a file through
       # one that keeps callr's own profile; see profile_keeping_environ_file().
-      profile_chosen <- "R_PROFILE_USER" %in% environ_assigned_names(environ_file)
+      environ_names <- environ_assigned_names(environ_file)
+      profile_chosen <- "R_PROFILE_USER" %in% environ_names
+      # renv names the project that a session has loaded in RENV_PROJECT, and
+      # the script that activates a project reads it before the working
+      # directory. An app would inherit the variable from a server that runs
+      # in a renv project, and its own profile would then activate the
+      # server's project in place of the app's. The app starts without it,
+      # as it would on its own, unless its environment file sets it.
+      drop_renv_project <- !"RENV_PROJECT" %in% environ_names
       process_environ_file <- if (profile_chosen) {
         # tempdir(check = TRUE) makes R's temporary directory again where a
         # cleaner of old temporary files has removed it from a long-running
@@ -613,20 +630,31 @@ ProcessManager <- setRefClass("ProcessManager",
       process <- callr::r_bg(
         function(app_path, port, type, file, needs_render, render_document, log_dir, state_file,
                  quarto_bin, environ_libraries, library_file, profile_file, profile_setting,
-                 profile_chosen, environ_file, process_environ_file) {
+                 profile_chosen, environ_file, process_environ_file, drop_renv_project) {
           if (profile_chosen) {
             # The profile that the app's environment file chose. Processes
             # that the app starts, such as the R session that renders a Quarto
             # document, see the app's own file and the profile that it chose.
-            profile_setting <- Sys.getenv("TSS_APP_PROFILE_USER", unset = NA)
+            chosen <- Sys.getenv("TSS_APP_PROFILE_USER", unset = NA)
+            callr_profile <- Sys.getenv("TSS_CALLR_PROFILE_USER", unset = NA)
             Sys.unsetenv(c("TSS_APP_PROFILE_USER", "TSS_CALLR_PROFILE_USER"))
-            if (is.na(profile_setting)) {
-              Sys.unsetenv("R_PROFILE_USER")
-            } else {
-              Sys.setenv(R_PROFILE_USER = profile_setting)
+            # R gives the variable no value from a line whose value expands
+            # to nothing, such as "R_PROFILE_USER=${UNSET}". The file has then
+            # chosen no profile: callr's is still the one named, and the app
+            # gets the profile that R finds without the file's line.
+            if (!identical(chosen, callr_profile)) {
+              profile_setting <- chosen
+              if (is.na(profile_setting)) {
+                Sys.unsetenv("R_PROFILE_USER")
+              } else {
+                Sys.setenv(R_PROFILE_USER = profile_setting)
+              }
             }
             Sys.setenv(R_ENVIRON_USER = environ_file)
             unlink(process_environ_file)
+          }
+          if (drop_renv_project) {
+            Sys.unsetenv("RENV_PROJECT")
           }
           environ_libraries(library_file)
           profile <- profile_file(profile_setting)
@@ -694,7 +722,8 @@ ProcessManager <- setRefClass("ProcessManager",
           profile_setting = Sys.getenv("R_PROFILE_USER", unset = NA),
           profile_chosen = profile_chosen,
           environ_file = environ_file,
-          process_environ_file = process_environ_file
+          process_environ_file = process_environ_file,
+          drop_renv_project = drop_renv_project
         ),
         stdout = output_log,
         stderr = error_log,
@@ -749,7 +778,7 @@ ProcessManager <- setRefClass("ProcessManager",
 
       # Use the same nonblocking TCP probe as HTTP startup requests.
       tracked_process <- config$get_app_process(app_name)
-      return(promises::then(wait_for_backend(paste0("http://127.0.0.1:", app_port)), function(ready) {
+      return(promises::then(wait_for_backend(paste0("http://127.0.0.1:", app_port), config = config), function(ready) {
         # A replacement may have been registered while the probe was pending.
         if (!identical(config$get_app_process(app_name), tracked_process)) return(FALSE)
         if (ready && !config$app_backend_verified(app_name)) {
@@ -843,7 +872,14 @@ ProcessManager <- setRefClass("ProcessManager",
 
       # Retain ownership of a crashed process until its workers are terminated.
       if (!is.null(process)) {
+        # A request can find the process gone before a health check does, and
+        # the server log says so here as it would there
         failed <- process_failed(process)
+        if (failed) {
+          logger::log_error("Non-resident app {app_name} died", app_name = app_name)
+        } else {
+          logger::log_info("Non-resident app {app_name} exited", app_name = app_name)
+        }
         if (!kill_process_safely(process)) return(FALSE)
         cleanup_app_connections(app_name)
         config$remove_app_process(app_name)
@@ -861,9 +897,7 @@ ProcessManager <- setRefClass("ProcessManager",
       # page asks every few seconds, and each start loads a new R process
       backoff <- config$start_backoff_seconds(app_name)
       if (backoff > 0) {
-        logger::log_info("Not starting app {app_name} yet: its process failed; it can start again in {seconds} seconds",
-          app_name = app_name, seconds = ceiling(backoff)
-        )
+        config$note_start_wait(app_name, backoff)
         return(FALSE)
       }
 

@@ -6,6 +6,17 @@
   if (is.null(x)) y else x
 }
 
+# Upper and lower case for the letters a to z alone, the same in every locale.
+# toupper() and tolower() follow the locale: under a Turkish one, where R uses
+# the system's tables, "i" becomes a dotted capital and "I" a dotless small
+# letter, so that "connection" is no longer "CONNECTION" and "Cookie" would
+# reach an app under a name that is not ASCII. Header names, host names, and
+# the other words that the server compares are ASCII. Like toupper() and
+# tolower(), these keep names and cannot read a string that is not valid in
+# its encoding.
+ascii_upper <- function(x) chartr("abcdefghijklmnopqrstuvwxyz", "ABCDEFGHIJKLMNOPQRSTUVWXYZ", x)
+ascii_lower <- function(x) chartr("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz", x)
+
 # Apps in alphabetical order of their names, as the pages and the API list them
 sort_apps_by_name <- function(apps) {
   apps[order(vapply(apps, function(app) app$name, character(1)))]
@@ -55,10 +66,10 @@ request_headers <- function(req) {
   }
   fields <- grep("^HTTP_", names(req), value = TRUE)
   headers <- vapply(fields, function(field) paste(req[[field]], collapse = ","), character(1))
-  names(headers) <- tolower(gsub("_", "-", substring(fields, 6), fixed = TRUE))
+  names(headers) <- ascii_lower(gsub("_", "-", substring(fields, 6), fixed = TRUE))
   # httpuv copies these two from their HTTP_ entries
   for (field in c("CONTENT_LENGTH", "CONTENT_TYPE")) {
-    name <- tolower(sub("_", "-", field, fixed = TRUE))
+    name <- ascii_lower(sub("_", "-", field, fixed = TRUE))
     if (!is.null(req[[field]]) && !name %in% names(headers)) {
       headers[[name]] <- paste(req[[field]], collapse = ",")
     }
@@ -229,6 +240,11 @@ check_log_dir <- function(log_dir) {
 # does. It need not exist.
 absolute_path <- function(path) {
   path <- path.expand(path)
+  # On Windows, "C:name" is a path in the working directory of drive C, which
+  # only the system can resolve: it is not a name in this working directory
+  if (.Platform$OS.type == "windows" && grepl("^[A-Za-z]:([^/\\\\]|$)", path)) {
+    return(normalizePath(path, winslash = "/", mustWork = FALSE))
+  }
   if (!grepl("^([A-Za-z]:)?[/\\\\]", path)) {
     path <- file.path(getwd(), path)
   }

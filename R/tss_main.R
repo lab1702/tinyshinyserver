@@ -22,7 +22,10 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
     shutdown_complete = "logical", # A shutdown that was interrupted runs again
     # Cancels the pending health check, so that a reload that changes
     # health_check_interval applies it at once; NULL before monitoring starts
-    cancel_health_check = "ANY"
+    cancel_health_check = "ANY",
+    # The requests with a body that both servers are receiving or answering;
+    # see admit_request_body()
+    request_bodies = "ANY"
   ),
   methods = list(
     initialize = function(config_file = "config.json") {
@@ -53,6 +56,7 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       is_shutting_down <<- FALSE
       shutdown_complete <<- FALSE
       cancel_health_check <<- NULL
+      request_bodies <<- new_request_bodies()
 
       logger::log_info("Tiny Shiny Server initialized")
     },
@@ -197,10 +201,11 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
         host = proxy_host,
         port = proxy_port,
         app = list(
-          onHeaders = function(req) {
-            rejected <- reject_large_request_body(req, (config$config$max_request_size_mb %||% 100) * 1024^2)
-            if (is.null(rejected)) NULL else without_head_body(req, rejected)
-          },
+          # Decided before httpuv receives a body: one that is too large, that
+          # no app would receive, or that is one too many is refused here
+          onHeaders = note_interrupts(config, function(req) {
+            answer_request_headers(req, config, request_bodies, template_manager, connection_manager, process_manager)
+          }),
           # httpuv queues each request's handler on the event loop, and
           # stopServer() leaves those already queued, which then run after
           # the shutdown, in the R session's own event loop. They would start
@@ -208,9 +213,12 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
           # server shuts down are refused too.
           call = note_interrupts(config, function(req) {
             if (isTRUE(is_shutting_down)) {
+              release_request_body(req, request_bodies)
               return(without_head_body(req, create_error_response("The server is shutting down", 503)))
             }
-            handle_http_request(req, config, template_manager, connection_manager, process_manager)
+            release_request_body_after(req, request_bodies,
+              handle_http_request(req, config, template_manager, connection_manager, process_manager)
+            )
           }),
           onWSOpen = note_interrupts(config, function(ws) {
             if (isTRUE(is_shutting_down)) {
@@ -234,20 +242,22 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
         port = management_port,
         app = list(
           # Management requests carry no body.
-          onHeaders = function(req) {
-            rejected <- reject_large_request_body(req, 65536)
-            if (is.null(rejected)) NULL else management_response(req, rejected)
-          },
+          onHeaders = note_interrupts(config, function(req) {
+            answer_management_headers(req, request_bodies)
+          }),
           call = note_interrupts(config, function(req) {
             if (isTRUE(is_shutting_down)) {
+              release_request_body(req, request_bodies)
               return(management_response(req, create_error_response("The server is shutting down", 503)))
             }
-            handle_management_request(req, config, process_manager, template_manager)
+            release_request_body_after(req, request_bodies,
+              handle_management_request(req, config, process_manager, template_manager)
+            )
           }),
           # The management server serves no WebSocket. Without this handler
           # httpuv would accept any handshake, whatever its Host or Origin,
           # and write an error to the console for each one.
-          onWSOpen = function(ws) tryCatch(ws$close(), error = function(e) NULL)
+          onWSOpen = note_interrupts(config, function(ws) tryCatch(ws$close(), error = function(e) NULL))
         )
       )
     },
@@ -258,6 +268,10 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       shutdown_requested_at <- NULL
       outcome <- tryCatch({
         while (TRUE) {
+          # Read at every turn, so that the server's clock takes short steps;
+          # see clock_seconds()
+          config$clock_seconds()
+
           # A Ctrl-C that a callback of httpuv or the websocket package
           # caught; see note_interrupts()
           if (isTRUE(config$interrupt_requested)) {
@@ -292,7 +306,9 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
           # Reload between requests: stopping app processes blocks
           if (isTRUE(config$reload_requested)) {
             config$field("reload_requested", FALSE)
-            tryCatch(reload(), error = function(e) {
+            # The request that asked for the reload has just looked for the
+            # apps' ports, which holds up every app's traffic
+            tryCatch(reload(check_ports = FALSE), error = function(e) {
               config$field("last_reload", list(success = FALSE, message = conditionMessage(e)))
               logger::log_error("Configuration reload failed: {error}", error = conditionMessage(e))
             })
@@ -321,10 +337,10 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       }
       invisible(NULL)
     },
-    reload = function() {
-      "Stop all apps, apply the configuration file again, and start the resident apps"
+    reload = function(check_ports = TRUE) {
+      "Stop all apps, apply the configuration file again, and start the resident apps. check_ports = FALSE leaves out the search for the apps' ports before any app stops, for a caller that has just made it."
 
-      reload_check <- config$read_reload_config()
+      reload_check <- config$read_reload_config(check_ports = check_ports)
       if (!reload_check$valid) {
         config$field("last_reload", list(success = FALSE, message = reload_check$error))
         logger::log_error("Configuration reload rejected: {error}", error = reload_check$error)
@@ -349,53 +365,70 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
         return(invisible(list(valid = FALSE, error = error)))
       }
 
-      # Assign ports only now, so the stopped apps' ports can be reused
+      # Apply what the configuration now in effect changes from a previous
+      # one, outside the apps: the logs, the pages, and the health checks.
+      # Returns why the previous log_dir was kept, or NULL.
+      apply_settings <- function(previous) {
+        log_problem <- NULL
+        if (!identical(config$config$log_dir, previous$log_dir) ||
+          !identical(config$config$log_level, previous$log_level)) {
+          # The new log_dir was checked before any app stopped. If it has
+          # become unwritable since, keep the previous log_dir, for the app
+          # logs and render records as well as the server log, rather than
+          # leave the reload half applied, but use the new log level, and
+          # say so.
+          log_problem <- tryCatch(
+            {
+              setup_logging(config$config$log_dir, config$config$log_level %||% "INFO")
+              NULL
+            },
+            error = function(e) {
+              logger::log_threshold(config$config$log_level %||% "INFO", namespace = "tinyshinyserver")
+              logger::log_warn("Keeping the previous log_dir: {error}", error = conditionMessage(e))
+              kept <- config$config
+              kept$log_dir <- previous$log_dir
+              config$field("config", kept)
+              conditionMessage(e)
+            }
+          )
+        }
+        template_manager$field("server_title", config$config$title)
+        template_manager$field("base_url", config$config$base_path %||% "")
+        # The next health check would otherwise come after the previous interval
+        if (is.function(cancel_health_check) &&
+          !identical(config$config$health_check_interval, previous$health_check_interval)) {
+          schedule_health_check(config$config$health_check_interval %||% 10)
+        }
+        log_problem
+      }
+
+      # Assign ports only now, so the stopped apps' ports can be reused. The
+      # apps have stopped, so whatever fails from here on, the reload ends
+      # with a whole configuration in effect, the previous one, and starts
+      # the resident apps: they would otherwise stay down until a health
+      # check found them, restart_delay later.
       old_config <- config$config
       config$field("config", reload_check$config)
+      log_problem <- NULL
       result <- tryCatch(
         {
           config$assign_app_ports()
+          log_problem <- apply_settings(old_config)
           list(valid = TRUE)
         },
         error = function(e) {
           logger::log_error("Configuration reload failed, keeping the previous configuration: {error}",
             error = conditionMessage(e)
           )
+          failed_config <- config$config
           config$field("config", old_config)
+          tryCatch(apply_settings(failed_config), error = function(e) {
+            logger::log_error("Could not apply the previous configuration again: {error}", error = conditionMessage(e))
+          })
           list(valid = FALSE, error = conditionMessage(e))
         }
       )
-
-      log_problem <- NULL
-      if (!identical(config$config$log_dir, old_config$log_dir) ||
-        !identical(config$config$log_level, old_config$log_level)) {
-        # The new log_dir was checked before any app stopped. If it has
-        # become unwritable since, keep the previous log_dir, for the app logs
-        # and render records as well as the server log, rather than leave the
-        # reload half applied, but use the new log level, and say so.
-        log_problem <- tryCatch(
-          {
-            setup_logging(config$config$log_dir, config$config$log_level %||% "INFO")
-            NULL
-          },
-          error = function(e) {
-            logger::log_threshold(config$config$log_level %||% "INFO", namespace = "tinyshinyserver")
-            logger::log_warn("Keeping the previous log_dir: {error}", error = conditionMessage(e))
-            kept <- config$config
-            kept$log_dir <- old_config$log_dir
-            config$field("config", kept)
-            conditionMessage(e)
-          }
-        )
-      }
-      template_manager$field("server_title", config$config$title)
-      template_manager$field("base_url", config$config$base_path %||% "")
       config$log_port_assignments()
-      # The next health check would otherwise come after the previous interval
-      if (is.function(cancel_health_check) &&
-        !identical(config$config$health_check_interval, old_config$health_check_interval)) {
-        schedule_health_check(config$config$health_check_interval %||% 10)
-      }
 
       start_all_apps()
       message <- result$error

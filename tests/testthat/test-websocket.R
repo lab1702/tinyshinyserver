@@ -35,6 +35,18 @@ test_that("same-origin WebSocket handshakes are recognised", {
     REMOTE_ADDR = "127.0.0.1", HTTP_X_FORWARDED_HOST = "myapp.example.com"))
   expect_false(same(HTTP_HOST = "127.0.0.1:3838", HTTP_ORIGIN = "https://myapp.example.com",
     REMOTE_ADDR = "203.0.113.5", HTTP_X_FORWARDED_HOST = "myapp.example.com"))
+  # The page's origin is then the host that the reverse proxy reports, and no
+  # longer Host: that names this machine's own address, where anything on the
+  # visitor's own machine could serve a page
+  expect_false(same(HTTP_HOST = "127.0.0.1:3838", HTTP_ORIGIN = "http://127.0.0.1:3838",
+    REMOTE_ADDR = "127.0.0.1", HTTP_X_FORWARDED_HOST = "myapp.example.com"))
+  expect_true(same(HTTP_HOST = "127.0.0.1:3838", HTTP_ORIGIN = "https://b.example.com",
+    REMOTE_ADDR = "::1", HTTP_X_FORWARDED_HOST = "a.example.com, b.example.com"))
+  # A browser on this machine that opens the proxy itself sends no such
+  # header, and one that names no host leaves Host to decide
+  expect_true(same(HTTP_HOST = "127.0.0.1:3838", HTTP_ORIGIN = "http://127.0.0.1:3838", REMOTE_ADDR = "127.0.0.1"))
+  expect_true(same(HTTP_HOST = "127.0.0.1:3838", HTTP_ORIGIN = "http://127.0.0.1:3838",
+    REMOTE_ADDR = "127.0.0.1", HTTP_X_FORWARDED_HOST = " , "))
   expect_false(same(HTTP_HOST = "localhost:3838", HTTP_ORIGIN = "http://localhost:3839"))
   # A page on the plain-HTTP site may not open the HTTPS site's sessions
   expect_false(same(HTTP_HOST = "myapp.example.com", HTTP_ORIGIN = "http://myapp.example.com",
@@ -176,10 +188,12 @@ test_that("backend WebSocket handshakes carry the request's end-to-end headers",
   config <- ShinyServerConfig$new()
   config$config <- list(apps = list(list(name = "app", port = 3001, resident = TRUE)))
   sent <- NULL
+  options <- NULL
   backend <- list(onMessage = function(f) NULL, onOpen = function(f) NULL,
     onError = function(f) NULL, onClose = function(f) NULL, close = function() NULL)
   local_mocked_bindings(WebSocket = list(new = function(url, headers, ...) {
     sent <<- headers
+    options <<- list(...)
     backend
   }), .package = "websocket")
   local_mocked_bindings(process_owns_port = function(process, port) TRUE)
@@ -196,6 +210,9 @@ test_that("backend WebSocket handshakes carry the request's end-to-end headers",
   cm$create_backend_connection("app", "s", client)
   expect_setequal(names(sent), c("COOKIE", "AUTHORIZATION", "X-FORWARDED-USER", "USER-AGENT", "ACCEPT-LANGUAGE"))
   expect_equal(sent[["X-FORWARDED-USER"]], "alice")
+  # The websocket package would print a socket's errors to the console
+  # itself, past the server log, as when an app stops with sessions open
+  expect_equal(options$errorLogChannels, "none")
 
   # A handshake with nothing to forward still connects
   bare <- list(request = list(PATH_INFO = "/proxy/app/websocket/", HTTP_HOST = "127.0.0.1:3838",
@@ -327,17 +344,22 @@ test_that("a backend handshake that times out is tried again, keeping the browse
   # A busy app completes the handshake only once it is free again
   connect("busy")
   expect_true(cm$handle_client_message("busy", "init", "app"))
-  sockets[[1]]$error(timeout)
+  logged <- capture_test_log(sockets[[1]]$error(timeout))
   expect_length(closed, 0)
+  # A handshake that is tried again has not failed, and is no error in the log
+  expect_false(any(grepl("^ERROR", logged)))
+  expect_true(any(grepl("connecting again for session busy", logged, fixed = TRUE)))
   run_until(function() length(sockets) == 2)
   expect_length(sockets, 2)
   expect_true(cm$handle_client_message("busy", "update", "app"))
   sockets[[2]]$open(list())
   expect_equal(sockets[[2]]$sent, list("init", "update"))
   expect_true(config$get_backend_connection("busy")$ready)
-  # The failed socket's late events no longer act on the session
-  sockets[[1]]$error(timeout)
+  # The failed socket's late events no longer act on the session, and are
+  # not reported as its errors
+  logged <- capture_test_log(sockets[[1]]$error(timeout))
   expect_length(closed, 0)
+  expect_length(logged, 0)
 
   # A session that ends while it waits is not connected again
   connect("left")
@@ -353,8 +375,9 @@ test_that("a backend handshake that times out is tried again, keeping the browse
   expect_equal(closed, "slow")
   config$WS_BACKEND_CONNECT_SECONDS <- 120
   connect("refused")
-  sockets[[5]]$error(list(message = "Connection refused"))
+  logged <- capture_test_log(sockets[[5]]$error(list(message = "Connection refused")))
   expect_equal(closed, c("slow", "refused"))
+  expect_true(any(grepl("^ERROR.*Backend connection error for app app: Connection refused", logged)))
   run_past_retry()
   expect_length(sockets, 5)
 })
