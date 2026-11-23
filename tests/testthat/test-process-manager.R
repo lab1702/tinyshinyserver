@@ -1,5 +1,7 @@
-# Keep scheduled process-manager callbacks out of other test files.
-later::with_loop(later::create_loop(), {
+# Keep scheduled process-manager callbacks out of other test files. A loop
+# from later::create_loop() would be a child of the global loop, whose
+# later::run_now() runs its callbacks too; this one has no parent.
+later::with_temp_loop({
 # Test for process management functions
 # Tests for ProcessManager class methods
 
@@ -1258,6 +1260,33 @@ test_that("the readiness window is measured in time, not in probes", {
   })
 })
 
+test_that("a port that another program holds is reported once for each start of the app", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app1", port = 3001)))
+  config$set_app_starting("app1")
+  pm <- ProcessManager$new(config)
+  process <- list(generation = 1, get_start_time = function() Sys.time())
+  config$add_app_process("app1", process)
+  local_mocked_bindings(
+    is_process_alive = function(process) TRUE,
+    process_owns_port = function(process, port) FALSE,
+    wait_for_backend = function(url, wait_seconds = 0, ...) promises::promise_resolve(TRUE)
+  )
+  reports <- function(log) sum(grepl("for app app1 is held by another program", log, fixed = TRUE))
+  later::with_temp_loop({
+    log <- capture_test_log(for (attempt in 1:3) {
+      expect_false(await_response(pm$check_app_ready("app1", 3001, process, attempt = attempt)))
+    })
+    expect_equal(reports(log), 1)
+
+    # The next start of the app may meet the program again, and says so
+    replacement <- list(generation = 2, get_start_time = function() Sys.time())
+    config$add_app_process("app1", replacement)
+    log <- capture_test_log(expect_false(await_response(pm$check_app_ready("app1", 3001, replacement))))
+    expect_equal(reports(log), 1)
+  })
+})
+
 test_that("readiness checks keep watching an app that is still starting after the window", {
   config <- ShinyServerConfig$new()
   config$config <- list(apps = list(list(name = "app1", port = 3001)))
@@ -1644,11 +1673,15 @@ test_that("start_app leaves the Quarto render decision to the app's own process"
   # Without its own .Renviron, the app keeps this session's library paths,
   # whatever ~/.Renviron sets
   expect_equal(launched$library_file, "")
+  # As without R_ENVIRON_USER, which R CMD check run through callr sets, and
+  # which names the file that an app reads in place of its own
+  old_environ <- Sys.getenv("R_ENVIRON_USER", unset = NA)
+  on.exit(if (is.na(old_environ)) Sys.unsetenv("R_ENVIRON_USER") else Sys.setenv(R_ENVIRON_USER = old_environ),
+    add = TRUE)
+  Sys.unsetenv("R_ENVIRON_USER")
   writeLines("", file.path(app_dir, ".Renviron"))
   withCallingHandlers(start(), warning = function(w) invokeRestart("muffleWarning"))
-  if (is.na(Sys.getenv("R_ENVIRON_USER", unset = NA))) {
-    expect_equal(launched$library_file, file.path(normalizePath(app_dir), ".Renviron"))
-  }
+  expect_equal(launched$library_file, file.path(normalizePath(app_dir), ".Renviron"))
   # The site profile runs in apps, as at R's startup
   expect_true(options$system_profile)
   expect_false(options$user_profile)
@@ -1878,6 +1911,54 @@ test_that("an app whose environment file sets R_PROFILE_USER runs that profile a
   expect_true(is.na(Sys.getenv("TSS_APP_PROFILE_USER", unset = NA)))
   expect_identical(environ_assigned_names(nullfile()), character())
   expect_identical(environ_assigned_names(file.path(app_dir, "missing")), character())
+})
+
+test_that("an app's process calls the .First() that its profile defines", {
+  app_dir <- make_test_app_dir()
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  saved <- Sys.getenv("R_ENVIRON_USER", unset = NA)
+  on.exit(if (is.na(saved)) Sys.unsetenv("R_ENVIRON_USER") else Sys.setenv(R_ENVIRON_USER = saved), add = TRUE)
+  Sys.unsetenv("R_ENVIRON_USER")
+  # The app's function runs here, and its profile defines .First() in this
+  # session's global environment
+  had_first <- exists(".First", envir = globalenv(), inherits = FALSE)
+  old_first <- get0(".First", envir = globalenv(), inherits = FALSE)
+  on.exit(if (had_first) assign(".First", old_first, envir = globalenv()) else
+    suppressWarnings(rm(".First", envir = globalenv())), add = TRUE)
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", path = app_dir, port = 1, resident = TRUE)),
+    log_dir = tempdir())
+  args <- NULL
+  local_mocked_bindings(r_bg = function(...) {
+    args <<- list(...)
+    list(is_alive = function() TRUE)
+  }, .package = "callr")
+  run_app <- function(profile) {
+    writeLines(profile, file.path(app_dir, ".Rprofile"))
+    ProcessManager$new(config)$start_app(config$config$apps[[1]])
+    config$remove_app_process("app")
+    old_dir <- setwd(app_dir)
+    on.exit(setwd(old_dir), add = TRUE)
+    old_option <- options(tss.test.first = NULL)
+    on.exit(options(old_option), add = TRUE)
+    local_mocked_bindings(runApp = function(...) getOption("tss.test.first", "none"), .package = "shiny")
+    messages <- character()
+    ran <- withCallingHandlers(do.call(args[[1]], utils::modifyList(args$args, list(profile_setting = NA))),
+      message = function(m) {
+        messages <<- c(messages, conditionMessage(m))
+        invokeRestart("muffleMessage")
+      })
+    list(ran = ran, messages = messages)
+  }
+
+  expect_equal(run_app(".First <- function() options(tss.test.first = 'ran')")$ran, "ran")
+  # An error in .First() is reported, and the app still starts
+  result <- run_app(".First <- function() stop('broken .First')")
+  expect_equal(result$ran, "none")
+  expect_true(any(grepl("Error in .First(): broken .First", result$messages, fixed = TRUE)))
+  # A .First() that the profile does not define is not called again
+  assign(".First", function() options(tss.test.first = "again"), envir = globalenv())
+  expect_equal(run_app("invisible(NULL)")$ran, "none")
 })
 
 test_that("the environment file that keeps callr's profile applies the app's file", {

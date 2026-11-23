@@ -355,6 +355,9 @@ handle_proxy_request <- function(path, method, query_string, req, config, proces
 # "Expect: 100-continue" before they are sent. libcurl writes a smaller body
 # in one piece, right after the request headers.
 EXPECT_CONTINUE_BYTES <- 65536
+# How long libcurl waits for the app to agree to such a body before it sends
+# the body anyway, as it does by default
+EXPECT_CONTINUE_TIMEOUT_MS <- 1000
 
 # Request headers that are not passed on to an app: they describe the client's
 # own connection to the proxy, or httpuv has already acted on them.
@@ -560,7 +563,7 @@ forward_request <- function(method, target_url, req, app_name, config, template_
       # lower-case name.
       if (length(body) > EXPECT_CONTINUE_BYTES) {
         headers[["expect"]] <- "100-continue"
-        curl::handle_setopt(handle, expect_100_timeout_ms = 1000)
+        curl::handle_setopt(handle, expect_100_timeout_ms = EXPECT_CONTINUE_TIMEOUT_MS)
       }
       curl::handle_setheaders(handle, .list = headers)
       if (!is.null(body)) {
@@ -610,14 +613,20 @@ is_ascii <- function(x) !grepl("[^\001-\177]", x, useBytes = TRUE)
 
 # The header fields of an app's final response, from libcurl's raw header
 # block, as a list named by lower-case field name. Each value keeps the bytes
-# the app sent. curl::parse_headers_list() returns no fields at all for a
-# block that holds a byte that is not valid UTF-8, such as a Latin-1 file
-# name, and the response would then be sent without its Content-Type, cookies,
-# or redirect. A line whose field name is not an HTTP token is left out.
+# the app sent, other than a CR (see below). curl::parse_headers_list()
+# returns no fields at all for a block that holds a byte that is not valid
+# UTF-8, such as a Latin-1 file name, and the response would then be sent
+# without its Content-Type, cookies, or redirect. A line whose field name is
+# not an HTTP token is left out.
 parse_response_headers <- function(raw_headers) {
   text <- rawToChar(raw_headers)
   Encoding(text) <- "bytes"
-  blocks <- strsplit(text, "\r\n\r\n|\n\n|\r\r", useBytes = TRUE)[[1]]
+  # Lines end at LF, as libcurl reads them. A CR elsewhere is part of a value,
+  # and becomes a space (RFC 9112, section 2.2): httpuv ends every header that
+  # it sends with CRLF, so a CR passed on, or read as a line end here, would
+  # let an app that puts a visitor's text in a header, such as a download's
+  # file name, give that visitor's link a header of its own, such as a cookie.
+  blocks <- strsplit(text, "\r?\n\r?\n", useBytes = TRUE)[[1]]
   if (length(blocks) == 0) {
     return(list())
   }
@@ -626,7 +635,8 @@ parse_response_headers <- function(raw_headers) {
   # would otherwise take the place of its Content-Type, cookies, and redirect.
   responses <- which(startsWith(blocks, "HTTP/"))
   final <- if (length(responses) > 0) responses[length(responses)] else length(blocks)
-  lines <- strsplit(blocks[final], "\r\n|\n|\r", useBytes = TRUE)[[1]]
+  lines <- strsplit(blocks[final], "\r?\n", useBytes = TRUE)[[1]]
+  lines <- gsub("\r", " ", lines, fixed = TRUE, useBytes = TRUE)
   colon <- regexpr(":", lines, fixed = TRUE, useBytes = TRUE)
   names <- substr(lines, 1, colon - 1)
   fields <- colon > 1 & grepl("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$", names, useBytes = TRUE)

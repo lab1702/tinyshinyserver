@@ -207,7 +207,7 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
           # server shuts down are refused too.
           call = function(req) {
             if (isTRUE(is_shutting_down)) {
-              return(create_error_response("The server is shutting down", 503))
+              return(without_head_body(req, create_error_response("The server is shutting down", 503)))
             }
             handle_http_request(req, config, template_manager, connection_manager, process_manager)
           },
@@ -236,7 +236,7 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
           onHeaders = function(req) reject_large_request_body(req, 65536),
           call = function(req) {
             if (isTRUE(is_shutting_down)) {
-              return(create_error_response("The server is shutting down", 503))
+              return(management_response(req, create_error_response("The server is shutting down", 503)))
             }
             handle_management_request(req, config, process_manager, template_manager)
           }
@@ -264,6 +264,10 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
             if (is.null(shutdown_requested_at)) {
               logger::log_info("Shutdown requested, initiating graceful shutdown")
               is_shutting_down <<- TRUE
+              # The wait below runs timers that are due, and a crashed app's
+              # restart would start it only to stop it again, replacing the
+              # log that holds the crash with the empty log of that run
+              process_manager$cancel_pending_restarts()
               shutdown_requested_at <- Sys.time()
             }
             # A clock set back ends the wait rather than prolonging it

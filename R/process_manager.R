@@ -488,12 +488,16 @@ startup_profile_file <- function(named = Sys.getenv("R_PROFILE_USER", unset = NA
 ProcessManager <- setRefClass("ProcessManager",
   fields = list(
     config = "ANY",
-    pending_restarts = "environment"
+    pending_restarts = "environment",
+    # The process of each app for which a readiness check has reported that
+    # another program holds its port
+    port_conflicts = "environment"
   ),
   methods = list(
     initialize = function(server_config) {
       config <<- server_config
       pending_restarts <<- new.env(parent = emptyenv())
+      port_conflicts <<- new.env(parent = emptyenv())
     },
     start_app = function(app_config) {
       "Start a Shiny application process"
@@ -570,7 +574,11 @@ ProcessManager <- setRefClass("ProcessManager",
       # one that keeps callr's own profile; see profile_keeping_environ_file().
       profile_chosen <- "R_PROFILE_USER" %in% environ_assigned_names(environ_file)
       process_environ_file <- if (profile_chosen) {
-        profile_keeping_environ_file(environ_file, tempfile(paste0("tss-", app_name, "-"), fileext = ".Renviron"))
+        # tempdir(check = TRUE) makes R's temporary directory again where a
+        # cleaner of old temporary files has removed it from a long-running
+        # server, as callr::r_bg() does for its own files
+        profile_keeping_environ_file(environ_file,
+          tempfile(paste0("tss-", app_name, "-"), tmpdir = tempdir(check = TRUE), fileext = ".Renviron"))
       } else {
         environ_file
       }
@@ -618,9 +626,18 @@ ProcessManager <- setRefClass("ProcessManager",
           environ_libraries(library_file)
           profile <- profile_file(profile_setting)
           if (nzchar(profile) && file.exists(profile)) {
+            first <- get0(".First", envir = globalenv(), inherits = FALSE)
             tryCatch(source(profile), error = function(e) {
               message("Error in ", normalizePath(profile), ": ", conditionMessage(e))
             })
+            # R calls the .First() that the profile defines once it has run
+            # the profile, as it would for the app run on its own
+            app_first <- get0(".First", envir = globalenv(), inherits = FALSE)
+            if (is.function(app_first) && !identical(app_first, first)) {
+              tryCatch(app_first(), error = function(e) {
+                message("Error in .First(): ", conditionMessage(e))
+              })
+            }
           }
           if (type == "qmd") {
             render <- needs_render(file, log_dir, state_file)
@@ -731,9 +748,18 @@ ProcessManager <- setRefClass("ProcessManager",
         # A replacement may have been registered while the probe was pending.
         if (!identical(config$get_app_process(app_name), tracked_process)) return(FALSE)
         if (ready && !config$app_backend_verified(app_name)) {
-          logger::log_warn("Port {port} for app {app_name} is held by another program",
-            app_name = app_name, port = app_port
-          )
+          # Probes repeat every half second, and then every 2 seconds for as
+          # long as the app may keep starting, so this is said once a start
+          if (identical(port_conflicts[[app_name]], tracked_process)) {
+            logger::log_debug("Port {port} for app {app_name} is still held by another program",
+              app_name = app_name, port = app_port
+            )
+          } else {
+            assign(app_name, tracked_process, envir = port_conflicts)
+            logger::log_warn("Port {port} for app {app_name} is held by another program",
+              app_name = app_name, port = app_port
+            )
+          }
           ready <- FALSE
         }
         if (ready) {
@@ -1239,9 +1265,14 @@ ProcessManager <- setRefClass("ProcessManager",
 
       return(apps_status)
     },
+    cancel_pending_restarts = function() {
+      "Keep the restarts that are waiting for restart_delay from starting any app"
+      pending_restarts <<- new.env(parent = emptyenv())
+      invisible(NULL)
+    },
     stop_all_apps = function() {
       "Stop all running applications and clean up all connections. Returns the names of apps that did not stop."
-      pending_restarts <<- new.env(parent = emptyenv())
+      cancel_pending_restarts()
 
       logger::log_info("Stopping all applications...")
 

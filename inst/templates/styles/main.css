@@ -540,8 +540,10 @@ button {
   text-decoration: none;
 }
 
+/* A disabled tile has no link to follow, but still shows its title, which
+   says why it is disabled, on hover */
 .app-card-link.is-disabled {
-  pointer-events: none;
+  cursor: not-allowed;
 }
 
 .app-card {
@@ -557,7 +559,7 @@ button {
   transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
 }
 
-.app-card-link:hover .app-card {
+.app-card-link:not(.is-disabled):hover .app-card {
   border-color: var(--accent);
   box-shadow: var(--shadow-md);
   transform: translateY(-1px);
@@ -619,7 +621,7 @@ button {
   transition: transform 0.15s;
 }
 
-.app-card-link:hover .app-open::after {
+.app-card-link:not(.is-disabled):hover .app-open::after {
   transform: translateX(3px);
 }
 

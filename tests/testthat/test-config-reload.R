@@ -12,7 +12,8 @@ reload_test_server <- function(path, env = parent.frame()) {
   local_mocked_bindings(is_port_in_use = function(...) FALSE, setup_logging = function(...) NULL,
     create_process_manager = function(config) list(
       start_app = function(app) {calls$started <- c(calls$started, app$name); TRUE},
-      stop_all_apps = function() {calls$stopped <- calls$stopped + 1}
+      stop_all_apps = function() {calls$stopped <- calls$stopped + 1},
+      cancel_pending_restarts = function() NULL
     ), .env = env)
   server <- TinyShinyServer$new(path)
   list(server = server, calls = calls)

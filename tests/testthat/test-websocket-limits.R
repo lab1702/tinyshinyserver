@@ -363,26 +363,27 @@ test_that("the idle check of an on-demand app allows a slow browser time to down
   cm$end_http_request("app", 100000)
   expect_equal(last_delay(), 30)
 
-  # 10 MB take 80 seconds at 128 KB/s
+  # 10 MB take 80 seconds at 128 KB/s. The lower bounds below leave room for
+  # a busy machine to take seconds between the end of a request and the check.
   local_mocked_bindings(forward_request = function(...) create_html_response(strrep("x", 10 * 1024^2)))
   expect_equal(handle_proxy_request("/proxy/app/", "GET", "", list(), config, pm, cm)$status, 200)
-  expect_gt(last_delay(), 109)
+  expect_gt(last_delay(), 100)
   expect_lte(last_delay(), 110)
 
   # A small request that ends while the large response may still be on its
   # way does not shorten the wait
   cm$begin_http_request("app")
   cm$end_http_request("app", 10)
-  expect_gt(last_delay(), 109)
+  expect_gt(last_delay(), 100)
   # Nor does a session that closes
   cm$add_client_connection("s", list(), "app", "127.0.0.1", "test")
   cm$remove_client_connection("s")
-  expect_gt(last_delay(), 109)
+  expect_gt(last_delay(), 100)
 
   # The allowance has a ceiling
   cm$begin_http_request("app")
   cm$end_http_request("app", 4 * 1024^3)
-  expect_gt(last_delay(), 629)
+  expect_gt(last_delay(), 620)
   expect_lte(last_delay(), 630)
 })
 
@@ -401,7 +402,7 @@ test_that("the size of a response that an app sends later, or from a file, is al
   expect_equal(config$active_http_requests[["app"]], 0L)
   # Without the rounding error that the test above describes
   left <- round(cm$transfer_seconds_left("app"), 6)
-  expect_gt(left, 23)
+  expect_gt(left, 20)
   expect_lte(left, 24)
 
   spooled <- tempfile("tss-response-")

@@ -349,8 +349,15 @@ ConnectionManager <- setRefClass("ConnectionManager",
           return(TRUE)
         },
         error = function(e) {
-          logger::log_error("WebSocket message error: {error}", error = e$message)
-          return(FALSE)
+          # The message was valid, but the app's socket could not take it,
+          # as when it has closed and its close has not been handled yet. The
+          # session cannot go on, and the browser is not told the message
+          # was invalid.
+          logger::log_warn("Closing session {session_id} of app {app_name}: the message could not be passed to the app: {error}",
+            session_id = session_id, app_name = app_name, error = conditionMessage(e)
+          )
+          close_client_connection(session_id)
+          return(TRUE)
         }
       )
     },
@@ -516,7 +523,13 @@ ConnectionManager <- setRefClass("ConnectionManager",
             return(TRUE)
           }
           logger::log_info("No WebSocket connections remain for non-resident app {app_name}, stopping immediately", app_name = app_name)
-          process_manager$stop_app_immediately(app_name)
+          # A process that outlives the attempt stays tracked, and nothing
+          # else would look at the unused app again
+          if (isFALSE(process_manager$stop_app_immediately(app_name)) &&
+              isTRUE(schedule_session_check(app_name))) {
+            logger::log_warn("Trying again to stop unused app {app_name} after {seconds} seconds",
+              app_name = app_name, seconds = config$HTTP_SESSION_GRACE_SECONDS)
+          }
         }
       }
 

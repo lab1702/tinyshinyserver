@@ -292,6 +292,12 @@ test_that("is_process_alive handles errors gracefully", {
 # kill_process_safely() tests
 # ============================================================================
 
+test_that("process uptime is unknown when the clock has been set back since the start", {
+  expect_equal(process_uptime_seconds(list(get_start_time = function() Sys.time() - 60)), 60, tolerance = 5)
+  expect_null(process_uptime_seconds(list(get_start_time = function() Sys.time() + 86400)))
+  expect_null(process_uptime_seconds(list(get_start_time = function() stop("cannot read"))))
+})
+
 test_that("kill_process_safely returns TRUE for NULL process", {
   result <- kill_process_safely(NULL)
   expect_true(result)
@@ -481,7 +487,9 @@ test_that("absolute_path makes a path absolute without resolving it", {
 test_that("loopback_port_accepts finds a program that listens on a port", {
   backend <- start_test_http_server(function(req) handle_health_check())
   on.exit(httpuv::stopServer(backend$server), add = TRUE)
-  expect_true(loopback_port_accepts(backend$port))
+  # A generous timeout: the test is of finding the program, and a busy
+  # machine can take longer than the default to connect
+  expect_true(loopback_port_accepts(backend$port, timeout_ms = 5000))
 })
 
 test_that("is_port_in_use also asks, where an app could share it, whether a port accepts connections", {
@@ -538,8 +546,14 @@ test_that("loopback_port_accepts reaches a program on [::1]", {
   }
   if (is.null(server)) skip("IPv6 loopback unavailable")
   on.exit(httpuv::stopServer(server), add = TRUE)
-  expect_true(loopback_port_accepts(port, address = "::1"))
+  expect_true(loopback_port_accepts(port, timeout_ms = 5000, address = "::1"))
   # Listening on 127.0.0.1 does not keep a program from [::1], so only the
-  # check for the server's own ports finds it
+  # check for the server's own ports finds it. The connection to [::1] may
+  # take a busy machine longer than the default timeout; one to 127.0.0.1,
+  # where nothing listens, keeps it, since on Windows it waits that long.
+  accepts <- loopback_port_accepts
+  local_mocked_bindings(loopback_port_accepts = function(port, timeout_ms = 100, address = "127.0.0.1") {
+    accepts(port, timeout_ms = if (identical(address, "::1")) 5000 else timeout_ms, address = address)
+  })
   expect_true(is_port_in_use("127.0.0.1", port, loopback = TRUE))
 })

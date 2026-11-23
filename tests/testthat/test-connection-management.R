@@ -468,6 +468,39 @@ test_that("idle checks cannot stop busy, reconnected or replacement apps", {
   expect_equal(stops, 1)
 })
 
+test_that("an unused app whose process outlives the stop is checked again", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", resident = FALSE)))
+  config$add_app_process("app", list(generation = 1))
+  stopped <- FALSE
+  stops <- 0
+  checks <- list()
+  delays <- numeric()
+  local_mocked_bindings(later = function(func, delay, ...) {
+    checks[[length(checks) + 1L]] <<- func
+    delays <<- c(delays, delay)
+  }, .package = "later")
+  cm <- ConnectionManager$new(config, list(stop_app_immediately = function(app_name) {
+    stops <<- stops + 1
+    stopped
+  }))
+
+  cm$begin_http_request("app")
+  cm$end_http_request("app")
+  expect_length(checks, 1)
+  logged <- capture_test_log(checks[[1]]())
+  expect_equal(stops, 1)
+  expect_length(checks, 2)
+  expect_equal(delays[2], config$HTTP_SESSION_GRACE_SECONDS)
+  expect_true(any(grepl("Trying again to stop unused app app", logged, fixed = TRUE)))
+
+  # A stop that succeeds asks for no further check
+  stopped <- TRUE
+  checks[[2]]()
+  expect_equal(stops, 2)
+  expect_length(checks, 2)
+})
+
 test_that("a new page can connect after the last old session closes during HTTP", {
   for (reconnect in c(FALSE, TRUE)) {
     config <- ShinyServerConfig$new()
@@ -557,10 +590,12 @@ test_that("an unused on-demand app that is still starting is left to finish", {
   tail(checks, 1)[[1]]()
   expect_equal(stops, 2)
 
-  # Nor is one whose process has exited, or whose start time cannot be read
+  # Nor is one whose process has exited, or whose start time cannot be read,
+  # or lies ahead because the clock has been set back since
   for (process in list(
     list(is_alive = function() FALSE, get_start_time = function() Sys.time()),
-    list(is_alive = function() TRUE)
+    list(is_alive = function() TRUE),
+    list(is_alive = function() TRUE, get_start_time = function() Sys.time() + 86400)
   )) {
     config$add_app_process("app", process)
     expect_false(cm$is_still_starting("app", process))
@@ -599,4 +634,32 @@ test_that("a queued message that cannot be sent when the app's socket opens ends
   expect_equal(closed, 1)
   expect_null(config$get_ws_connection("s"))
   expect_null(config$get_backend_connection("s"))
+})
+
+test_that("a valid message that the app's closed socket cannot take ends the session as valid", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", port = 1, resident = TRUE)))
+  assign("app_backend_verified", function(app_name) TRUE, envir = config)
+  handlers <- list()
+  fake_socket <- list(
+    onMessage = function(f) handlers$message <<- f, onOpen = function(f) handlers$open <<- f,
+    onClose = function(f) handlers$close <<- f, onError = function(f) handlers$error <<- f,
+    # As the websocket package does once the app has closed its socket
+    send = function(message) stop("invalid state"),
+    close = function() NULL
+  )
+  local_mocked_bindings(WebSocket = list(new = function(...) fake_socket), .package = "websocket")
+  cm <- ConnectionManager$new(config)
+  closed <- 0
+  client <- list(request = list(PATH_INFO = "/proxy/app/websocket/"), close = function() closed <<- closed + 1)
+  cm$add_client_connection("s", client, "app", "127.0.0.1", "test")
+  cm$create_backend_connection("app", "s", client)
+  capture_test_log(handlers$open(list()))
+
+  # TRUE: the browser is not told that its message was invalid
+  logged <- capture_test_log(expect_true(cm$handle_client_message("s", "{}", "app")))
+  expect_equal(closed, 1)
+  expect_null(config$get_ws_connection("s"))
+  expect_null(config$get_backend_connection("s"))
+  expect_true(any(grepl("could not be passed to the app: invalid state", logged, fixed = TRUE)))
 })

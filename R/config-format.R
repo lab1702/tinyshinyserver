@@ -60,7 +60,7 @@
 #'   \item{\code{max_response_size_mb}}{Largest app response, in megabytes, that the proxy forwards; a positive finite number (default: 1024). The proxy stops receiving a larger response and answers HTTP 502.}
 #'   \item{\code{idle_timeout_minutes}}{Minutes without a WebSocket message, in either direction, after which a session is closed and the browser shows the app as disconnected; a non-negative finite number (default: 30). \code{0} keeps idle sessions open. Idle sessions are checked every 5 minutes.}
 #'   \item{\code{max_unanswered_mb}}{The most data, in megabytes, that an app may send a WebSocket session without a message from the browser in between; a non-negative finite number (default: 256). \code{0} sets no limit. Above it, the session is closed and the browser shows the app as disconnected; reloading the page reconnects it. The proxy cannot tell how much of what it sends a browser has been read, so this limits the memory that one browser that stops reading, and sends nothing, can make the server use. Each message from the browser starts the count again, so a client that keeps sending messages while it does not read is not limited. A dashboard left open without interaction that receives more than this needs a larger value, or \code{0}.}
-#'   \item{\code{log_level}}{Least severe messages written to \code{server.log}: \code{"DEBUG"}, \code{"INFO"}, \code{"WARN"}, or \code{"ERROR"}, in any letter case (default: \code{"INFO"}). \code{"DEBUG"} also records the first 100 characters of every WebSocket message, which can include what users type.}
+#'   \item{\code{log_level}}{Least severe messages written to \code{server.log}: \code{"DEBUG"}, \code{"INFO"}, \code{"WARN"}, or \code{"ERROR"}, in any letter case (default: \code{"INFO"}). \code{"DEBUG"} also records the first 100 bytes of every WebSocket message, which can include what users type.}
 #' }
 #'
 #' @section Application Configuration:
@@ -92,7 +92,8 @@
 #' and \file{.Rprofile} there, if there are any, such as a profile that
 #' activates renv. As at R's startup, the files that \env{R_ENVIRON_USER} and
 #' \env{R_PROFILE_USER} name take precedence, a variable that is set but empty
-#' names no file, and a directory without these files falls back to the
+#' names no file (on Windows, which cannot hold an empty variable, it counts
+#' as not set), and a directory without these files falls back to the
 #' user's \file{~/.Renviron} and \file{~/.Rprofile}.
 #'
 #' Two apps may not use the same directory if its document is rendered into

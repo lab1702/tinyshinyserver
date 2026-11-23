@@ -203,9 +203,20 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       if (identical(start, as.raw(c(0xff, 0xfe))) || identical(start, as.raw(c(0xfe, 0xff)))) {
         stop("Configuration file ", file, " is saved as UTF-16; save it as UTF-8", call. = FALSE)
       }
+      # A NUL character would be read as the end of its line or value: R
+      # drops the rest of a line after a NUL byte, and jsonlite ends a string
+      # at "\u0000". The file would then be read as something other than what
+      # it says, as "apps/a\u0000x" would name the directory "apps/a".
+      if (any(readBin(file, "raw", file.size(file)) == as.raw(0))) {
+        stop("Configuration file ", file, " contains a NUL byte; save it as UTF-8 text", call. = FALSE)
+      }
       config_text <- paste(readLines(file, encoding = "UTF-8", warn = FALSE), collapse = "\n")
       if (!validUTF8(config_text)) {
         stop("Configuration file ", file, " is not valid UTF-8 text; save it as UTF-8", call. = FALSE)
+      }
+      # An escaped backslash before "u0000", as in "\\u0000", is not one
+      if (grepl("(^|[^\\\\])(\\\\\\\\)*\\\\u0000", config_text, useBytes = TRUE)) {
+        stop("Configuration file ", file, " contains the NUL character \\u0000, which is not allowed", call. = FALSE)
       }
       # A byte-order mark is allowed, as other JSON readers allow it.
       # jsonlite::fromJSON() would read text that is not JSON as the name of

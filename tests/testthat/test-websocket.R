@@ -272,6 +272,12 @@ test_that("a backend handshake that times out is tried again, keeping the browse
     deadline <- Sys.time() + 5
     while (!condition() && Sys.time() < deadline) later::run_now(0.05)
   }
+  # Longer than the retry's wait of half a second. later::run_now(1) would
+  # return as soon as any other callback had run.
+  run_past_retry <- function() {
+    deadline <- Sys.time() + 1
+    while (Sys.time() < deadline) later::run_now(0.05)
+  }
   timeout <- list(message = "The opening handshake timed out")
 
   # A busy app completes the handshake only once it is free again
@@ -293,7 +299,7 @@ test_that("a backend handshake that times out is tried again, keeping the browse
   connect("left")
   sockets[[3]]$error(timeout)
   cm$remove_client_connection("left")
-  later::run_now(1)
+  run_past_retry()
   expect_length(sockets, 3)
 
   # The app is not waited for without end, and a refused connection fails at once
@@ -305,7 +311,7 @@ test_that("a backend handshake that times out is tried again, keeping the browse
   connect("refused")
   sockets[[5]]$error(list(message = "Connection refused"))
   expect_equal(closed, c("slow", "refused"))
-  later::run_now(1)
+  run_past_retry()
   expect_length(sockets, 5)
 })
 

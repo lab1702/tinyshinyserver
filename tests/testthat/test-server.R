@@ -111,6 +111,44 @@ test_that("monitoring continues after an unexpected health-check error", {
   expect_length(scheduled, 3)
 })
 
+test_that("the cleanup timer closes stale sessions, survives an error, and runs again", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(log_dir = tempdir())
+  local_mocked_bindings(create_server_config = function(...) config, setup_logging = function(...) NULL,
+    is_port_in_use = function(...) FALSE)
+  server <- TinyShinyServer$new()
+  cleanups <- 0
+  assign("health_check", function() NULL, envir = server$process_manager)
+  assign("cleanup_stale_connections", function() {
+    cleanups <<- cleanups + 1
+    if (cleanups == 1) stop("Unexpected failure")
+    0
+  }, envir = server$process_manager)
+  scheduled <- list()
+  delays <- numeric()
+  local_mocked_bindings(later = function(func, delay = 0, ...) {
+    scheduled[[length(scheduled) + 1]] <<- func
+    delays <<- c(delays, delay)
+  }, .package = "later")
+  server$start_monitoring_services()
+  # The health check comes first, then the cleanup
+  expect_length(scheduled, 2)
+  expect_equal(delays[2], config$CLEANUP_INTERVAL_SECONDS)
+  logged <- capture_test_log(expect_no_error(scheduled[[2]]()))
+  expect_equal(cleanups, 1)
+  expect_true(any(grepl("Error during cleanup: Unexpected failure", logged, fixed = TRUE)))
+  expect_length(scheduled, 3)
+  expect_equal(delays[3], config$CLEANUP_INTERVAL_SECONDS)
+  scheduled[[3]]()
+  expect_equal(cleanups, 2)
+  expect_length(scheduled, 4)
+  # It stops with the server
+  server$is_shutting_down <- TRUE
+  scheduled[[4]]()
+  expect_equal(cleanups, 2)
+  expect_length(scheduled, 4)
+})
+
 test_that("the event loop stops when the management API requests shutdown", {
   config <- ShinyServerConfig$new()
   config$config <- list(log_dir = tempdir())
@@ -131,6 +169,29 @@ test_that("the event loop stops when the management API requests shutdown", {
   expect_gt(length(waits), 0)
   expect_true(all(waits == 50))
   expect_true(server$is_shutting_down)
+})
+
+test_that("a restart that falls due while the server shuts down starts no app", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(log_dir = tempdir(), restart_delay = 0.1,
+    apps = list(list(name = "app", resident = TRUE)))
+  local_mocked_bindings(create_server_config = function(...) config, setup_logging = function(...) NULL,
+    is_port_in_use = function(...) FALSE)
+  local_mocked_bindings(service = function(timeoutMs) Sys.sleep(timeoutMs / 1000), .package = "httpuv")
+  server <- TinyShinyServer$new()
+  started <- character()
+  assign("start_app", function(app_config) {
+    started <<- c(started, app_config$name)
+    TRUE
+  }, envir = server$process_manager)
+  later::with_temp_loop({
+    # As after a crash, the restart waits for restart_delay; the loop's
+    # short wait after the shutdown request runs timers that fall due
+    expect_true(server$process_manager$schedule_restart(config$config$apps[[1]]))
+    handle_server_shutdown(config)
+    expect_no_error(server$run_event_loop())
+  })
+  expect_length(started, 0)
 })
 
 test_that("the event loop stops for an interrupt that a WebSocket callback caught", {
@@ -178,6 +239,14 @@ test_that("requests that reach a shutting-down server start nothing", {
 
   expect_equal(apps[["3838"]]$call(list())$status, 503)
   expect_equal(apps[["3839"]]$call(list())$status, 503)
+  # As every answer of the servers: HEAD gets no body, and management
+  # answers may not be framed
+  head <- list(REQUEST_METHOD = "HEAD")
+  expect_null(apps[["3838"]]$call(head)$body)
+  management <- apps[["3839"]]$call(head)
+  expect_equal(management$status, 503)
+  expect_null(management$body)
+  expect_equal(management$headers[["X-Frame-Options"]], "DENY")
   closed <- 0
   apps[["3838"]]$onWSOpen(list(close = function() closed <<- closed + 1))
   expect_equal(closed, 1)

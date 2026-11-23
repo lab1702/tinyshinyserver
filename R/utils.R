@@ -281,12 +281,20 @@ process_usage <- function(process) {
   usage
 }
 
-# Seconds since a process started, or NULL when that cannot be read
+# Seconds since a process started, or NULL when that cannot be read. The
+# start time is read from the clock, so a clock set back since then, as after a
+# virtual machine snapshot is restored, makes the time unknown: a negative
+# uptime would count as a process that has only just started for as long as
+# the clock was set back.
 process_uptime_seconds <- function(process) {
-  tryCatch(
+  uptime <- tryCatch(
     as.numeric(difftime(Sys.time(), process$get_start_time(), units = "secs")),
     error = function(e) NULL
   )
+  if (length(uptime) != 1 || is.na(uptime) || uptime < 0) {
+    return(NULL)
+  }
+  uptime
 }
 
 kill_process_safely <- function(process) {

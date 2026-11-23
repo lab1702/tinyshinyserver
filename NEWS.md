@@ -6,7 +6,7 @@
 
 * **The proxy now rejects HTTP request bodies larger than 100 MB, and all chunked request bodies,** with HTTP 413 before reading them. Previously the whole body was read into memory before being forwarded, so one very large upload could exhaust the server's memory and stop every app. Apps that accept larger uploads through `shiny.maxRequestSize` need the new `max_request_size_mb` option raised to match. The management server, whose requests need no body, rejects bodies larger than 64 KB.
 
-* **App processes now start in their app directory and read the `.Renviron` and `.Rprofile` there,** as R does when the app is run on its own, so an app's own environment variables and profile, such as one that activates renv, now apply to it. As at R's startup, `R_ENVIRON_USER` and `R_PROFILE_USER` take precedence, including an `R_PROFILE_USER` that the app's own `.Renviron` sets, and an app directory without these files falls back to the user's `~/.Renviron` or `~/.Rprofile`. Previously every app read the `.Renviron` and `.Rprofile` of the directory that `start_tss()` was called from; an app that relied on those files needs its own copy. An error in an app's profile is written to its error log, and the app still starts. The site profile, `Rprofile.site`, also runs in apps, and an app's own `.Renviron` that sets `R_LIBS` or `R_LIBS_USER` gives the app the library paths that R makes from them, even when another of its lines cannot be read; apps previously always had the server's library paths unless a profile changed them.
+* **App processes now start in their app directory and read the `.Renviron` and `.Rprofile` there,** as R does when the app is run on its own, so an app's own environment variables and profile, such as one that activates renv, now apply to it. As at R's startup, `R_ENVIRON_USER` and `R_PROFILE_USER` take precedence, including an `R_PROFILE_USER` that the app's own `.Renviron` sets, and an app directory without these files falls back to the user's `~/.Renviron` or `~/.Rprofile`. Previously every app read the `.Renviron` and `.Rprofile` of the directory that `start_tss()` was called from; an app that relied on those files needs its own copy. An error in an app's profile is written to its error log, and the app still starts. A `.First()` function that the profile defines runs after it, as at R's startup. The site profile, `Rprofile.site`, also runs in apps, and an app's own `.Renviron` that sets `R_LIBS` or `R_LIBS_USER` gives the app the library paths that R makes from them, even when another of its lines cannot be read; apps previously always had the server's library paths unless a profile changed them.
 
 * **The proxy no longer forwards app responses larger than 1024 MB.** It stops receiving such a response and answers HTTP 502. The proxy sends nothing before it has a whole response and cannot tell when a visitor stops waiting, so a response that an app streams without end filled the disk and kept an on-demand app from stopping. Apps that serve larger downloads need the new `max_response_size_mb` option raised to match. A response that never ends but stays below the limit still keeps its request, and an on-demand app, in use.
 
@@ -26,7 +26,7 @@
 
 * New `max_unanswered_mb` option (default: 256) closes a WebSocket session once the app has sent it that many megabytes without a message from the browser in between; `0` sets no limit. The proxy cannot tell how much of what it sends a browser has been read, and the app's traffic kept such a session from counting as idle, so one client that opened a session and stopped reading could make the server hold an app's output in memory without end, until it stopped every app. A dashboard left open without interaction that receives more than this is disconnected too, and needs a larger value. Each message from the browser starts the count again, so a client that keeps sending messages while it does not read is not limited.
 
-* New `log_level` option chooses the least severe messages written to `server.log` (default: `"INFO"`). The package's DEBUG messages, which could not be turned on before, record each request's routing, the connection bookkeeping, and the first 100 characters of every WebSocket message.
+* New `log_level` option chooses the least severe messages written to `server.log` (default: `"INFO"`). The package's DEBUG messages, which could not be turned on before, record each request's routing, the connection bookkeeping, and the first 100 bytes of every WebSocket message.
 
 * New `title` option sets the name shown in the browser tab and top bar of the landing and management pages (default: `"Tiny Shiny Server"`).
 
@@ -130,7 +130,9 @@
 
 * A system clock set back, as after a virtual machine snapshot is restored, no longer keeps an app starting, a failed on-demand app waiting, or a request waiting for an app, for as long as the clock was set back.
 
-* `R_ENVIRON_USER` and `R_PROFILE_USER` set to an empty value now keep apps from reading a user environment file or profile, as they do for R itself. Apps read the app directory's files, or the user's, instead.
+* `R_ENVIRON_USER` and `R_PROFILE_USER` set to an empty value now keep apps from reading a user environment file or profile, as they do for R itself. Apps read the app directory's files, or the user's, instead. On Windows, which cannot hold an empty environment variable, such a value counts as not set, as it does for R there.
+
+* An unused on-demand app whose process outlives the attempt to stop it is tried again after 30 seconds. It kept running until someone opened it and left it again.
 
 * Apps can now be stopped and restarted on platforms where the `ps` package cannot list processes. Stopping an app failed there, which also blocked restarts, reloads, and shutdown; on those platforms only the app's own process is stopped, not processes it started.
 
@@ -176,7 +178,9 @@
 
 * The proxy connects to an app's WebSocket as soon as the browser's WebSocket opens, instead of at the browser's first message. Sockets on which only the app speaks, such as Shiny's autoreload socket, now work.
 
-* WebSocket messages larger than 32 MB from an app to the browser, such as large htmlwidget outputs, no longer disconnect the browser session.
+* WebSocket messages larger than 32 MB from an app to the browser, such as large htmlwidget outputs, no longer disconnect the browser session, as long as the app has not sent more than `max_unanswered_mb` (default: 256 MB) since the browser's last message.
+
+* A browser message that arrives just as the app closes its WebSocket ends the session without the browser being told that its message was invalid, and is logged as a warning rather than an error.
 
 * A WebSocket to a path such as `/proxy//app/websocket/` is rejected, as the same HTTP path already was. It was connected to the app's default socket whatever path followed the app name.
 
@@ -245,6 +249,8 @@
 * A configuration reload checks that the server log can be written in `log_dir` even when `log_dir` has not changed, and stops no app if it cannot. Such a reload stopped every app, and resident apps could then not open their log files. When the server log cannot be moved to a changed `log_dir`, a changed `log_level` is now applied anyway, and the reload's outcome says that the previous `log_dir` was kept, for the app logs and render records as well as the server log.
 
 * A configuration file that is not UTF-8 text, such as one that Windows PowerShell 5.1 saved as UTF-16 or one with a Latin-1 character, is reported as such. A small file failed with "file name conversion problem", and a file holding only the name of another file, or a URL, loaded that instead.
+
+* A configuration file that holds a NUL character, as a byte or as `\u0000` in a string, is rejected. It was read only up to the character: the rest of a line after a NUL byte was dropped, and a string ended at `\u0000`, so that `"apps/a\u0000x"` named the directory `apps/a`.
 
 * A reload reads the configuration file through the path that it was loaded from, without resolving links, so it reads a file that a link has since been pointed at, such as a mounted Kubernetes ConfigMap or a `current` release link. It read the previous target, and failed once that was removed.
 

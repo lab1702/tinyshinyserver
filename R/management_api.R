@@ -5,9 +5,13 @@
 handle_management_request <- function(req, config, process_manager, template_manager) {
   "Handle management interface requests"
 
+  management_response(req, respond_safely(handle_management_request_unframed(req, config, process_manager, template_manager)))
+}
+
+# Every answer of the management server, as it is sent to the client
+management_response <- function(req, response) {
   # Management pages carry one-click restart controls, so never allow them
   # to be framed by another site
-  response <- respond_safely(handle_management_request_unframed(req, config, process_manager, template_manager))
   response$headers[["X-Frame-Options"]] <- "DENY"
   response$headers[["Content-Security-Policy"]] <- "frame-ancestors 'none'"
   without_head_body(req, response)
@@ -213,7 +217,8 @@ handle_management_status_api <- function(config) {
         total_apps = length(config$config$apps),
         running_apps = running_apps,
         total_connections = total_connections,
-        uptime_seconds = as.numeric(difftime(Sys.time(), config$started_at, units = "secs"))
+        # Not below zero after the clock is set back
+        uptime_seconds = max(0, as.numeric(difftime(Sys.time(), config$started_at, units = "secs")))
       )
       # Memory is left out where ps cannot read it
       status$server_memory_bytes <- process_memory_bytes()

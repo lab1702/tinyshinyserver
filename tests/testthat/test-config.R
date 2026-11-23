@@ -1375,6 +1375,25 @@ test_that("a configuration file that is not UTF-8 text is named as such", {
   expect_equal(config$title, "Cafe")
 })
 
+test_that("a configuration file with a NUL character is refused, not read in part", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  json <- function(app_path, after = "") {
+    paste0('{"apps": [{"name": "app", "path": "', app_path, '"}], "log_dir": "/tmp", "starting_port": 3001}', after)
+  }
+  # R would drop the rest of the line after a NUL byte
+  writeBin(c(charToRaw(json("/tmp")), as.raw(0), charToRaw(" not JSON")), path)
+  expect_error(ShinyServerConfig$new()$read_config(path), "contains a NUL byte")
+  # jsonlite would end the path at the escaped NUL
+  writeLines(json("/tmp/a\\u0000x"), path)
+  expect_error(ShinyServerConfig$new()$read_config(path), "contains the NUL character")
+  writeLines(json("/tmp/a\\\\\\u0000x"), path)
+  expect_error(ShinyServerConfig$new()$read_config(path), "contains the NUL character")
+  # A backslash followed by the text "u0000" is allowed
+  writeLines(json("/tmp/a\\\\u0000x"), path)
+  expect_equal(ShinyServerConfig$new()$read_config(path)$apps[[1]]$path, "/tmp/a\\u0000x")
+})
+
 test_that("a configuration file is read as JSON, never as the name of another file", {
   dir <- tempfile("tss-config")
   dir.create(dir)

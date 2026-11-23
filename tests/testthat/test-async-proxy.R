@@ -604,6 +604,10 @@ test_that("an upload the app refuses from its headers returns the app's response
   on.exit(httpuv::stopServer(server), add = TRUE)
   config <- proxy_test_config(port)
   url <- paste0("http://127.0.0.1:", port, "/upload")
+  # The app here runs in this R session, which a busy machine can hold up for
+  # longer than libcurl's usual wait for the app's answer. libcurl would then
+  # send the body before the app could refuse it.
+  local_mocked_bindings(EXPECT_CONTINUE_TIMEOUT_MS = 30000)
   upload <- function(size) {
     body <- raw(size)
     # curl sends this header with large uploads; the proxy must not pass it on
@@ -639,17 +643,29 @@ test_that("transfers wait on their sockets instead of polling on a timer", {
   on.exit(httpuv::stopServer(backend$server), add = TRUE)
   # A timer poll sends one upload buffer, 64 KB by default, on each tick
   timer_polls <- 0
+  socket_waits <- 0
   later_real <- later::later
-  local_mocked_bindings(later = function(func, delay = 0, ...) {
-    if (delay > 0 && delay <= 0.01) timer_polls <<- timer_polls + 1
-    later_real(func, delay, ...)
-  }, .package = "later")
+  later_fd_real <- later::later_fd
+  local_mocked_bindings(
+    later = function(func, delay = 0, ...) {
+      if (delay > 0 && delay <= 0.01) timer_polls <<- timer_polls + 1
+      later_real(func, delay, ...)
+    },
+    later_fd = function(func, ...) {
+      socket_waits <<- socket_waits + 1
+      later_fd_real(func, ...)
+    },
+    .package = "later"
+  )
   body <- raw(4 * 1024^2)
   handle <- curl::new_handle(customrequest = "POST", postfields = body)
   response <- await_response(fetch_backend_async(backend$url, handle))
   expect_equal(response$status_code, 200)
   expect_equal(received, length(body))
   expect_lt(timer_polls, 5)
+  # A transfer that polled on a timer of any length, or on none, would never
+  # wait on its socket
+  expect_gt(socket_waits, 0)
 })
 
 test_that("startup grace expiry returns 503 without blocking timers", {
@@ -969,6 +985,41 @@ test_that("idle shutdown waits for every concurrent HTTP response", {
   expect_equal(kills, 1)
 })
 
+test_that("an app's traffic does not reach a port that its process does not own", {
+  # As the test below, but without starting a process, so that it runs on CRAN
+  skip_if_not(ps::ps_is_supported())
+  hits <- 0
+  backend <- start_test_http_server(function(req) {
+    hits <<- hits + 1
+    create_html_response("foreign")
+  })
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  config <- proxy_test_config(backend$port)
+  # A live process other than this R session, which holds the port
+  foreign <- list(is_alive = function() TRUE, get_pid = function() ps::ps_ppid())
+  config$add_app_process("app", foreign)
+  expect_true(process_owns_port(test_backend_process(), backend$port))
+  expect_false(process_owns_port(foreign, backend$port))
+  expect_false(config$app_backend_verified("app"))
+
+  logged <- capture_test_log(response <- await_response(forward_request("GET", backend$url,
+    list(HTTP_COOKIE = "session=secret"), "app", config)))
+  expect_equal(response$status, 503)
+  expect_true(any(grepl("its process does not own port", logged, fixed = TRUE)))
+
+  closed <- FALSE
+  client <- list(request = list(PATH_INFO = "/proxy/app/websocket/", HTTP_COOKIE = "session=secret"),
+    close = function() closed <<- TRUE)
+  cm <- ConnectionManager$new(config)
+  capture_test_log({
+    cm$add_client_connection("s", client, "app", "127.0.0.1", "test")
+    expect_null(cm$create_backend_connection("app", "s", client))
+  })
+  expect_true(closed)
+  expect_null(config$get_backend_connection("s"))
+  expect_equal(hits, 0)
+})
+
 test_that("the proxy never forwards to another program holding an app's port", {
   skip_on_cran() # Starts an R process
   skip_if_not(ps::ps_is_supported())
@@ -1219,6 +1270,24 @@ test_that("response headers come from the final response only", {
   result <- proxy_response_headers(trailers, "http://127.0.0.1:3001/", "app", "GET")
   expect_named(result, c("content-type", "set-cookie"))
   expect_equal(result$`set-cookie`, "s=1; Path=/proxy/app/")
+})
+
+test_that("a CR inside an app's header value does not start another header", {
+  # As from an app that puts a visitor's text in a download's file name
+  headers <- charToRaw(paste0("HTTP/1.1 200 OK\r\n",
+    "Content-Disposition: attachment; filename=\"a\rSet-Cookie: sid=attacker\"\r\n",
+    "X-Two: a\r\rRefresh: 0\r\n",
+    "Content-Type: text/csv\r\n\r\n"))
+  result <- proxy_response_headers(headers, "http://127.0.0.1:3001/", "app", "GET")
+  expect_named(result, c("content-disposition", "x-two", "content-type"))
+  expect_equal(result$`content-disposition`, "attachment; filename=\"a Set-Cookie: sid=attacker\"")
+  expect_equal(result$`x-two`, "a  Refresh: 0")
+  expect_equal(result$`content-type`, "text/csv")
+
+  # Lines that end at a bare LF are read as libcurl reads them
+  result <- proxy_response_headers(charToRaw("HTTP/1.1 200 OK\nContent-Type: text/plain\n\n"),
+    "http://127.0.0.1:3001/", "app", "GET")
+  expect_equal(result$`content-type`, "text/plain")
 })
 
 test_that("every Path of a cookie is scoped to the app, however it is spaced", {
