@@ -339,7 +339,10 @@ test_that("the idle check of an on-demand app allows a slow browser time to down
     delays <<- c(delays, delay)
     function() NULL
   }, .package = "later")
-  last_delay <- function() tail(delays, 1)
+  # proc.time() can read the same time when a download's end is set and when
+  # the time left is taken from it, and adding the download time to that time
+  # and taking it away again can leave a rounding error above the download time
+  last_delay <- function() round(tail(delays, 1), 6)
 
   # A small response leaves the grace period as it is
   cm$begin_http_request("app")
@@ -382,7 +385,8 @@ test_that("the size of a response that an app sends later, or from a file, is al
   response <- await_response(handle_proxy_request("/proxy/app/", "GET", "", list(), config, pm, cm))
   expect_equal(response$status, 200)
   expect_equal(config$active_http_requests[["app"]], 0L)
-  left <- cm$transfer_seconds_left("app")
+  # Without the rounding error that the test above describes
+  left <- round(cm$transfer_seconds_left("app"), 6)
   expect_gt(left, 23)
   expect_lte(left, 24)
 
