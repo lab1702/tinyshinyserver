@@ -86,6 +86,40 @@ test_that("started servers limit request bodies from their headers", {
   expect_equal(status(apps[["3838"]], 2 * 1024^2 + 1), 413)
   expect_null(status(apps[["3839"]], 65536))
   expect_equal(status(apps[["3839"]], 65537), 413)
+
+  # As every answer of the servers: HEAD gets no body, and management
+  # answers may not be framed
+  head <- list(REQUEST_METHOD = "HEAD", HEADERS = c("transfer-encoding" = "chunked"))
+  proxy <- apps[["3838"]]$onHeaders(head)
+  expect_equal(proxy$status, 413)
+  expect_null(proxy$body)
+  management <- apps[["3839"]]$onHeaders(head)
+  expect_equal(management$status, 413)
+  expect_null(management$body)
+  expect_equal(management$headers[["X-Frame-Options"]], "DENY")
+})
+
+test_that("the management server closes every WebSocket", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  writeLines(jsonlite::toJSON(list(apps = list(list(name = "app", path = unused_app_path())),
+    log_dir = tempdir(), starting_port = 3001), auto_unbox = TRUE), path)
+  local_mocked_bindings(is_port_in_use = function(...) FALSE, setup_logging = function(...) NULL,
+    create_process_manager = function(config) list())
+  server <- TinyShinyServer$new(path)
+  apps <- list()
+  local_mocked_bindings(startServer = function(host, port, app, ...) {
+    apps[[as.character(port)]] <<- app
+    list(port = port)
+  }, .package = "httpuv")
+  server$start_servers()
+
+  # httpuv accepts the handshake whatever its Host or Origin, and writes an
+  # error to the console for a server without this handler
+  expect_true(is.function(apps[["3839"]]$onWSOpen))
+  closed <- 0
+  apps[["3839"]]$onWSOpen(list(close = function() closed <<- closed + 1))
+  expect_equal(closed, 1)
 })
 
 # ============================================================================
@@ -214,6 +248,41 @@ test_that("the event loop stops for an interrupt that a WebSocket callback caugh
   expect_no_error(server$run_event_loop())
   expect_equal(stops, 1)
   expect_true(server$shutdown_complete)
+})
+
+test_that("the event loop stops for an interrupt that a server handler caught", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  writeLines(jsonlite::toJSON(list(apps = list(list(name = "app", path = unused_app_path())),
+    log_dir = tempdir(), starting_port = 3001), auto_unbox = TRUE), path)
+  local_mocked_bindings(is_port_in_use = function(...) FALSE, setup_logging = function(...) NULL,
+    create_process_manager = function(config) list())
+  server <- TinyShinyServer$new(path)
+  apps <- list()
+  local_mocked_bindings(startServer = function(host, port, app, ...) {
+    apps[[as.character(port)]] <<- app
+    list(port = port)
+  }, .package = "httpuv")
+  server$start_servers()
+  interrupt <- structure(class = c("interrupt", "condition"), list(message = "", call = NULL))
+  local_mocked_bindings(
+    handle_http_request = function(...) signalCondition(interrupt),
+    handle_websocket_connection = function(...) signalCondition(interrupt),
+    handle_management_request = function(...) signalCondition(interrupt)
+  )
+
+  # httpuv catches the interrupt and answers HTTP 500; the handler notes it
+  handlers <- list(
+    proxy = function() apps[["3838"]]$call(list()),
+    websocket = function() apps[["3838"]]$onWSOpen(list()),
+    management = function() apps[["3839"]]$call(list())
+  )
+  for (name in names(handlers)) {
+    server$config$interrupt_requested <- FALSE
+    caught <- tryCatch(handlers[[name]](), interrupt = function(e) "caught by httpuv")
+    expect_equal(caught, "caught by httpuv", info = name)
+    expect_true(server$config$interrupt_requested, info = name)
+  }
 })
 
 test_that("requests that reach a shutting-down server start nothing", {

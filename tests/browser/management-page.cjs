@@ -166,11 +166,15 @@ const { chromium } = require('playwright');
     const waiting = page.locator('#appsContainer .app-card').filter({ hasText: 'waiting' });
     await waiting.getByRole('button', { name: 'Restart waiting', exact: true }).waitFor();
     assert.equal(await waiting.locator('.app-info').textContent(), 'Failed; starts again when opened in 42s');
+    // A focused button that the wait's end removes leaves the focus on its card's heading
+    await waiting.getByRole('button', { name: 'Restart waiting', exact: true }).focus();
     delete apps.waiting.restart_in_seconds;
     await page.evaluate(() => updateApps());
     await page.waitForFunction(() => Array.from(document.querySelectorAll('#appsContainer .app-card'))
       .some(card => card.textContent.includes('Starts automatically when opened')));
     assert.equal(await waiting.getByRole('button').count(), 0);
+    assert.deepEqual(await page.evaluate(() => [document.activeElement.className, document.activeElement.textContent]),
+      ['app-name', 'waiting']);
     delete apps.waiting;
     await page.evaluate(() => updateApps());
     await page.waitForFunction(() => document.querySelectorAll('#appsContainer .app-card').length === 2);
@@ -200,7 +204,16 @@ const { chromium } = require('playwright');
     assert.equal(await page.locator('#noticeBox').getAttribute('class'), 'notice notice-empty');
     assert.equal(await page.evaluate(() => document.getElementById('notice').textContent), '');
     assert.equal(await page.evaluate(() => document.activeElement.tagName), 'H1');
-    console.log('PASS: hostile headers and app paths render literally; ordinary metadata, empty-state, landing app-set reload, theme toggling, the refresh after a restart, and a failed restart\'s reason work.');
+    // The shutdown screen replaces the page, and its heading takes the focus
+    await page.route('**/api/shutdown', route => route.fulfill({ contentType: 'application/json',
+      body: JSON.stringify({ success: true, message: 'Server shutdown initiated' }) }));
+    page.once('dialog', dialog => dialog.accept());
+    await page.locator('.shutdown-btn').focus();
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.querySelector('.shutdown-screen') !== null);
+    assert.deepEqual(await page.evaluate(() => [document.activeElement.tagName, document.activeElement.textContent]),
+      ['H1', 'Server Shutdown']);
+    console.log('PASS: hostile headers and app paths render literally; ordinary metadata, empty-state, landing app-set reload, theme toggling, the refresh after a restart, a failed restart\'s reason, and the focus after a removed button or a shutdown work.');
   } finally {
     await browser.close();
   }

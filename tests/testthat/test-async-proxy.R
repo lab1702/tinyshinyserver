@@ -985,6 +985,30 @@ test_that("idle shutdown waits for every concurrent HTTP response", {
   expect_equal(kills, 1)
 })
 
+test_that("an app whose verified process has died no longer gets traffic on its port", {
+  hits <- 0
+  backend <- start_test_http_server(function(req) {
+    hits <<- hits + 1
+    create_html_response("foreign")
+  })
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  config <- proxy_test_config(backend$port)
+  alive <- TRUE
+  config$add_app_process("app", list(is_alive = function() alive, get_pid = function() Sys.getpid()))
+  local_mocked_bindings(process_owns_port = function(process, port) TRUE)
+  expect_true(config$app_backend_verified("app"))
+
+  # Until the health check removes the process, another program may hold
+  # its port, and is not asked whether it owns it
+  alive <- FALSE
+  local_mocked_bindings(process_owns_port = function(process, port) stop("A dead process owns no port"))
+  expect_false(config$app_backend_verified("app"))
+  response <- await_response(forward_request("GET", backend$url,
+    list(HTTP_COOKIE = "session=secret"), "app", config))
+  expect_equal(response$status, 503)
+  expect_equal(hits, 0)
+})
+
 test_that("an app's traffic does not reach a port that its process does not own", {
   # As the test below, but without starting a process, so that it runs on CRAN
   skip_if_not(ps::ps_is_supported())
@@ -1148,6 +1172,14 @@ test_that("headers spelled with an underscore are not passed on to an app", {
   expect_equal(plain, list("X-FORWARDED-USER" = "alice"))
 })
 
+test_that("headers of the client's connection to the proxy are not passed on to an app", {
+  # Proxy credentials in particular would reach every app, and its logs
+  req <- httpuv_request(c("proxy-authorization" = "Basic c2VjcmV0", "proxy-authenticate" = "Basic",
+    "te" = "trailers", "trailer" = "Expires", "upgrade" = "h2c", "keep-alive" = "timeout=5",
+    "transfer-encoding" = "chunked", "accept" = "text/html"))
+  expect_equal(forwarded_request_headers(req), list(ACCEPT = "text/html"))
+})
+
 test_that("headers that the client's Connection header names are not passed on to an app", {
   req <- httpuv_request(c("connection" = "close, X-Forwarded-User , x-hop", "x-forwarded-user" = "admin",
     "x-hop" = "1", "proxy-connection" = "keep-alive", "accept" = "text/html"))
@@ -1231,6 +1263,24 @@ test_that("response headers preserve duplicates and remove transfer framing", {
     c("a=1; Path=/proxy/app/; HttpOnly", "b=2; Path=/proxy/app/folder"))
   expect_false(any(c("connection", "x-internal", "transfer-encoding", "content-length") %in% names(result)))
   expect_equal(proxy_response_headers(headers, "http://127.0.0.1:3001/", "app", "HEAD")$`content-length`, "99")
+})
+
+test_that("an app that sets a __Host- cookie is reported once", {
+  rm(list = ls(host_cookie_apps), envir = host_cookie_apps)
+  on.exit(rm(list = ls(host_cookie_apps), envir = host_cookie_apps), add = TRUE)
+  headers <- function(cookie) charToRaw(paste0("HTTP/1.1 200 OK\r\nSet-Cookie: ", cookie, "\r\n\r\n"))
+  logged <- capture_test_log({
+    for (i in 1:3) {
+      result <- proxy_response_headers(headers("__Host-sid=1; Path=/; Secure"), "http://127.0.0.1:3001/", "app", "GET")
+    }
+    proxy_response_headers(headers("sid=1; Path=/"), "http://127.0.0.1:3001/", "other", "GET")
+    proxy_response_headers(headers("__host-sid=1; Secure"), "http://127.0.0.1:3001/", "other", "GET")
+  })
+  # The cookie is still scoped to its app, never shared with every app
+  expect_equal(result$`set-cookie`, "__Host-sid=1; Path=/proxy/app/; Secure")
+  expect_length(logged, 2)
+  expect_match(logged[1], "App app sets a __Host- cookie", fixed = TRUE)
+  expect_match(logged[2], "App other sets a __Host- cookie", fixed = TRUE)
 })
 
 test_that("response headers keep bytes that are not valid UTF-8", {
@@ -1512,20 +1562,19 @@ test_that("a request that waits for a starting app is answered as soon as the ap
     }, 0.3)
     started <- Sys.time()
     result <- await_response(forward_request("GET", "http://127.0.0.1:3001/", list(), "app", config), timeout = 10)
-    list(result = result, seconds = as.numeric(difftime(Sys.time(), started, units = "secs")))
+    list(result = result, seconds = as.numeric(difftime(Sys.time(), started, units = "secs")),
+      backoff = config$start_backoff_seconds("app"))
   }
 
   # The answer names the wait before the app can start again, not
-  # appstart_timeout later
-  found <- wait(process_found_dead = TRUE)
-  expect_lt(found$seconds, 5)
-  expect_equal(found$result$status, 503)
-  expect_match(found$result$body, "restarting after a failure", fixed = TRUE)
-  retry <- as.numeric(found$result$headers[["Retry-After"]])
-  expect_true(retry >= 59 && retry <= 60)
-
-  not_found <- wait(process_found_dead = FALSE)
-  expect_lt(not_found$seconds, 5)
-  expect_equal(not_found$result$status, 503)
-  expect_match(not_found$result$body, "App 'app' stopped, please retry", fixed = TRUE)
+  # appstart_timeout later, also when the request sees the failure first
+  for (process_found_dead in c(TRUE, FALSE)) {
+    found <- wait(process_found_dead)
+    expect_lt(found$seconds, 5)
+    expect_equal(found$result$status, 503)
+    expect_match(found$result$body, "restarting after a failure", fixed = TRUE)
+    retry <- as.numeric(found$result$headers[["Retry-After"]])
+    expect_true(retry >= 59 && retry <= 60, info = process_found_dead)
+    expect_gt(found$backoff, 58)
+  }
 })

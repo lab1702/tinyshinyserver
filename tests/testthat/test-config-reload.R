@@ -5,6 +5,24 @@ write_reload_config <- function(path, apps, ...) {
   writeLines(jsonlite::toJSON(settings, auto_unbox = TRUE), path)
 }
 
+# As reload_test_server(), but the process manager is a real one that starts
+# no process, so that its stop_all_apps() closes the sessions
+reload_test_server_closing_sessions <- function(path, env = parent.frame()) {
+  test <- reload_test_server(path, env)
+  pm <- ProcessManager$new(test$server$config)
+  stop_all <- pm$stop_all_apps
+  assign("stop_all_apps", function() {
+    test$calls$stopped <- test$calls$stopped + 1
+    stop_all()
+  }, envir = pm)
+  assign("start_app", function(app) {
+    test$calls$started <- c(test$calls$started, app$name)
+    TRUE
+  }, envir = pm)
+  test$server$field("process_manager", pm)
+  test
+}
+
 reload_test_server <- function(path, env = parent.frame()) {
   calls <- new.env()
   calls$stopped <- 0
@@ -188,7 +206,7 @@ test_that("reload stops everything, applies the file, and starts resident apps",
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
   write_reload_config(path, list(list(name = "old", path = unused_app_path(), resident = TRUE)))
-  test <- reload_test_server(path)
+  test <- reload_test_server_closing_sessions(path)
   server <- test$server
   config <- server$config
 
@@ -381,6 +399,28 @@ test_that("read_reload_config counts the ports of running apps as free", {
   expect_equal(find_app_ports(check$config), 3002)
 })
 
+test_that("a reload whose only free port is the running app's own is accepted", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  # 65535 is the last port, so the app has no other to go to
+  write_reload_config(path, list(list(name = "app", path = unused_app_path(), resident = TRUE)),
+    starting_port = 65535)
+  local_mocked_bindings(is_port_in_use = function(...) FALSE)
+  config <- create_server_config(path)
+  expect_equal(config$config$apps[[1]]$port, 65535)
+  config$add_app_process("app", list(is_alive = function() TRUE))
+
+  local_mocked_bindings(is_port_in_use = function(host, port, ...) port == 65535)
+  write_reload_config(path, list(list(name = "renamed", path = unused_app_path(), resident = TRUE)),
+    starting_port = 65535)
+  expect_true(config$read_reload_config()$valid)
+
+  # Held by another program, the port leaves the app none
+  config$remove_app_process("app")
+  check <- config$read_reload_config()
+  expect_false(check$valid)
+})
+
 test_that("reload keeps the previous configuration when an app does not stop", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
@@ -403,6 +443,42 @@ test_that("reload keeps the previous configuration when an app does not stop", {
   expect_equal(vapply(config$config$apps, function(app) app$port, 0), c(3001, 3002))
   # The surviving app is not started a second time
   expect_equal(test$calls$started, "other")
+})
+
+test_that("a reload that cannot stop an app keeps that app's users connected", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  write_reload_config(path, list(
+    list(name = "stuck", path = unused_app_path(), resident = TRUE),
+    list(name = "other", path = unused_app_path(), resident = TRUE)
+  ))
+  test <- reload_test_server_closing_sessions(path)
+  config <- test$server$config
+  cm <- test$server$connection_manager
+  local_mocked_bindings(kill_process_safely = function(process) !identical(process$name, "stuck"))
+  config$add_app_process("stuck", list(name = "stuck", is_alive = function() TRUE))
+  config$add_app_process("other", list(name = "other", is_alive = function() TRUE))
+  closed <- character()
+  session <- function(id, app) {
+    ws <- list(close = function() closed <<- c(closed, id))
+    cm$add_client_connection(id, ws, app, "127.0.0.1", "agent")
+    config$add_backend_connection(id, list(app_name = app, ws = list(close = function() closed <<- c(closed, paste(id, "app")))))
+  }
+  session("s1", "stuck")
+  session("s2", "other")
+
+  write_reload_config(path, list(list(name = "new", path = unused_app_path(), resident = TRUE)))
+  result <- test$server$reload()
+
+  expect_false(result$valid)
+  expect_equal(result$error, "Could not stop apps: stuck")
+  # As a restart that cannot stop the app: its sessions stay open
+  expect_setequal(closed, c("s2", "s2 app"))
+  expect_false(is.null(config$get_ws_connection("s1")))
+  expect_false(is.null(config$get_backend_connection("s1")))
+  expect_equal(config$get_app_connection_count("stuck"), 1)
+  expect_null(config$get_ws_connection("s2"))
+  expect_equal(config$get_app_connection_count("other"), 0)
 })
 
 test_that("reload applies a changed log_level", {

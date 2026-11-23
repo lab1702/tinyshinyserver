@@ -21,11 +21,11 @@
   --accent-soft: light-dark(#e9f0ff, rgba(77, 141, 255, 0.14));
   --accent-contrast: #ffffff;
 
-  --success: light-dark(#1a7f37, #3fb950);
+  --success: light-dark(#197b35, #3fb950);
   --success-soft: light-dark(#e3f4e8, rgba(63, 185, 80, 0.14));
-  --warning: light-dark(#9a6700, #d29922);
+  --warning: light-dark(#956400, #d29922);
   --warning-soft: light-dark(#fff4d4, rgba(210, 153, 34, 0.15));
-  --danger: light-dark(#c9252d, #f85149);
+  --danger: light-dark(#c9252d, #f9665f);
   --danger-hover: light-dark(#a51d24, #ff6a62);
   /* A danger background that white text meets 4.5:1 contrast on */
   --danger-solid: light-dark(#c9252d, #da3633);
@@ -73,9 +73,9 @@
     --accent: #2459d6;
     --accent-hover: #1b47b3;
     --accent-soft: #e9f0ff;
-    --success: #1a7f37;
+    --success: #197b35;
     --success-soft: #e3f4e8;
-    --warning: #9a6700;
+    --warning: #956400;
     --warning-soft: #fff4d4;
     --danger: #c9252d;
     --danger-hover: #a51d24;
@@ -105,7 +105,7 @@
     --success-soft: rgba(63, 185, 80, 0.14);
     --warning: #d29922;
     --warning-soft: rgba(210, 153, 34, 0.15);
-    --danger: #f85149;
+    --danger: #f9665f;
     --danger-hover: #ff6a62;
     --danger-solid: #da3633;
     --danger-soft: rgba(248, 81, 73, 0.14);
@@ -177,6 +177,9 @@ button {
   position: sticky;
   top: 0;
   z-index: 100;
+  /* For browsers without color-mix() (Safari before 16.2, Chrome before 111,
+     Firefox before 113), which would otherwise draw no background at all */
+  background: var(--surface);
   background: color-mix(in srgb, var(--surface) 88%, transparent);
   backdrop-filter: saturate(180%) blur(8px);
   -webkit-backdrop-filter: saturate(180%) blur(8px);

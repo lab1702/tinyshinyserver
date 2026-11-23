@@ -79,18 +79,46 @@
 
     // A configuration reload can change base_path, and the page is then
     // reloaded from the server, which renders it for its current address.
-    // Once only: a page whose status address does not answer for another
-    // reason, such as a reverse proxy that does not pass it on, would
-    // otherwise reload without end. Without storage it is not reloaded.
+    // Once a minute only: a page whose status address does not answer for
+    // another reason, such as a reverse proxy that does not pass it on,
+    // would otherwise reload without end. The time of the reload is kept in
+    // sessionStorage or, where site data is blocked, in the tab's
+    // window.name, unless something other than these pages uses it; without
+    // either, the page is not reloaded.
+    const namePrefix = "tss-landing ";
+    function lastReload(key) {
+      let stored = 0;
+      try {
+        stored = Number(window.sessionStorage.getItem(key)) || 0;
+      } catch (e) {
+        // Site data is blocked
+      }
+      const named = window.name.indexOf(namePrefix) === 0 ? Number(window.name.slice(namePrefix.length)) || 0 : 0;
+      return Math.max(stored, named);
+    }
+    function noteReload(key, time) {
+      try {
+        window.sessionStorage.setItem(key, String(time));
+        return true;
+      } catch (e) {
+        // Site data is blocked; try the tab's name
+      }
+      // The starting page's record is of no use once this page is shown
+      if (window.name !== "" && window.name.indexOf(namePrefix) !== 0 &&
+          window.name.indexOf("tss-starting ") !== 0) {
+        return false;
+      }
+      window.name = namePrefix + String(time);
+      return true;
+    }
     function reloadForNewAddress() {
       const key = "tss-landing-reloaded:" + window.location.pathname;
-      try {
-        const last = Number(window.sessionStorage.getItem(key));
-        if (last && Date.now() - last < 60000) {
-          return false;
-        }
-        window.sessionStorage.setItem(key, String(Date.now()));
-      } catch (e) {
+      const now = Date.now();
+      const last = lastReload(key);
+      if (last && now >= last && now - last < 60000) {
+        return false;
+      }
+      if (!noteReload(key, now)) {
         return false;
       }
       clearInterval(refreshInterval);
@@ -203,15 +231,10 @@
     // Initial load - don't assume connected, let updateAppStatus determine status
     updateAppStatus();
 
-    // Auto-refresh every 5 seconds
+    // Auto-refresh every 5 seconds. The timer ends with the page; it is not
+    // cleared as the page unloads, since a browser that keeps the page in
+    // its back-forward cache shows the same page again on Back.
     refreshInterval = setInterval(updateAppStatus, 5000);
-
-    // Clean up interval when page is about to unload
-    window.addEventListener("beforeunload", function() {
-      if (refreshInterval) {
-        clearInterval(refreshInterval);
-      }
-    });
   </script>
 </body>
 </html>

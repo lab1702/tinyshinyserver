@@ -55,6 +55,21 @@ unrecognized_config_fields <- function(config) {
   ignored
 }
 
+# Every string of a parsed configuration file, names among them
+config_strings <- function(value) {
+  strings <- names(value)
+  if (is.list(value)) {
+    strings <- c(strings, unlist(lapply(value, config_strings), use.names = FALSE))
+  } else if (is.character(value)) {
+    strings <- c(strings, value)
+  }
+  as.character(strings)
+}
+
+half_surrogate_message <- function(file) {
+  paste0("Configuration file ", file, " holds a \\u escape of half a UTF-16 surrogate pair, which is not a character")
+}
+
 # Configuration class to encapsulate global state
 ShinyServerConfig <- setRefClass("ShinyServerConfig",
   fields = list(
@@ -74,6 +89,9 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     # When each session last carried a message. Kept apart from the connection
     # lists so that a message does not rewrite them.
     session_activity = "environment",
+    # The same in seconds of proc.time()'s elapsed clock, which decides when a
+    # session is idle: a system clock set back or forward does not move it
+    session_activity_clock = "environment",
     # The bytes that the app has sent each session since the browser's last
     # message on it, which the proxy may still hold for a browser that does
     # not read them; see max_unanswered_mb
@@ -154,6 +172,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       backend_connections <<- list()
       app_sessions <<- new.env(hash = TRUE, parent = emptyenv())
       session_activity <<- new.env(hash = TRUE, parent = emptyenv())
+      session_activity_clock <<- new.env(hash = TRUE, parent = emptyenv())
       session_unanswered <<- new.env(hash = TRUE, parent = emptyenv())
       active_http_requests <<- new.env(hash = TRUE, parent = emptyenv())
       http_transfer_ends <<- new.env(hash = TRUE, parent = emptyenv())
@@ -196,6 +215,12 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       if (!file.exists(file)) {
         stop("Configuration file not found: ", file)
       }
+      if (dir.exists(file)) {
+        stop("Configuration file ", file, " is a directory; name the configuration file in it", call. = FALSE)
+      }
+      if (isTRUE(file.size(file) == 0)) {
+        stop("Configuration file ", file, " is empty", call. = FALSE)
+      }
 
       # JSON is UTF-8 text. A file saved in another encoding, as Windows
       # PowerShell 5.1 saves one in UTF-16 by default, is named as such.
@@ -222,7 +247,22 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       # jsonlite::fromJSON() would read text that is not JSON as the name of
       # a file or as a URL, and load that instead.
       config_text <- sub(paste0("^", intToUtf8(0xFEFF)), "", config_text)
-      parsed_config <- jsonlite::parse_json(config_text, simplifyVector = TRUE, simplifyDataFrame = FALSE)
+      # A \u escape of half a UTF-16 surrogate pair is no character. jsonlite
+      # reads a first half alone as "?", which would change a path or title
+      # without notice, and a second half alone as bytes that are not UTF-8.
+      lone_first_half <- "(^|[^\\\\])(\\\\\\\\)*\\\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\\\u[dD][c-fC-F][0-9a-fA-F]{2})"
+      if (grepl(lone_first_half, config_text, perl = TRUE)) {
+        stop(half_surrogate_message(file), call. = FALSE)
+      }
+      parsed_config <- tryCatch(
+        jsonlite::parse_json(config_text, simplifyVector = TRUE, simplifyDataFrame = FALSE),
+        error = function(e) {
+          stop("Configuration file ", file, " is not valid JSON: ", conditionMessage(e), call. = FALSE)
+        }
+      )
+      if (!all(validUTF8(config_strings(parsed_config)))) {
+        stop(half_surrogate_message(file), call. = FALSE)
+      }
 
       # Validate configuration
       validation_result <- validate_config(parsed_config)
@@ -330,8 +370,9 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     reset_app_state = function(keep = character()) {
       "Forget per-app runtime state after apps have stopped, except that of the apps named in keep, which still run"
 
-      # app_sessions needs no reset: closing each connection emptied it. An
-      # app that is still running keeps its state: among it, the document
+      # app_sessions needs no reset: closing each connection removed it, and
+      # an app that is still running keeps its sessions. Such an app keeps
+      # its state too: among it, the document
       # that its process serves, without which other documents of an R
       # Markdown app would be served.
       kept <- function(state) {
@@ -709,7 +750,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         return(FALSE)
       }
 
-      for (state in list(session_activity, session_unanswered)) {
+      for (state in list(session_activity, session_activity_clock, session_unanswered)) {
         if (exists(session_id, envir = state, inherits = FALSE)) {
           rm(list = session_id, envir = state)
         }
@@ -748,6 +789,20 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     touch_session = function(session_id) {
       "Record that a session carried a message, in either direction"
       assign(session_id, Sys.time(), envir = session_activity)
+      assign(session_id, proc.time()[["elapsed"]], envir = session_activity_clock)
+    },
+    session_idle_seconds = function(session_id, connection) {
+      "How long a session has carried no message, or NULL for a record that does not say when it opened"
+      clock <- session_activity_clock[[session_id]] %||% connection$opened_clock
+      if (!is.null(clock)) {
+        return(proc.time()[["elapsed"]] - clock)
+      }
+      # A record without the elapsed clock goes by the system clock
+      last_activity <- get_session_activity(session_id, connection$last_activity)
+      if (is.null(last_activity)) {
+        return(NULL)
+      }
+      max(0, as.numeric(difftime(Sys.time(), last_activity, units = "secs")))
     },
     get_session_activity = function(session_id, default = NULL) {
       "When a session last carried a message, or a default for one that has carried none"

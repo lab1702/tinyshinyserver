@@ -97,6 +97,27 @@ test_that("a WebSocket path that names no app is rejected like an HTTP path", {
   }
 })
 
+test_that("a WebSocket path for a known app is validated as an HTTP path is", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", port = 1, resident = TRUE)))
+  local_mocked_bindings(process_owns_port = function(process, port) TRUE)
+  config$add_app_process("app", test_backend_process())
+  cm <- ConnectionManager$new(config)
+  assign("create_backend_connection", function(...) stop("The app must not be connected"), envir = cm)
+  for (path in c("/proxy/app/../x/websocket/", "/proxy/app/a\001b/websocket/",
+                 paste0("/proxy/app/", strrep("a", 1001), "/websocket/"))) {
+    closed <- FALSE
+    ws <- list(request = list(PATH_INFO = path, HTTP_HOST = "127.0.0.1:3838"),
+      close = function() closed <<- TRUE,
+      onMessage = function(...) stop("A refused socket must not register callbacks"))
+    logged <- capture_test_log(handle_websocket_connection(ws, config, cm))
+    expect_true(closed, info = substr(path, 1, 40))
+    expect_length(config$get_all_ws_connections(), 0)
+    expect_equal(ls(cm$rejected_handshakes), "path")
+    rm(list = ls(cm$rejected_handshakes), envir = cm$rejected_handshakes)
+  }
+})
+
 test_that("unknown WebSocket apps are rejected without retaining state", {
   config <- ShinyServerConfig$new()
   config$config <- list(apps = list(list(name = "app", resident = TRUE)))
@@ -182,6 +203,29 @@ test_that("backend WebSocket handshakes carry the request's end-to-end headers",
   cm$add_client_connection("t", bare, "app", "127.0.0.1", "test")
   cm$create_backend_connection("app", "t", bare)
   expect_length(sent, 0)
+})
+
+test_that("a session's user agent is kept as text that the dashboard can show", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", port = 3001, resident = TRUE)))
+  local_mocked_bindings(process_owns_port = function(process, port) TRUE)
+  config$add_app_process("app", test_backend_process())
+  cm <- ConnectionManager$new(config)
+  assign("create_backend_connection", function(...) NULL, envir = cm)
+  # Header bytes in no encoding, with a control character
+  agent <- rawToChar(as.raw(c(0x41, 0xff, 0xfe, 0x1b, 0x42)))
+  ws <- list(request = list(PATH_INFO = "/proxy/app/websocket/", HTTP_HOST = "localhost:3838",
+    REMOTE_ADDR = "127.0.0.1", HTTP_USER_AGENT = agent),
+    onMessage = function(f) NULL, onClose = function(f) NULL, close = function() NULL)
+  handle_websocket_connection(ws, config, cm)
+
+  sessions <- config$get_all_ws_connections()
+  expect_length(sessions, 1)
+  stored <- sessions[[1]]$user_agent
+  expect_true(validUTF8(stored))
+  expect_equal(stored, "A???B")
+  body <- handle_management_connections_api(config)$body
+  expect_true(validUTF8(as.character(body)))
 })
 
 test_that("backend traffic keeps both connections alive and ignores old sockets", {
@@ -410,4 +454,39 @@ test_that("a socket for another document does not start a dormant R Markdown app
   ), config, ConnectionManager$new(config, pm), pm)
   expect_equal(closed, 1)
   expect_equal(starts, 0)
+})
+
+test_that("a socket for another document is refused after a start, and leaves the app to its idle check", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "reports", path = tempdir(), port = 3001, resident = FALSE)))
+  # The directory held a Shiny app, and holds a document by the time it starts
+  config$set_app_document("reports", list(type = "shiny"))
+  pm <- list(start_app_on_demand = function(app_name) {
+    config$set_app_document(app_name, list(type = "rmd", file = file.path(tempdir(), "report.Rmd")))
+    TRUE
+  })
+  cm <- ConnectionManager$new(config, pm)
+  checks <- character()
+  assign("schedule_session_check", function(app_name, ...) checks <<- c(checks, app_name), envir = cm)
+  # rmarkdown would render, and run, the document that the socket names
+  assign("create_backend_connection", function(...) stop("The app must not be connected"), envir = cm)
+  closed <- 0
+  handle_websocket_connection(list(
+    request = list(PATH_INFO = "/proxy/reports/_partial.Rmd/websocket/", HTTP_HOST = "localhost"),
+    close = function() closed <<- closed + 1,
+    onMessage = function(...) stop("A refused socket must not register callbacks")
+  ), config, cm, pm)
+  expect_equal(closed, 1)
+  expect_equal(checks, "reports")
+  expect_length(config$get_all_ws_connections(), 0)
+})
+
+test_that("a document path that is not UTF-8 once decoded is refused", {
+  document <- list(type = "rmd", file = file.path(tempdir(), "report.Rmd"))
+  for (path in c("/%FFpartial.Rmd", "/caf%E9.Rmd", "/caf%E9.Rmd/websocket/")) {
+    expect_true(is_other_document_path(document, path, websocket = TRUE), info = path)
+  }
+  for (path in c("/%FFpartial.Rmd", "/caf%E9.Rmd")) {
+    expect_true(is_other_document_path(document, path), info = path)
+  }
 })

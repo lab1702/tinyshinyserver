@@ -318,6 +318,10 @@
 
             const kind = actionKind(app);
             if (entry.kind !== kind) {
+                // The focus would otherwise drop to the page itself with a
+                // Restart button that is replaced, as when a restarted
+                // on-demand app becomes dormant
+                const hadFocus = entry.actions.contains(document.activeElement);
                 entry.kind = kind;
                 entry.info = null;
                 entry.button = null;
@@ -333,6 +337,11 @@
                     entry.button.type = "button";
                     entry.button.addEventListener("click", () => restartApp(app.name));
                     entry.actions.replaceChildren(entry.info, entry.button);
+                }
+                if (hadFocus) {
+                    const heading = entry.card.querySelector(".app-name");
+                    heading.tabIndex = -1;
+                    heading.focus();
                 }
             }
             if (entry.info) {
@@ -552,13 +561,19 @@
         function showShutdownScreen() {
             const screen = element("main", "shutdown-screen");
             const content = element("div");
+            const heading = element("h1", null, "Server Shutdown");
             content.append(
-                element("h1", null, "Server Shutdown"),
+                heading,
                 element("p", null, "The Shiny server has been shut down."),
                 element("p", null, "To use it again, restart the server from the command line.")
             );
             screen.append(content);
             document.body.replaceChildren(screen);
+            // The focused Shutdown button and the page's notices are gone, so
+            // the heading takes the focus, which also has a screen reader
+            // read the screen
+            heading.tabIndex = -1;
+            heading.focus();
         }
 
         function shutdownServer() {

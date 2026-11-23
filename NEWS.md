@@ -16,7 +16,7 @@
 
 ## New features
 
-* The management dashboard has a **Reload Config & Restart All** button, also available as `POST /api/reload`. It reads the configuration file again, stops every app, and starts the resident apps under the new configuration, so apps can be added, removed, or changed without restarting the server. An invalid file, a `log_dir` where the server log cannot be written, apps that cannot all be given a port because other programs hold the ports after `starting_port`, or a change to `proxy_host`, `proxy_port`, or `management_port` is rejected before any app stops. If an app cannot be stopped, the previous configuration stays in effect, and the app that is still running keeps its state, such as the document that an R Markdown app serves. A changed `health_check_interval` applies at once. The dashboard reports the reload's outcome, which `/api/status` also returns as `last_reload`. The landing page picks up added and removed apps.
+* The management dashboard has a **Reload Config & Restart All** button, also available as `POST /api/reload`. It reads the configuration file again, stops every app, and starts the resident apps under the new configuration, so apps can be added, removed, or changed without restarting the server. An invalid file, a `log_dir` where the server log cannot be written, apps that cannot all be given a port because other programs hold the ports after `starting_port`, or a change to `proxy_host`, `proxy_port`, or `management_port` is rejected before any app stops. If an app cannot be stopped, the previous configuration stays in effect, and the app that is still running keeps its users connected and its state, such as the document that an R Markdown app serves. A changed `health_check_interval` applies at once. The dashboard reports the reload's outcome, which `/api/status` also returns as `last_reload`. The landing page picks up added and removed apps.
 
 * New `base_path` option serves the landing page and apps under a URL prefix, such as `https://example.com/shiny/`, behind a reverse proxy. The proxy accepts requests with or without the prefix, so the reverse proxy may pass it through or strip it, and landing page links, redirects, and app cookie paths include it. The management dashboard now uses relative URLs, so it also works under a prefix that the reverse proxy strips.
 
@@ -32,7 +32,7 @@
 
 * The landing page and management dashboard have a new design. They follow the system light or dark theme by default and have a theme toggle; an explicit choice is remembered in the browser until it is switched back to match the system, or, in a browser that blocks site data, for as long as the page is open. Browsers without the CSS `light-dark()` function, such as Safari before 17.5, Chrome before 123, and Firefox before 120, show the same colors. On narrow screens, where the connection status shows only its dot, screen readers still announce a lost connection.
 
-* A browser that opens an app before it is ready, for example an on-demand app that is still starting, now receives a page that reloads itself until the app answers, for up to two minutes. It previously showed the proxy's JSON error until the visitor reloaded by hand. The response is still HTTP 503 with `Retry-After`, and scripts and other clients still receive JSON. A browser that blocks site data keeps count of the two minutes in the tab's `window.name`, unless something else uses it.
+* A browser that opens an app before it is ready, for example an on-demand app that is still starting, now receives a page that reloads itself until the app answers, for up to two minutes. It previously showed the proxy's JSON error until the visitor reloaded by hand. The response is still HTTP 503 with `Retry-After`, and scripts and other clients still receive JSON. A browser that blocks site data keeps count of the two minutes in the tab's `window.name`, unless something else uses it. The name holds the times of the wait and a hash of the page's address, not the address, as it stays on the app's page once the app answers, and on the pages that the tab shows after it.
 
 * The management dashboard shows the server's uptime and memory use, and each running app's memory use and uptime. `/api/status` returns `uptime_seconds`, `server_memory_bytes`, and `apps_memory_bytes` in place of the `server_uptime` and `memory_usage` fields, which were always `"N/A"`; the management `/api/apps` returns `memory_bytes` and `uptime_seconds` for running apps. Memory is the resident memory of each R process and is left out where the `ps` package cannot read it.
 
@@ -104,7 +104,7 @@
 
 * Resident apps that die during startup, or are found without a process by a health check, now wait `restart_delay` before restarting instead of restarting at the next health check.
 
-* An on-demand app whose process failed, for example because the app stops with an error at startup, now starts again only after `restart_delay`, as a resident app does. Until then, a request for it receives HTTP 503 with a `Retry-After` header that counts down the delay, and a browser receives the page that reloads itself. Every request used to start a new R process, so the page that reloads every 2 seconds, open in each visitor's tab, kept starting the failing app. This also applies to an app that crashes while in use. The management dashboard shows how long the app waits, and its Restart button, like `POST /api/apps/{name}/restart` and a configuration reload, ends the delay; the management `/api/apps` returns the wait as `restart_in_seconds`. A request that waits for an app that is starting is answered as soon as the app's process fails, with the time left of this delay, rather than after `appstart_timeout`.
+* An on-demand app whose process failed, for example because the app stops with an error at startup, now starts again only after `restart_delay`, as a resident app does. Until then, a request for it receives HTTP 503 with a `Retry-After` header that counts down the delay, and a browser receives the page that reloads itself. Every request used to start a new R process, so the page that reloads every 2 seconds, open in each visitor's tab, kept starting the failing app. This also applies to an app that crashes while in use. The management dashboard shows how long the app waits, and its Restart button, like `POST /api/apps/{name}/restart` and a configuration reload, ends the delay; the management `/api/apps` returns the wait as `restart_in_seconds`. A request that waits for an app that is starting is answered as soon as the app's process fails, with the time left of this delay, rather than after `appstart_timeout`, also when the request notices the failure before the server's own check does. An app that ends itself without an error, as one that calls `shiny::stopApp()` does, has not failed: `server.log` says that it exited rather than died, and an on-demand one starts again at the next request.
 
 * An on-demand app whose process has exited is shown as **dormant**, which is what opening it does, until the health check cleans it up. It was shown as **crashed**, its landing page tile was disabled, and the tile advised a restart from the management dashboard, which only stops an on-demand app.
 
@@ -112,7 +112,7 @@
 
 * App processes are now supervised, so they stop instead of holding their ports if the R session running the server is killed or crashes.
 
-* The server now opens the proxy and management ports before it starts any app. A second server started by mistake on the same ports stops with an error straight away, before it writes to the running server's log; it previously started its own app processes and renamed the running server's app logs to `.prev.log` first, and then wrote its own port assignments and shutdown to that log. A failure to open a port is written to `server.log`.
+* The server now opens the proxy and management ports before it starts any app. A second server started by mistake on the same ports stops with an error straight away, before it writes to the running server's log; it previously started its own app processes and renamed the running server's app logs to `.prev.log` first, and then wrote its own port assignments and shutdown to that log. A port that cannot be opened is reported where `start_tss()` runs, before anything is written to `server.log`.
 
 * Shutdown and a configuration reload try once more to stop an app process that outlives the first attempt, and `server.log` names any app that is still running afterwards. It reported "All applications stopped" and "Server shutdown complete" regardless.
 
@@ -120,7 +120,11 @@
 
 * The answer to `POST /api/shutdown` now arrives whole before the server stops. The management server was stopped as soon as the request was handled, before it had sent the answer, so with `log_level` set to `"WARN"` or `"ERROR"` the client received only the answer's headers, `curl` reported an error, and the dashboard said that the shutdown had failed although the server stopped. Requests that arrive while the server shuts down are answered with HTTP 503, and requests that reached the server just before it stopped no longer run after `start_tss()` returns, where one could start an on-demand app that nothing then stopped.
 
-* Ctrl-C now stops the server also when R notices it while the proxy handles an event of an app's WebSocket, as it may while an app streams updates. The websocket package caught the interrupt there, and the server kept running.
+* Ctrl-C now stops the server also when R notices it while the proxy or the management server handles a request, a WebSocket handshake, or a WebSocket message, as it may while a request starts an app or an app streams updates. httpuv and the websocket package caught the interrupt there, and the server kept running.
+
+* The server no longer sometimes takes a free port for one in use, which stopped `start_tss()` with an error that the port could not be opened, or gave an app another port than the one after its predecessor's. The check listened on the port briefly and then connected to it, and could reach its own listener, which httpuv closes a moment after it is stopped.
+
+* An app whose `path` names a file, such as its `app.R`, rather than its directory, is reported as such. It was reported as a directory that does not exist.
 
 * Stopping the server with Ctrl-C, or after an error in its event loop, no longer runs the shutdown twice, which repeated its log messages. A shutdown interrupted by a second Ctrl-C still runs again.
 
@@ -200,6 +204,10 @@
 
 * At startup, the proxy and management ports count as in use when another program listens on 127.0.0.1 or `[::1]` at them, whatever `proxy_host` is, since a browser may open `localhost` at either address. The server started, and `http://localhost:3838` could then reach the other program. A port that cannot be opened for another reason, such as a port below 1024 without the right to use it, or `"::1"` on a machine without IPv6, is now reported as such instead of as already in use.
 
+* A session is found idle by the time that has passed since its last message, which setting the system clock does not change. A clock set forward, as when a virtual machine's clock is corrected after a snapshot is restored, closed every open session at the next check, and a clock set back kept idle sessions open for as long.
+
+* An app that sets a cookie whose name starts with `__Host-` is reported once in `server.log`. Browsers keep such a cookie only with `Path=/`, and the proxy gives app cookies the app's path, so that apps do not share them; the app lost the cookie, often one that holds its session or its forms' token, without notice. See "Security model" in the README.
+
 ## Server pages and management API
 
 * Every answer to a `HEAD` request that the proxy or the management server makes itself is sent without a body, such as the landing page, `/health`, the pages' style sheet, and the 503 for an app that is starting. The body was sent after the headers, so a client that sent another request on the same connection, as uptime monitors and HTTP libraries do, read it as the start of the next answer and failed.
@@ -220,9 +228,21 @@
 
 * The management dashboard works better from the keyboard and with screen readers. A button keeps the keyboard focus while its restart, reload, or shutdown runs, instead of losing it to the page; each Restart button names its app, as in "Restart sales", and app names are headings. The focus outline also shows in forced-colors modes such as Windows High Contrast, which removed the focus ring, and small labels and the Shutdown button's hover colors meet the WCAG AA contrast ratio. A notice that reports an error stays until it is dismissed or replaced, instead of disappearing after 6 seconds, and screen readers announce the first notice too.
 
-* The page shown while an app starts stops reloading after two minutes in every case. A reload continued the same wait only if it came soon enough after the page before it, judged by this page's own retry time, so a page that waited out a long `restart_delay`, a slow answer, or a browser that delays the timers of background tabs began the two minutes again, and a tab left open restarted a failing app forever. A page that waits out the restart delay of an app that failed, opened before the app can start again, says so, and counts its two minutes from the end of that delay, when the app starts.
+* The page shown while an app starts stops reloading after two minutes in every case. A reload continued the same wait only if it came soon enough after the page before it, judged by this page's own retry time, so a page that waited out a long `restart_delay`, a slow answer, or a browser that delays the timers of background tabs began the two minutes again, and a tab left open restarted a failing app forever. A page that waits out the restart delay of an app that failed, opened before the app can start again, says so, and counts its two minutes from the end of that delay, when the app starts. A page continues a wait only if its own navigation began when the page before it reloaded: a page that the visitor opens after the reload reached the app, as when the app stops again soon after, starts a new wait.
 
-* An open landing page reloads itself when a configuration reload changes `base_path`, including from no prefix to one, which the status requests, answered with and without the prefix, did not show: `/api/apps` now names the current prefix in an `X-TinyShinyServer-Base-Path` header. Its status requests went to an address that no longer exists, and it showed every app as "server down". The page reloads for this at most once a minute, so a page whose status address is not found for another reason, such as a reverse proxy that does not pass it on, shows the server as unreachable rather than reloading without pause.
+* An open landing page reloads itself when a configuration reload changes `base_path`, including from no prefix to one, which the status requests, answered with and without the prefix, did not show: `/api/apps` now names the current prefix in an `X-TinyShinyServer-Base-Path` header. Its status requests went to an address that no longer exists, and it showed every app as "server down". The page reloads for this at most once a minute, so a page whose status address is not found for another reason, such as a reverse proxy that does not pass it on, shows the server as unreachable rather than reloading without pause. A browser that blocks site data keeps the time of that reload in the tab's `window.name`, as the page shown while an app starts does, unless something else uses it.
+
+* The landing page keeps its status current after the visitor returns to it with Back. A browser that keeps the page in its back-forward cache, as Chrome does, showed it again without the timer that refreshes it, so app statuses, connection counts, and the connection indicator stopped changing.
+
+* `/api/connections` on the management server returns `{}` when there are no sessions, an object as when there are some; it returned an empty array. A session's user agent is shown with control characters and bytes that are not valid UTF-8 replaced, and cut to 1 KB, so that the JSON is valid UTF-8, and its `duration_seconds` is 0 rather than negative after the system clock is set back.
+
+* The management server closes any WebSocket connection at once. It accepted a handshake whatever its `Host` or `Origin`, and wrote an error to the console for each one.
+
+* The top bar of the landing page and the dashboard has a background in browsers without the CSS `color-mix()` function, such as Safari before 16.2, Chrome before 111, and Firefox before 113, where it was transparent.
+
+* Status badges meet the WCAG AA contrast ratio in both themes: green and amber are a little darker in the light theme, and red is a little lighter in the dark theme.
+
+* The keyboard focus moves to an app's name on the management dashboard when the Restart button that holds it is removed, as when a restarted on-demand app becomes dormant, and to the heading of the screen that a shutdown shows, which screen readers then read. It dropped to the page itself.
 
 * The R version and operating system are now shown on the management dashboard instead of the public landing page, and are read once instead of on every page load.
 
@@ -256,6 +276,10 @@
 
 * An app whose `path` is empty or blank is rejected when the configuration is read. It was accepted, and failed at every start with "App directory not found: " and no path.
 
+* A configuration file that is empty, is not valid JSON, or is a directory is reported with its name and what is wrong with it. Only the JSON parser's message, such as "premature EOF", was shown for the first two, and "Permission denied" for a directory.
+
+* A configuration file that holds a `\u` escape of half a UTF-16 surrogate pair, which is no character, is rejected. A first half alone was read as "?", which changed a path or title without notice, and a second half alone stopped the server with an error that named neither the file nor the field.
+
 ## Logging
 
 * App processes now write their stdout and stderr directly to the per-app log files. Output from child processes and native code (for example, Pandoc) is now logged and can no longer fill an unread pipe and hang the app.
@@ -270,7 +294,7 @@
 
 * A request for an on-demand app whose directory cannot be served no longer starts the app, reads its directory again, and writes four lines, two of them errors, to `server.log`. The reason is logged as a warning at most once a minute for each app. A page in any visitor's browser, on any website, could otherwise fill the log with requests for such an app.
 
-* A refused WebSocket handshake is logged at WARN at most once every 10 seconds for each reason, with the number of others since then, which are logged at DEBUG, and handshakes are no longer each logged at INFO before they are checked. A page that opened handshakes in a loop, from any visitor's browser, filled `server.log` with two lines for each. The log of a browser message that is too large or not valid UTF-8 names its app and session, and WebSocket messages in DEBUG logs have control characters replaced, as other logged request values do.
+* A refused WebSocket handshake is logged at WARN at most once every 10 seconds for each reason, with the number of others since then, which are logged at DEBUG, and handshakes are no longer each logged at INFO before they are checked. A handshake for an app that cannot start, that is still starting, or whose process is not listening on its port is refused the same way, for each app: such handshakes wrote an error, or a warning that named a port conflict and two more lines, at every attempt. A page that opened handshakes in a loop, from any visitor's browser, filled `server.log` with two lines for each. The log of a browser message that is too large or not valid UTF-8 names its app and session, and WebSocket messages in DEBUG logs have control characters replaced, as other logged request values do.
 
 ## Examples
 
@@ -284,7 +308,7 @@
 
 * The package now requires R 4.1.0 or later, as its `promises` and `quarto` dependencies already do.
 
-* The package now requires `httpuv` 1.5.5 or later, the first version that sends a response without a body, as the proxy sends answers to `HEAD` requests and 204 and 304 responses. It also requires `later` 1.4.0 (for `later_fd()`, which the faster transfers use), `curl` 3.3 (for `file_writer()`, which writes large responses to disk), `websocket` 1.1.0 (whose client accepts the `maxMessageSize` that large app messages need), `ps` 1.7.0 (for `ps_connections()`, which identifies the process listening on an app's port, and for `ps_memory_info()`, which before 1.7.0 misreported memory on Linux), `callr` 3.2.0 (the first whose `r_bg()` passes the working directory on, so that apps start in their own directory), and `logger` 0.2.0 (the first that accepts `log_level` as a name).
+* The package now requires `httpuv` 1.5.5 or later, the first version that sends a response without a body, as the proxy sends answers to `HEAD` requests and 204 and 304 responses. It also requires `later` 1.4.0 (for `later_fd()`, which the faster transfers use), `curl` 3.3 (for `file_writer()`, which writes large responses to disk), `websocket` 1.1.0 (whose client accepts the `maxMessageSize` that large app messages need), `ps` 1.7.0 (for `ps_connections()`, which identifies the process listening on an app's port, and for `ps_memory_info()`, which before 1.7.0 misreported memory on Linux), `callr` 3.7.0 (which passes the working directory on, so that apps start in their own directory, restores in an app's process the library and startup-file variables that it changes, and accepts the `R_ENVIRON_USER` that names the environment file an app's process reads), and `logger` 0.2.0 (the first that accepts `log_level` as a name).
 
 * Removed the unused `future` dependency, and `digest` and `openssl`: session IDs only key the server's own connection tables and are never read from a request, so they are now numbered in order instead of hashed from random bits and request details. `tools` and `utils` are now declared imports, as is `glue`, which `logger` needs to format the package's log messages. Added `ps`, already required by `callr`.
 

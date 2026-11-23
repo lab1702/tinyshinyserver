@@ -231,7 +231,7 @@ An on-demand app stops once it has had no WebSocket connection and no HTTP reque
 
 An app that is still starting at that point is left to finish, for up to 10 minutes from its start, and stops within 30 seconds after it is ready if it is still unused. A slow start, such as a Quarto render, is therefore not thrown away when the visitor's page stops waiting. On platforms where the `ps` package cannot list a process's sockets, the server cannot tell that an app is still starting, and stops it.
 
-A failed on-demand app, such as one that stops with an error at startup or crashes while in use, starts again at the first request that comes at least `restart_delay` seconds after the failure. An earlier request receives HTTP 503 with a `Retry-After` header for the time that is left, and a browser receives the page that reloads itself, so a failing app is not started again by every reload. A restart from the management dashboard ends the wait.
+A failed on-demand app, such as one that stops with an error at startup or crashes while in use, starts again at the first request that comes at least `restart_delay` seconds after the failure. An earlier request receives HTTP 503 with a `Retry-After` header for the time that is left, and a browser receives the page that reloads itself, so a failing app is not started again by every reload. A restart from the management dashboard ends the wait. An app that ends itself without an error, as one that calls `shiny::stopApp()` does, has not failed, and an on-demand one starts again at the next request.
 
 ### Startup
 
@@ -241,7 +241,7 @@ If an app still does not answer after 30 seconds, or after `appstart_timeout` if
 
 ### Failures and restarts
 
-Every `health_check_interval` seconds, the server looks for app processes that have exited, and restarts a failed resident app after `restart_delay` seconds. These checks do not test whether a running app responds or produces correct results.
+Every `health_check_interval` seconds, the server looks for app processes that have exited, and restarts a resident app after `restart_delay` seconds. An app process that exits with an error, or is killed, has failed, and `server.log` says that the app died; one that ends without an error, as an app that calls `shiny::stopApp()` does, is logged as having exited. These checks do not test whether a running app responds or produces correct results.
 
 ## Monitoring and management
 
@@ -274,9 +274,9 @@ Running, stopped, and crashed apps can be restarted from the management dashboar
 
 ### Reloading the configuration
 
-**Reload Config & Restart All** on the management dashboard reads the configuration file again, stops every app, and disconnects all users. It then assigns app ports under the new configuration and starts the resident apps; on-demand apps start when next opened. Use it to add, remove, or change apps, or to apply a changed `log_level`, without restarting the server.
+**Reload Config & Restart All** on the management dashboard reads the configuration file again, stops every app, and disconnects their users. It then assigns app ports under the new configuration and starts the resident apps; on-demand apps start when next opened. Use it to add, remove, or change apps, or to apply a changed `log_level`, without restarting the server.
 
-The new file is checked first. Nothing is stopped if the file is invalid, if the server log cannot be written in its `log_dir`, if other programs hold the ports that the apps would need, or if it changes `proxy_host`, `proxy_port`, or `management_port`; those three settings take effect only when the server restarts. If an app cannot be stopped, the previous configuration stays in effect and its stopped resident apps start again. The dashboard reports the outcome once the reload finishes.
+The new file is checked first. Nothing is stopped if the file is invalid, if the server log cannot be written in its `log_dir`, if other programs hold the ports that the apps would need, or if it changes `proxy_host`, `proxy_port`, or `management_port`; those three settings take effect only when the server restarts. If an app cannot be stopped, the previous configuration stays in effect, the users of that app stay connected, as when a restart cannot stop an app, and the stopped resident apps start again. The dashboard reports the outcome once the reload finishes.
 
 ### Proxy endpoints
 
@@ -333,11 +333,12 @@ curl -X POST -H "X-TinyShinyServer-Request: management" http://localhost:3839/ap
 
 The server has no authentication or TLS of its own. For access from other machines, put an authenticated HTTPS reverse proxy in front of it, and use firewall rules so that only the reverse proxy can connect to the proxy port. Also keep in mind:
 
-- **Identity headers.** The proxy passes the client's request headers, apart from `Host` and connection-level headers, on to the app, both on HTTP requests and on the WebSocket connection whose headers Shiny exposes as `session$request`. An app can therefore read an identity header that the reverse proxy sets, such as `X-Forwarded-User`. Rely on such a header only if the reverse proxy overwrites it and clients cannot reach the proxy port directly; otherwise a client can send its own. Headers whose names contain an underscore are not passed on, because R's web server reads `X_Forwarded_User` as `X-Forwarded-User`, in place of the value that the reverse proxy set.
+- **Identity headers.** The proxy passes the client's request headers, apart from `Host` and connection-level headers, on to the app, both on HTTP requests and on the WebSocket connection whose headers Shiny exposes as `session$request`. The WebSocket connection does not carry the browser's `Origin`, which the proxy checks itself and which would not match the app's internal address, nor the browser's own `Sec-WebSocket-` fields. An app can therefore read an identity header that the reverse proxy sets, such as `X-Forwarded-User`. Rely on such a header only if the reverse proxy overwrites it and clients cannot reach the proxy port directly; otherwise a client can send its own. Headers whose names contain an underscore are not passed on, because R's web server reads `X_Forwarded_User` as `X-Forwarded-User`, in place of the value that the reverse proxy set.
 - **DNS rebinding.** The proxy checks the `Host` header, which blocks DNS rebinding, only when `proxy_host` is a loopback address. With `"0.0.0.0"` or `"::"`, any website visited by someone who can reach the proxy port can point its own domain at this server, and then read and control the apps through that person's browser. A firewall that admits a whole network therefore does not keep the apps private from the web; allow direct connections to the proxy port only from the reverse proxy.
 - **App ports.** Each app process listens on `127.0.0.1` at its own port and does not check the `Host` header, so a website opened in a browser on the server machine can still use DNS rebinding to reach a running app directly. Do not browse untrusted websites on the server machine while apps that handle sensitive data are running.
 - **The management server** has no authentication. Anyone who can connect to its port on `127.0.0.1`, including every other user account on the server machine, can see client IP addresses and user agents, restart apps, reload the configuration, and shut down the server. Run the server only on a machine whose local accounts may be given that control.
 - **Shared origin.** All apps are served from the same origin, so they are not isolated from each other: a script in one app's page can send requests to another app with that app's cookies, read its pages, and open its WebSocket sessions. Serve together only apps that trust each other, and run the others in separate servers under different host names.
+- **Cookies.** The proxy gives each cookie that an app sets the path of the app's URL, such as `/proxy/sales/`, so that apps do not receive each other's cookies. An app cannot therefore use a cookie whose name starts with `__Host-`, which browsers keep only with `Path=/`; `server.log` warns once when an app sets one. Use a cookie without the prefix, with the `Secure` attribute behind HTTPS.
 
 ### Reverse proxy requirements
 
@@ -464,12 +465,12 @@ Get-Content logs/server.log -Wait
 
 | Level | Records |
 |-------|---------|
-| `"DEBUG"` | Each request's routing, port probing, connection bookkeeping, the full address of each app WebSocket connection, and the first 100 bytes of every WebSocket message |
+| `"DEBUG"` | Each request's routing, port probing at configuration reloads, connection bookkeeping, the full address of each app WebSocket connection, and the first 100 bytes of every WebSocket message |
 | `"INFO"` | Normal operations, such as apps starting and stopping and connections opening and closing |
 | `"WARN"` | Warning conditions, such as a session closed for a limit, or a refused WebSocket handshake |
 | `"ERROR"` | Errors that need attention |
 
-A refused WebSocket handshake, such as one from another website's page, is logged at WARN at most once every 10 seconds for each reason, with the number of others since then, which are logged at DEBUG. A page that opens handshakes in a loop therefore does not fill `server.log`.
+A refused WebSocket handshake, such as one from another website's page, or one for an app that cannot start or whose process is not listening on its port, is logged at WARN at most once every 10 seconds for each reason, and for each app when the reason lies with the app, with the number of others since then, which are logged at DEBUG. A page that opens handshakes in a loop therefore does not fill `server.log`.
 
 WebSocket messages can include what users type, and WebSocket addresses can carry tokens in their query strings, so use `"DEBUG"` only while diagnosing a problem.
 
@@ -514,11 +515,12 @@ devtools::check()     # run R CMD check
 
 The code is in `R/`, the example apps are in `inst/examples/`, and the web page templates and styles are in `inst/templates/`. Help pages are generated from the roxygen comments in `R/`: edit those, then run `devtools::document()` to update `man/`.
 
-The browser tests in `tests/browser/` check the management dashboard in a headless Chromium. They need Node.js, with Playwright on `NODE_PATH`, and are not part of `R CMD check`. Run them from the repository root; `management-csrf.cjs` also needs `Rscript` on the `PATH`. Set `TSS_TEST_BROWSER` to use a specific browser executable.
+The browser tests in `tests/browser/` check the management dashboard, the landing page, and the page shown while an app starts in a headless Chromium. They need Node.js, with Playwright on `NODE_PATH`, and are not part of `R CMD check`. Run them from the repository root; `management-csrf.cjs` also needs `Rscript` on the `PATH`. Set `TSS_TEST_BROWSER` to use a specific browser executable.
 
 ```bash
 node tests/browser/management-page.cjs
 node tests/browser/management-csrf.cjs
+node tests/browser/public-pages.cjs
 ```
 
 To contribute, open an issue or a pull request on GitHub. Add tests for your change, and run `devtools::check()` before submitting.

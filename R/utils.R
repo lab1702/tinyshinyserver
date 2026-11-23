@@ -253,6 +253,15 @@ is_process_alive <- function(process) {
   )
 }
 
+# Whether a process that has exited failed, as a crash or an error in the
+# app's code does. callr ends an app's process with status 0 only when the
+# app returned, as one that calls shiny::stopApp() does. A status that cannot
+# be read counts as a failure.
+process_failed <- function(process) {
+  status <- tryCatch(process$get_exit_status(), error = function(e) NULL)
+  !(is.numeric(status) && length(status) == 1 && !is.na(status) && status == 0)
+}
+
 process_ps_handle <- function(process) {
   if (is.function(process$as_ps_handle)) process$as_ps_handle() else ps::ps_handle(process$get_pid())
 }
@@ -422,28 +431,11 @@ process_owns_port <- function(process, port) {
 is_port_in_use <- function(host, port, loopback = FALSE) {
   "Check if a port is in use (a server could not listen on it, or local clients would reach another program there)"
 
-  # Listen on the port briefly, as an app will. Connecting to it instead
-  # waits about a second for each free port on Windows, where a refused
-  # loopback connection is retried, which held up startup and every reload.
-  # A port that cannot be opened for another reason, such as a port below
-  # 1024 without the right to use it or an address this machine lacks, is
-  # also reported: no server could listen on it either.
-  in_use <- tryCatch(
-    {
-      server <- httpuv::startServer(host, port, list(), quiet = TRUE)
-      httpuv::stopServer(server)
-      FALSE
-    },
-    error = function(e) TRUE
-  )
-  if (in_use) {
-    return(TRUE)
-  }
   # On Windows and macOS, a program that listens on every interface does not
   # keep an app from listening on 127.0.0.1 at the same port, and would then
   # lose its loopback connections to the app. Such a program accepts a
   # connection at once, so the wait for a free port is kept short. On Linux,
-  # it keeps the app from listening, which the check above finds.
+  # it keeps the app from listening, which the check below finds.
   #
   # The proxy and management servers are opened in a browser as
   # "localhost", which may reach either loopback address, so for them
@@ -459,12 +451,28 @@ is_port_in_use <- function(host, port, loopback = FALSE) {
   } else {
     character()
   }
+  # These connections are made before the port is listened on below: httpuv
+  # may still accept a connection for a moment after stopServer() returns,
+  # and the check would then find its own listener
   for (address in addresses) {
     if (loopback_port_accepts(port, address = address)) {
       return(TRUE)
     }
   }
-  FALSE
+  # Listen on the port briefly, as an app will. Connecting to it instead
+  # waits about a second for each free port on Windows, where a refused
+  # loopback connection is retried, which held up startup and every reload.
+  # A port that cannot be opened for another reason, such as a port below
+  # 1024 without the right to use it or an address this machine lacks, is
+  # also reported: no server could listen on it either.
+  tryCatch(
+    {
+      server <- httpuv::startServer(host, port, list(), quiet = TRUE)
+      httpuv::stopServer(server)
+      FALSE
+    },
+    error = function(e) TRUE
+  )
 }
 
 # Whether something accepts a TCP connection on a loopback address (127.0.0.1

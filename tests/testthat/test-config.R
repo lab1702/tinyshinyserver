@@ -728,22 +728,60 @@ test_that("load_config sets default resident=FALSE for apps", {
 test_that("load_config fails for non-existent file", {
   config <- ShinyServerConfig$new()
 
-  # Don't check error message - it varies by OS and locale
-
   expect_error(
-    config$load_config("/nonexistent/path/config.json")
+    config$load_config("/nonexistent/path/config.json"),
+    "Configuration file not found: /nonexistent/path/config.json",
+    fixed = TRUE
   )
 })
 
-test_that("load_config fails for invalid JSON", {
+test_that("load_config fails for invalid JSON, naming the file", {
   config <- ShinyServerConfig$new()
 
   tmp_config <- tempfile(fileext = ".json")
   on.exit(unlink(tmp_config), add = TRUE)
 
-  writeLines("{ invalid json }", tmp_config)
+  for (text in c("{ invalid json }", "{\"apps\": [],}", " ")) {
+    writeLines(text, tmp_config)
+    expect_error(config$load_config(tmp_config), paste("Configuration file", tmp_config, "is not valid JSON"),
+      fixed = TRUE)
+  }
+})
 
-  expect_error(config$load_config(tmp_config))
+test_that("a configuration file that is empty or a directory is named as such", {
+  config <- ShinyServerConfig$new()
+  tmp_config <- tempfile(fileext = ".json")
+  on.exit(unlink(tmp_config, recursive = TRUE), add = TRUE)
+
+  file.create(tmp_config)
+  expect_error(config$load_config(tmp_config), paste("Configuration file", tmp_config, "is empty"), fixed = TRUE)
+  unlink(tmp_config)
+  dir.create(tmp_config)
+  expect_error(config$load_config(tmp_config), paste("Configuration file", tmp_config, "is a directory"),
+    fixed = TRUE)
+  expect_error(start_tss(tmp_config), "is a directory", fixed = TRUE)
+})
+
+test_that("a \\u escape of half a surrogate pair is rejected, not read as another character", {
+  config <- ShinyServerConfig$new()
+  tmp_config <- tempfile(fileext = ".json")
+  on.exit(unlink(tmp_config), add = TRUE)
+  read <- function(title) {
+    writeLines(sprintf('{"apps": [{"name": "app", "path": "%s"}], "log_dir": "%s", "starting_port": 3001, "title": "%s"}',
+      gsub("\\", "/", unused_app_path(), fixed = TRUE), gsub("\\", "/", tempdir(), fixed = TRUE), title),
+      tmp_config)
+    config$read_config(tmp_config)
+  }
+
+  # A first half alone would be read as "?", a second half alone as bytes
+  # that are not UTF-8
+  for (title in c("x\\ud800y", "x\\uDBFF", "x\\udfffy", "x\\\\\\ud800y")) {
+    expect_error(read(title), "holds a \\u escape of half a UTF-16 surrogate pair", fixed = TRUE, info = title)
+  }
+  # A whole pair is a character, and an escaped backslash starts no escape
+  expect_equal(read("x\\ud83d\\ude00y")$title, "x\U0001F600y")
+  expect_equal(read("x\\\\ud800y")$title, "x\\ud800y")
+  expect_equal(read("x\\\\udfffy")$title, "x\\udfffy")
 })
 
 test_that("load_config fails for invalid configuration", {

@@ -293,8 +293,17 @@ test_that("handle_management_connections_api returns empty for no connections", 
   result <- handle_management_connections_api(config)
 
   expect_equal(result$status, 200)
-  body <- jsonlite::fromJSON(result$body)
-  expect_equal(length(body), 0)
+  # An object, as when there are sessions, so that clients read one type
+  expect_equal(as.character(result$body), "{}")
+})
+
+test_that("a session's duration is never negative", {
+  config <- ShinyServerConfig$new()
+  # As after the clock is set back
+  config$add_ws_connection("s", list(app_name = "app", client_ip = "127.0.0.1", user_agent = "test",
+    created_at = Sys.time() + 3600, last_activity = Sys.time() + 3600))
+  body <- jsonlite::fromJSON(handle_management_connections_api(config)$body)
+  expect_equal(body$s$duration_seconds, 0)
 })
 
 # ============================================================================

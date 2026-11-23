@@ -62,7 +62,7 @@ that can affect existing users are:
 * The package now requires R >= 4.1.0, as its `promises` and `quarto`
   dependencies already do, and newer minimum versions of `httpuv` (1.5.5),
   `later` (1.4.0), `curl` (3.3), `websocket` (1.1.0), `ps` (1.7.0), `callr`
-  (3.2.0), and `logger` (0.2.0) for functions it now uses. It no longer
+  (3.7.0), and `logger` (0.2.0) for functions it now uses. It no longer
   imports `future`, `digest`, or `openssl`.
 
 ## Test environments

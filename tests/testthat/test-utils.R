@@ -502,7 +502,7 @@ test_that("is_port_in_use also asks, where an app could share it, whether a port
     TRUE
   })
   # On Linux, a program that listens on every interface keeps an app from
-  # listening on the port, which the first check finds
+  # listening on the port, which the check that listens on it finds
   linux <- identical(Sys.info()[["sysname"]], "Linux")
   expect_equal(is_port_in_use("127.0.0.1", port), !linux)
   expect_equal(asked, if (linux) 0 else 1)
@@ -535,6 +535,25 @@ test_that("is_port_in_use finds a program on either loopback address for the ser
     answering <- "127.0.0.1"
     expect_true(is_port_in_use(host, port, loopback = TRUE), label = host)
   }
+})
+
+test_that("is_port_in_use connects to a port before it listens there, never reaching its own listener", {
+  # httpuv may accept a connection for a moment after stopServer() returns
+  calls <- character()
+  local_mocked_bindings(loopback_port_accepts = function(port, timeout_ms = 100, address = "127.0.0.1") {
+    calls <<- c(calls, paste("connect", address))
+    FALSE
+  })
+  local_mocked_bindings(
+    startServer = function(...) {
+      calls <<- c(calls, "listen")
+      list()
+    },
+    stopServer = function(server) calls <<- c(calls, "stop"),
+    .package = "httpuv"
+  )
+  expect_false(is_port_in_use("127.0.0.1", 39999, loopback = TRUE))
+  expect_equal(calls, c("connect 127.0.0.1", "connect ::1", "listen", "stop"))
 })
 
 test_that("loopback_port_accepts reaches a program on [::1]", {

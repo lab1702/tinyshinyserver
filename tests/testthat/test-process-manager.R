@@ -405,11 +405,21 @@ test_that("stop_app_immediately returns FALSE for resident app", {
       list(name = "app1", path = "/path/to/app1", port = 3001, resident = TRUE)
     )
   )
+  # A running process, which a stop would kill
+  process <- list(get_pid = function() 12345, is_alive = function() TRUE)
+  config$add_app_process("app1", process)
+  kills <- 0
+  local_mocked_bindings(kill_process_safely = function(process) {
+    kills <<- kills + 1
+    TRUE
+  })
   pm <- ProcessManager$new(config)
 
   result <- pm$stop_app_immediately("app1")
 
   expect_false(result)
+  expect_equal(kills, 0)
+  expect_identical(config$get_app_process("app1"), process)
 })
 
 test_that("stop_app_immediately stops non-resident app", {
@@ -455,6 +465,44 @@ test_that("an on-demand app that the idle check finds dead waits restart_delay",
   expect_null(config$get_app_process("app1"))
   expect_equal(cleaned, 1)
   expect_gt(config$start_backoff_seconds("app1"), 59)
+})
+
+test_that("an app that stopped itself has not failed, and starts again without waiting", {
+  exited <- function(status) {
+    list(get_pid = function() 12345, is_alive = function() FALSE, get_exit_status = function() status)
+  }
+  expect_false(process_failed(exited(0L)))
+  expect_true(process_failed(exited(1L)))
+  expect_true(process_failed(exited(NULL)))
+  expect_true(process_failed(list(is_alive = function() FALSE)))
+
+  # Each of the checks that can find the process gone
+  checks <- list(
+    idle = function(pm) pm$stop_app_immediately("app1"),
+    health = function(pm) pm$health_check(),
+    request = function(pm) pm$start_app_on_demand("app1")
+  )
+  local_mocked_bindings(kill_process_safely = function(process) TRUE)
+  for (name in names(checks)) {
+    for (status in c(0L, 1L)) {
+      config <- ShinyServerConfig$new()
+      config$config <- list(restart_delay = 60, log_dir = tempdir(), apps = list(
+        list(name = "app1", path = unused_app_path(), port = 3001, resident = FALSE)
+      ))
+      config$add_app_process("app1", exited(status))
+      pm <- ProcessManager$new(config)
+      assign("cleanup_app_connections", function(app_name) NULL, envir = pm)
+      assign("start_app", function(app_config) TRUE, envir = pm)
+      logged <- capture_test_log(checks[[name]](pm))
+      expect_null(config$get_app_process("app1"))
+      if (status == 0) {
+        expect_equal(config$start_backoff_seconds("app1"), 0, info = name)
+        expect_false(any(grepl("^ERROR", logged)), info = name)
+      } else {
+        expect_gt(config$start_backoff_seconds("app1"), 59)
+      }
+    }
+  }
 })
 
 # ============================================================================
@@ -822,6 +870,34 @@ test_that("a session's latest message decides whether it is idle", {
   config$remove_ws_connection("busy")
   expect_null(config$get_session_activity("busy"))
   expect_length(ls(config$session_activity), 0)
+})
+
+test_that("a session's idle time is not changed by setting the system clock", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(), idle_timeout_minutes = 30)
+  cm <- ConnectionManager$new(config)
+  cm$add_client_connection("jumped", list(close = function() NULL), "app1", "127.0.0.1", "test")
+  cm$add_client_connection("idle", list(close = function() NULL), "app1", "127.0.0.1", "test")
+  cm$add_client_connection("touched", list(close = function() NULL), "app1", "127.0.0.1", "test")
+  # A clock set forward by two hours makes the session look idle by the
+  # system clock only
+  record <- config$ws_connections[["jumped"]]
+  record$last_activity <- record$last_activity - 7200
+  config$ws_connections[["jumped"]] <- record
+  # Idle for 45 minutes by the elapsed clock, however the system clock moved
+  record <- config$ws_connections[["idle"]]
+  record$opened_clock <- record$opened_clock - 45 * 60
+  record$last_activity <- record$last_activity + 3600
+  config$ws_connections[["idle"]] <- record
+  config$touch_session("touched")
+  assign("touched", Sys.time() - 7200, envir = config$session_activity)
+
+  expect_equal(ProcessManager$new(config)$cleanup_stale_connections(), 1)
+  expect_null(config$get_ws_connection("idle"))
+  expect_false(is.null(config$get_ws_connection("jumped")))
+  expect_false(is.null(config$get_ws_connection("touched")))
+  config$remove_ws_connection("touched")
+  expect_length(ls(config$session_activity_clock), 0)
 })
 
 # ============================================================================
@@ -1465,6 +1541,11 @@ test_that("is_shiny_document reads the runtime that a document's front matter as
 test_that("detect_app_type explains why a directory cannot be served", {
   missing <- file.path(tempdir(), "tss-no-such-app")
   expect_error(detect_app_type(missing), "App directory not found: .*tss-no-such-app")
+  # As when path names the app's app.R
+  file <- tempfile("tss-app", fileext = ".R")
+  on.exit(unlink(file), add = TRUE)
+  writeLines("shiny::shinyApp(shiny::fluidPage(), function(input, output) NULL)", file)
+  expect_error(detect_app_type(file), "App path names a file, not a directory: .*tss-app.*\\.R; set path to the directory")
 
   empty <- tempfile("tss-empty")
   dir.create(empty)

@@ -198,26 +198,27 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
         port = proxy_port,
         app = list(
           onHeaders = function(req) {
-            reject_large_request_body(req, (config$config$max_request_size_mb %||% 100) * 1024^2)
+            rejected <- reject_large_request_body(req, (config$config$max_request_size_mb %||% 100) * 1024^2)
+            if (is.null(rejected)) NULL else without_head_body(req, rejected)
           },
           # httpuv queues each request's handler on the event loop, and
           # stopServer() leaves those already queued, which then run after
           # the shutdown, in the R session's own event loop. They would start
           # app processes that nothing stops. Requests that arrive while the
           # server shuts down are refused too.
-          call = function(req) {
+          call = note_interrupts(config, function(req) {
             if (isTRUE(is_shutting_down)) {
               return(without_head_body(req, create_error_response("The server is shutting down", 503)))
             }
             handle_http_request(req, config, template_manager, connection_manager, process_manager)
-          },
-          onWSOpen = function(ws) {
+          }),
+          onWSOpen = note_interrupts(config, function(ws) {
             if (isTRUE(is_shutting_down)) {
               tryCatch(ws$close(), error = function(e) NULL)
               return(invisible(NULL))
             }
             handle_websocket_connection(ws, config, connection_manager, process_manager)
-          }
+          })
         )
       )
 
@@ -233,13 +234,20 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
         port = management_port,
         app = list(
           # Management requests carry no body.
-          onHeaders = function(req) reject_large_request_body(req, 65536),
-          call = function(req) {
+          onHeaders = function(req) {
+            rejected <- reject_large_request_body(req, 65536)
+            if (is.null(rejected)) NULL else management_response(req, rejected)
+          },
+          call = note_interrupts(config, function(req) {
             if (isTRUE(is_shutting_down)) {
               return(management_response(req, create_error_response("The server is shutting down", 503)))
             }
             handle_management_request(req, config, process_manager, template_manager)
-          }
+          }),
+          # The management server serves no WebSocket. Without this handler
+          # httpuv would accept any handshake, whatever its Host or Origin,
+          # and write an error to the console for each one.
+          onWSOpen = function(ws) tryCatch(ws$close(), error = function(e) NULL)
         )
       )
     },
@@ -250,7 +258,8 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       shutdown_requested_at <- NULL
       outcome <- tryCatch({
         while (TRUE) {
-          # A Ctrl-C that a WebSocket callback caught; see note_interrupts()
+          # A Ctrl-C that a callback of httpuv or the websocket package
+          # caught; see note_interrupts()
           if (isTRUE(config$interrupt_requested)) {
             logger::log_info("Interrupt received, shutting down...")
             break
@@ -324,10 +333,8 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
 
       logger::log_info("Reloading configuration from {file}", file = config$config_file)
 
-      # Close every client socket so browsers show that their session ended
-      for (session_id in names(config$get_all_ws_connections())) {
-        connection_manager$close_client_connection(session_id)
-      }
+      # Browsers are shown that their session ended, except those of an app
+      # that cannot be stopped, which keeps its users
       process_manager$stop_all_apps()
 
       # An app that did not stop still holds its port, so keep the ports it

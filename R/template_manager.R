@@ -202,14 +202,21 @@ TemplateManager <- setRefClass("TemplateManager",
         ))
       }
 
-      # On Windows, use case-insensitive comparison and normalize slashes
+      # On Windows, use case-insensitive comparison and normalize slashes. The
+      # directory is compared with a separator after it, so that a link to a
+      # directory whose name only starts with the same name, such as
+      # "templates-old", is not taken for a part of it.
       if (.Platform$OS.type == "windows") {
         norm_path <- tolower(gsub("/", "\\\\", normalized_path))
         norm_base <- tolower(gsub("/", "\\\\", template_base))
-        path_check <- !startsWith(norm_path, norm_base)
+        separator <- "\\"
       } else {
-        path_check <- !startsWith(normalized_path, template_base)
+        norm_path <- normalized_path
+        norm_base <- template_base
+        separator <- "/"
       }
+      if (!endsWith(norm_base, separator)) norm_base <- paste0(norm_base, separator)
+      path_check <- !startsWith(norm_path, norm_base)
 
       if (path_check) {
         return(list(

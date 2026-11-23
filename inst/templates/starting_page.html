@@ -46,10 +46,21 @@
       }
 
       // The wait is kept across reloads in sessionStorage or, where site data
-      // is blocked, in the tab's window.name, unless something else uses it
+      // is blocked, in the tab's window.name, unless something other than
+      // these pages uses it. The name stays on the app's page once the app
+      // answers, and on the pages after it, which may be other sites', so it
+      // holds a hash of the page's address rather than the address.
       var namePrefix = "tss-starting ";
       function ownsName() {
-        return window.name === "" || window.name.indexOf(namePrefix) === 0;
+        return window.name === "" || window.name.indexOf(namePrefix) === 0 ||
+          window.name.indexOf("tss-landing ") === 0;
+      }
+      function nameKey() {
+        var hash = 5381;
+        for (var i = 0; i < key.length; i++) {
+          hash = ((hash * 33) ^ key.charCodeAt(i)) >>> 0;
+        }
+        return hash.toString(36);
       }
       function loadWait() {
         var value = null;
@@ -62,7 +73,7 @@
         try {
           if (window.name.indexOf(namePrefix) === 0) {
             var kept = JSON.parse(window.name.slice(namePrefix.length));
-            if (kept && kept.key === key) return kept.wait;
+            if (kept && kept.key === nameKey()) return kept.wait;
           }
         } catch (e) {
           // Not a wait that this page kept
@@ -77,7 +88,7 @@
           // Site data is blocked; try the tab's name
         }
         if (!ownsName()) return false;
-        window.name = namePrefix + JSON.stringify({ key: key, wait: value });
+        window.name = namePrefix + JSON.stringify({ key: nameKey(), wait: value });
         return true;
       }
       function forgetWait() {
@@ -95,8 +106,18 @@
       // than this one does, as one that reports a restart delay does, and a
       // browser may delay the timers of a tab in the background. Any other
       // visit, such as the visitor reloading the page, starts a new wait.
-      var reloaded = wait && typeof wait.reloadedAt === "number" &&
-        now >= wait.reloadedAt && now - wait.reloadedAt <= answerMs;
+      // The record stays when the reload reaches the app instead, so a page
+      // continues the wait only if its own navigation began at the reload:
+      // one that the visitor opens after the app's page, as when the app
+      // stops again, does not. The server may hold the reload's request for
+      // a while, which does not count. Without performance.now(), the page
+      // is taken for the reload if it loads within the time the server can
+      // hold it.
+      var navigationStart = window.performance && typeof window.performance.now === "function" ?
+        now - window.performance.now() : null;
+      var reloaded = wait && typeof wait.reloadedAt === "number" && (navigationStart === null ?
+        now >= wait.reloadedAt && now - wait.reloadedAt <= answerMs :
+        navigationStart >= wait.reloadedAt - 1000 && navigationStart - wait.reloadedAt <= 2000);
       if (!reloaded) {
         wait = { first: now + delayMs };
       }

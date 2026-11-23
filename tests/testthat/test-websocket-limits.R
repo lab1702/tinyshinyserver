@@ -302,6 +302,40 @@ test_that("a flood of refused handshakes is logged at WARN once per reason in ea
   expect_length(capture_test_log(refuse(HTTP_HOST = "evil.example")), 0)
 })
 
+test_that("handshakes for an app that cannot start or is not listening are logged as other refusals", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(
+    list(name = "broken", port = 3001, resident = FALSE),
+    list(name = "silent", port = 3002, resident = TRUE),
+    list(name = "starting", port = 3003, resident = TRUE)
+  ))
+  pm <- list(start_app_on_demand = function(app_name) FALSE)
+  cm <- ConnectionManager$new(config, pm)
+  # A live process that is not listening on its port
+  local_mocked_bindings(process_owns_port = function(process, port) FALSE)
+  config$add_app_process("silent", test_backend_process())
+  config$add_app_process("starting", test_backend_process())
+  config$set_app_starting("starting")
+  closed <- 0
+  open <- function(app) {
+    handle_websocket_connection(list(request = list(PATH_INFO = paste0("/proxy/", app, "/websocket/")),
+      send = function(...) NULL, close = function() closed <<- closed + 1,
+      onMessage = function(...) stop("A refused socket must not register callbacks")), config, cm, pm)
+  }
+  logged <- capture_test_log(for (i in 1:20) {
+    open("broken")
+    open("silent")
+    open("starting")
+  })
+  expect_equal(closed, 60)
+  expect_length(config$get_all_ws_connections(), 0)
+  expect_length(grep("Rejecting WebSocket for app broken, which could not be started", logged, fixed = TRUE), 1)
+  expect_length(grep("Rejecting WebSocket for app silent: its process is not running", logged, fixed = TRUE), 1)
+  # Each at WARN, and nothing else at INFO or above
+  expect_length(logged, 2)
+  expect_true(all(grepl("^WARN", logged)))
+})
+
 test_that("WebSocket messages are logged short and without control characters", {
   expect_equal(describe_ws_message(as.raw(1:3)), "3 binary bytes")
   described <- describe_ws_message(paste0("{\"a\":1}\033[2J\r", strrep("x", 500)))

@@ -17,7 +17,7 @@ Depends: R (>= 4.1.0)
 Imports:
     methods,
     shiny,
-    callr (>= 3.2.0),
+    callr (>= 3.7.0),
     ps (>= 1.7.0),
     jsonlite,
     later (>= 1.4.0),

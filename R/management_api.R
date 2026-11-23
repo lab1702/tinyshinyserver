@@ -168,7 +168,8 @@ handle_management_connections_api <- function(config) {
 
   tryCatch(
     {
-      connections <- list()
+      # Named, so that the JSON for no sessions is {}, as for some, not []
+      connections <- structure(list(), names = character())
 
       for (session_id in names(config$get_all_ws_connections())) {
         conn <- config$get_ws_connection(session_id)
@@ -182,7 +183,8 @@ handle_management_connections_api <- function(config) {
             last_activity = format(
               config$get_session_activity(session_id, conn$last_activity), "%Y-%m-%d %H:%M:%S"
             ),
-            duration_seconds = as.numeric(difftime(Sys.time(), conn$created_at, units = "secs"))
+            # A clock set back would make it negative
+            duration_seconds = max(0, as.numeric(difftime(Sys.time(), conn$created_at, units = "secs")))
           )
         }
       }

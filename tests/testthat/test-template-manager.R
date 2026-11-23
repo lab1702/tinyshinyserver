@@ -451,6 +451,34 @@ test_that("serve_static_file prevents directory traversal", {
   expect_match(result$body, "Access denied")
 })
 
+test_that("serve_static_file does not follow a link out of the template directory", {
+  temp_dir <- create_test_template_dir()
+  # One whose name starts with the template directory's, and one elsewhere
+  sibling <- paste0(temp_dir, "-old")
+  elsewhere <- tempfile("tss-elsewhere")
+  on.exit(unlink(c(temp_dir, sibling, elsewhere), recursive = TRUE), add = TRUE)
+  for (target in c(sibling, elsewhere)) {
+    dir.create(target)
+    writeLines("secret", file.path(target, "secret.txt"))
+  }
+  link <- function(target, name) {
+    path <- file.path(temp_dir, name)
+    made <- if (.Platform$OS.type == "windows") Sys.junction(target, path) else file.symlink(target, path)
+    if (!isTRUE(made)) skip("A link to a directory cannot be made here")
+  }
+  link(sibling, "old")
+  link(elsewhere, "elsewhere")
+
+  tm <- TemplateManager$new(temp_dir)
+  for (path in c("old/secret.txt", "elsewhere/secret.txt")) {
+    result <- tm$serve_static_file(path)
+    expect_equal(result$status, 403, info = path)
+  }
+  # A file of the directory itself is still served
+  writeLines("body {}", file.path(temp_dir, "own.css"))
+  expect_equal(tm$serve_static_file("own.css")$status, 200)
+})
+
 test_that("serve_static_file detects correct content types", {
   temp_dir <- create_test_template_dir()
   on.exit(cleanup_test_template_dir(temp_dir))
@@ -553,7 +581,9 @@ test_that("the starting page counts its two minutes from the end of an app's res
 test_that("the landing page reloads for a new base_path at most once a minute", {
   html <- create_template_manager(base_url = "/shiny")$generate_landing_page(list(config = list(apps = list())))
   expect_match(html, "X-TinyShinyServer-Base-Path", fixed = TRUE)
-  expect_match(html, "Date.now() - last < 60000", fixed = TRUE)
+  expect_match(html, "now - last < 60000", fixed = TRUE)
+  # Also where site data is blocked; tests/browser/public-pages.cjs runs it
+  expect_match(html, "window.name = namePrefix", fixed = TRUE)
   # It reloads for a new address, through the guard, and for a changed list of apps
   expect_equal(lengths(regmatches(html, gregexpr("location.reload()", html, fixed = TRUE))), 2)
   expect_match(html, "reloadForNewAddress()", fixed = TRUE)

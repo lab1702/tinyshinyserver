@@ -18,7 +18,7 @@ The example configuration uses the default proxy and management ports
   \item{\code{inventory}}{A Shiny app in two files, \file{ui.R} and
     \file{server.R}. On demand: it starts when first opened.}
   \item{\code{reports}}{An interactive R Markdown flexdashboard. On
-    demand. Needs Pandoc and the \pkg{DT}, \pkg{plotly}, \pkg{dplyr}, and
+    demand. Needs Pandoc and the \pkg{DT}, \pkg{plotly}, and
     \pkg{flexdashboard} packages.}
   \item{\code{dashboard}}{A Quarto dashboard. Resident, so the server
     needs the Quarto CLI from the start. Needs the \pkg{DT},

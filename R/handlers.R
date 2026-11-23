@@ -513,6 +513,14 @@ forward_request <- function(method, target_url, req, app_name, config, template_
 
     response <- promises::then(backend_ready, function(ready) {
       if (process_ended()) {
+        # The request can see the process exit before the readiness or health
+        # check does, which records the failure; the wait it is told of
+        # starts now. A process that exits as it starts has failed.
+        if (identical(config$get_app_process(app_name), request_process) &&
+            !is.null(request_process) && !is_process_alive(request_process) &&
+            (starting || process_failed(request_process))) {
+          config$note_start_failure(app_name)
+        }
         # An app whose process failed starts again after restart_delay
         backoff <- ceiling(config$start_backoff_seconds(app_name))
         if (backoff > 0) {
@@ -645,6 +653,9 @@ parse_response_headers <- function(raw_headers) {
   values
 }
 
+# The apps that have been reported to set a __Host- cookie, which is said once
+host_cookie_apps <- new.env(parent = emptyenv())
+
 # Preserve end-to-end headers, including repeated Set-Cookie fields. Transfer
 # framing belongs to httpuv; libcurl already removes chunk framing, but content
 # decoding is disabled so Content-Encoding still describes the returned bytes.
@@ -680,6 +691,17 @@ proxy_response_headers <- function(raw_headers, target_url, app_name, method, ba
       }
       headers[[i]] <- value
     } else if (names(headers)[i] == "set-cookie") {
+      # A browser keeps a __Host- cookie only with Path=/, which would share
+      # it with every app, so the app loses the cookie, often one that holds
+      # its session or its forms' token, with nothing to say why
+      if (grepl("^[[:space:]]*__Host-", value, ignore.case = TRUE) &&
+          !exists(app_name, envir = host_cookie_apps, inherits = FALSE)) {
+        assign(app_name, TRUE, envir = host_cookie_apps)
+        logger::log_warn(
+          "App {app_name} sets a __Host- cookie, which browsers refuse behind the proxy: it gives the cookie the app's path, and the prefix requires Path=/",
+          app_name = app_name
+        )
+      }
       # Backend cookies must not become shared cookies for every hosted app.
       # Browsers trim spaces around attribute names and values and use the
       # last Path, so every Path attribute is rewritten, however it is spaced.
@@ -1080,9 +1102,10 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
     return()
   }
 
+  # The reason an app cannot start is logged where the start fails, and
+  # a page that reconnects in a loop would repeat it at every handshake
   if (!ensure_on_demand_app_started(app_config, config, process_manager, "WebSocket connection")) {
-    logger::log_error("Failed to start app {app_name} on demand for WebSocket", app_name = app_name)
-    ws$close()
+    reject(paste("start", app_name), sprintf("Rejecting WebSocket for app %s, which could not be started", app_name))
     return()
   }
 
@@ -1095,7 +1118,7 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
 
   # Check if app is still starting up
   if (config$is_app_starting(app_name)) {
-    logger::log_info("App {app_name} is starting, closing WebSocket with retry message", app_name = app_name)
+    logger::log_debug("App {app_name} is starting, closing WebSocket with retry message", app_name = app_name)
     connection_manager$schedule_session_check(app_name,
       (app_config$appstart_timeout %||% 2) + config$HTTP_SESSION_GRACE_SECONDS)
     ws$send(jsonlite::toJSON(list(
@@ -1107,9 +1130,19 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
     return()
   }
 
+  # Browser cookies and credentials go only to the app's own process, which
+  # is checked before the session is added, so that a page that reconnects
+  # in a loop is logged as any other refused handshake
+  if (!config$app_backend_verified(app_name)) {
+    reject(paste("listener", app_name), unverified_backend_text(app_name, app_config$port))
+    return()
+  }
+
   # Get client connection info
   client_ip <- get_client_ip(ws$request)
-  user_agent <- request_header(ws$request, "user-agent") %||% "unknown"
+  # Shown on the dashboard as text: a header holds bytes in no declared
+  # encoding, which would make the connections' JSON invalid UTF-8
+  user_agent <- log_value(request_header(ws$request, "user-agent") %||% "unknown", max_bytes = 1024)
 
   # Add connection to manager
   connection_manager$add_client_connection(session_id, ws, app_name, client_ip, user_agent)
@@ -1126,7 +1159,8 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
       connection_manager$close_client_connection(session_id)
     }
   }
-  ws$onMessage(function(binary, message) {
+  # httpuv, as the websocket package, catches an interrupt in these
+  ws$onMessage(note_interrupts(config, function(binary, message) {
     # A session that has ended, here or by the proxy, takes no more messages
     if (is.null(config$get_ws_connection(session_id))) {
       return(invisible(NULL))
@@ -1144,12 +1178,12 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
         tryCatch(end_session(), error = function(e) {})
       }
     )
-  })
+  }))
 
   # Set up close handler
-  ws$onClose(function() {
+  ws$onClose(note_interrupts(config, function() {
     connection_manager$remove_client_connection(session_id)
-  })
+  }))
 
   # Connect to the app now rather than on the browser's first message: on
   # some sockets, such as Shiny's autoreload socket, only the app speaks.

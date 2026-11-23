@@ -7,6 +7,11 @@
 # to exit again.
 detect_app_type <- function(app_path) {
   if (!dir.exists(app_path)) {
+    # As when path names the app's app.R instead of its directory
+    if (file.exists(app_path)) {
+      stop("App path names a file, not a directory: ", app_path,
+        "; set path to the directory that holds it", call. = FALSE)
+    }
     stop("App directory not found: ", app_path, call. = FALSE)
   }
 
@@ -838,10 +843,11 @@ ProcessManager <- setRefClass("ProcessManager",
 
       # Retain ownership of a crashed process until its workers are terminated.
       if (!is.null(process)) {
+        failed <- process_failed(process)
         if (!kill_process_safely(process)) return(FALSE)
         cleanup_app_connections(app_name)
         config$remove_app_process(app_name)
-        config$note_start_failure(app_name)
+        if (failed) config$note_start_failure(app_name)
       }
 
       # Check if app is currently starting
@@ -1004,16 +1010,21 @@ ProcessManager <- setRefClass("ProcessManager",
       }
 
       # An app whose process has already exited, such as one that crashed and
-      # so closed its sessions, failed. The health check would record that,
-      # but this idle check can come first, and the app would then start again
-      # at the next request instead of after restart_delay.
+      # so closed its sessions, may have failed. The health check would record
+      # that, but this idle check can come first, and the app would then start
+      # again at the next request instead of after restart_delay.
       process <- config$get_app_process(app_name)
       if (!is.null(process) && !is_process_alive(process)) {
-        logger::log_error("Non-resident app {app_name} died", app_name = app_name)
+        failed <- process_failed(process)
+        if (failed) {
+          logger::log_error("Non-resident app {app_name} died", app_name = app_name)
+        } else {
+          logger::log_info("Non-resident app {app_name} exited", app_name = app_name)
+        }
         if (!kill_process_safely(process)) return(FALSE)
         cleanup_app_connections(app_name)
         config$remove_app_process(app_name)
-        config$note_start_failure(app_name)
+        if (failed) config$note_start_failure(app_name)
         return(TRUE)
       }
 
@@ -1032,7 +1043,14 @@ ProcessManager <- setRefClass("ProcessManager",
 
           if (!is.null(process)) {
             if (!is_process_alive(process)) {
-              logger::log_error("App {app_name} died, restarting", app_name = app_name)
+              # An app that stopped itself, as with shiny::stopApp(), did not
+              # fail, and an on-demand one may start again at once
+              failed <- process_failed(process)
+              if (failed) {
+                logger::log_error("App {app_name} died", app_name = app_name)
+              } else {
+                logger::log_info("App {app_name} exited", app_name = app_name)
+              }
               if (!kill_process_safely(process)) next
 
               # Clean up connections for this app
@@ -1040,13 +1058,14 @@ ProcessManager <- setRefClass("ProcessManager",
 
               # Remove dead process
               config$remove_app_process(app_name)
-              config$note_start_failure(app_name)
+              if (failed) config$note_start_failure(app_name)
 
               # Only restart if it's a resident app
               if (app_config$resident) {
+                logger::log_info("Restarting resident app {app_name}", app_name = app_name)
                 schedule_restart(app_config)
               } else {
-                logger::log_info("Non-resident app {app_name} died, will start on next request", app_name = app_name)
+                logger::log_info("Non-resident app {app_name} will start on next request", app_name = app_name)
               }
             }
           } else {
@@ -1112,8 +1131,7 @@ ProcessManager <- setRefClass("ProcessManager",
         return(0)
       }
 
-      current_time <- Sys.time()
-      timeout_threshold <- current_time - (timeout_minutes * 60)
+      timeout_seconds <- timeout_minutes * 60
       connections_cleaned <- 0
 
       # Snapshot connection names to avoid issues if connections are removed during iteration
@@ -1132,8 +1150,9 @@ ProcessManager <- setRefClass("ProcessManager",
             }
 
             # Check if connection has timestamp and is stale
-            last_activity <- config$get_session_activity(session_id, conn_info$last_activity)
-            if (!is.null(last_activity) && last_activity < timeout_threshold) {
+            idle_seconds <- config$session_idle_seconds(session_id, conn_info)
+            if (!is.null(idle_seconds) && idle_seconds > timeout_seconds) {
+              last_activity <- config$get_session_activity(session_id, conn_info$last_activity)
               logger::log_info("Cleaning stale backend connection: {session_id}, last activity: {time}",
                 session_id = session_id, time = format(last_activity)
               )
@@ -1171,8 +1190,9 @@ ProcessManager <- setRefClass("ProcessManager",
             }
 
             # Check if connection has timestamp and is stale
-            last_activity <- config$get_session_activity(session_id, conn_info$last_activity)
-            if (!is.null(last_activity) && last_activity < timeout_threshold) {
+            idle_seconds <- config$session_idle_seconds(session_id, conn_info)
+            if (!is.null(idle_seconds) && idle_seconds > timeout_seconds) {
+              last_activity <- config$get_session_activity(session_id, conn_info$last_activity)
               logger::log_info("Cleaning stale client connection: {session_id}, app: {app}, last activity: {time}",
                 session_id = session_id,
                 app = conn_info$app_name %||% "unknown",
@@ -1271,7 +1291,7 @@ ProcessManager <- setRefClass("ProcessManager",
       invisible(NULL)
     },
     stop_all_apps = function() {
-      "Stop all running applications and clean up all connections. Returns the names of apps that did not stop."
+      "Stop all running applications and close their sessions. Returns the names of apps that did not stop."
       cancel_pending_restarts()
 
       logger::log_info("Stopping all applications...")
@@ -1284,27 +1304,34 @@ ProcessManager <- setRefClass("ProcessManager",
         }
       }
 
-      # Clean up backend connections (close WebSocket handles)
-      backend_session_ids <- names(config$get_all_backend_connections())
-      for (session_id in backend_session_ids) {
+      # A process that is still tracked is still running. Its users stay
+      # connected, as they do when a restart cannot stop the app; the
+      # sessions of every other app are closed.
+      surviving <- names(config$get_all_app_processes())
+      closing <- function(conn_info) {
+        !is.null(conn_info) && !(length(conn_info$app_name) == 1 && conn_info$app_name %in% surviving)
+      }
+      for (session_id in names(config$get_all_backend_connections())) {
         conn_info <- config$get_backend_connection(session_id)
-        if (!is.null(conn_info) && !is.null(conn_info$ws)) {
+        if (!closing(conn_info)) next
+        config$remove_backend_connection(session_id)
+        if (!is.null(conn_info$ws)) {
           tryCatch(conn_info$ws$close(), error = function(e) {})
         }
-        config$remove_backend_connection(session_id)
       }
-
-      # Forget the client connections; remove_ws_connection() also updates
-      # each app's connection count
-      client_session_ids <- names(config$get_all_ws_connections())
-      for (session_id in client_session_ids) {
+      # remove_ws_connection() also updates each app's connection count. The
+      # tracking goes first, as a socket's close handler may run at once.
+      for (session_id in names(config$get_all_ws_connections())) {
+        conn_info <- config$get_ws_connection(session_id)
+        if (!closing(conn_info)) next
         if (isTRUE(config$remove_ws_connection(session_id))) {
+          if (!is.null(conn_info$ws)) {
+            tryCatch(conn_info$ws$close(), error = function(e) {})
+          }
           logger::log_info("WebSocket connection closed for session {session_id}", session_id = session_id)
         }
       }
 
-      # A process that is still tracked is still running
-      surviving <- names(config$get_all_app_processes())
       if (length(surviving) > 0) {
         logger::log_error("Could not stop apps: {apps}", apps = paste(surviving, collapse = ", "))
       } else {

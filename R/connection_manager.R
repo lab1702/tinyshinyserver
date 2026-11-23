@@ -36,11 +36,13 @@ response_body_bytes <- function(body) {
 # server log with warnings.
 REJECTED_HANDSHAKE_LOG_SECONDS <- 10
 
-# A callback for a socket of the websocket package, which runs each callback
-# inside a tryCatch() that catches an interrupt and only prints a message. A
-# Ctrl-C that R notices while the callback runs, as it may while an app
-# streams messages, would then leave the server running. The interrupt is
-# noted, and the event loop shuts the server down as for any other Ctrl-C.
+# A callback for a socket of the websocket package, or a handler of httpuv's
+# servers and sockets. Each package runs these inside a tryCatch() of its own
+# that catches an interrupt: the websocket package only prints a message, and
+# httpuv answers a request with HTTP 500. A Ctrl-C that R notices while the
+# callback runs, as it may while an app streams messages or a request starts
+# an app, would then leave the server running. The interrupt is noted, and the
+# event loop shuts the server down as for any other Ctrl-C.
 note_interrupts <- function(config, callback) {
   force(callback)
   function(...) {
@@ -48,6 +50,14 @@ note_interrupts <- function(config, callback) {
       config$interrupt_requested <- TRUE
     })
   }
+}
+
+# Why a session for an app is refused when its process is not the verified
+# listener on its port. A process that is not listening yet, or no longer, is
+# the common cause; another program that holds the port is reported once a
+# start, when the app is checked for readiness.
+unverified_backend_text <- function(app_name, port) {
+  sprintf("Rejecting WebSocket for app %s: its process is not running, or is not what listens on port %s", app_name, port)
 }
 
 # Connection Manager Class
@@ -96,9 +106,7 @@ ConnectionManager <- setRefClass("ConnectionManager",
       }
       # Browser cookies and credentials go only to the app's own process.
       if (!config$app_backend_verified(app_name)) {
-        logger::log_warn("Not connecting to app {app_name}: its process does not own port {port}",
-          app_name = app_name, port = app_config$port
-        )
+        note_rejected_handshake(paste("listener", app_name), unverified_backend_text(app_name, app_config$port))
         close_client_connection(session_id)
         return(NULL)
       }
@@ -159,6 +167,7 @@ ConnectionManager <- setRefClass("ConnectionManager",
         ready = FALSE,
         pending_messages = previous$pending_messages %||% list(),
         last_activity = Sys.time(),
+        opened_clock = proc.time()[["elapsed"]],
         created_at = previous$created_at %||% Sys.time()
       ))
 
@@ -371,6 +380,7 @@ ConnectionManager <- setRefClass("ConnectionManager",
         client_ip = client_ip,
         user_agent = user_agent,
         last_activity = Sys.time(),
+        opened_clock = proc.time()[["elapsed"]],
         created_at = Sys.time()
       ))
 
