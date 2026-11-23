@@ -24,7 +24,7 @@ Imports:
     curl (>= 3.3),
     promises,
     glue,
-    httpuv (>= 1.5.2),
+    httpuv (>= 1.5.5),
     websocket (>= 1.1.0),
     logger,
     rmarkdown,

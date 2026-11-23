@@ -9,12 +9,14 @@ STATIC_FILE_MAX_AGE_SECONDS <- 300
 
 # Whether an If-None-Match request header names the entity tag of a file
 etag_matches <- function(if_none_match, etag) {
-  if (!is.character(if_none_match) || length(if_none_match) != 1 || is.na(if_none_match)) {
+  if (!is.character(if_none_match) || length(if_none_match) != 1 || is.na(if_none_match) ||
+    !is_ascii(if_none_match)) {
     return(FALSE)
   }
-  # A cache between the browser and the server may have marked the tag weak
+  # Tags are compared weakly, as for If-None-Match: a cache between the
+  # browser and the server may have marked the tag weak
   candidates <- sub("^W/", "", trimws(strsplit(if_none_match, ",", fixed = TRUE)[[1]]))
-  any(candidates %in% c(etag, "*"))
+  any(candidates %in% c(sub("^W/", "", etag), "*"))
 }
 
 # Template Manager Class
@@ -106,13 +108,19 @@ TemplateManager <- setRefClass("TemplateManager",
         title = title_html()
       )))
     },
-    generate_starting_page = function(app_name, retry_seconds = 2, answer_seconds = 2) {
-      "Generate the page a browser shows, and reloads, until an app is ready. answer_seconds is the longest time the server holds a request for the app."
+    generate_starting_page = function(app_name, retry_seconds = 2, answer_seconds = 2, delay_seconds = 0) {
+      "Generate the page a browser shows, and reloads, until an app is ready. answer_seconds is the longest time the server holds a request for the app; delay_seconds, how long an app that failed waits before it can start."
 
       return(render_template("starting_page", list(
         app_name = html_escape(app_name),
         retry_seconds = retry_seconds,
         answer_seconds = answer_seconds,
+        delay_seconds = delay_seconds,
+        status = if (delay_seconds > 0) {
+          "This application stopped after a failure and starts again shortly."
+        } else {
+          "This application is starting."
+        },
         title = title_html()
       )))
     },
@@ -214,10 +222,14 @@ TemplateManager <- setRefClass("TemplateManager",
       # Let browsers keep the file. Without these headers they fetch it again
       # for every page, including each reload of the starting page. A 304
       # has no body element: httpuv would send an empty body compressed.
+      # httpuv compresses style sheets and scripts for a client that accepts
+      # gzip, so a cache must keep the two encodings apart, and the tag is
+      # weak: it names the file, not the bytes of either encoding.
       info <- file.info(normalized_path)
       cache_headers <- list(
         "Cache-Control" = paste0("max-age=", STATIC_FILE_MAX_AGE_SECONDS),
-        "ETag" = sprintf('"%.0f-%.0f"', info$size, as.numeric(info$mtime))
+        "ETag" = sprintf('W/"%.0f-%.0f"', info$size, as.numeric(info$mtime)),
+        "Vary" = "Accept-Encoding"
       )
       if (etag_matches(if_none_match, cache_headers$ETag)) {
         return(list(status = 304L, headers = cache_headers, body = NULL))

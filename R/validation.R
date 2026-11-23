@@ -94,6 +94,13 @@ validate_ws_message <- function(message, max_size = 1048576) {
     return(list(valid = FALSE, error = "Message too large"))
   }
 
+  # httpuv passes on a text frame whose bytes are not UTF-8, which the app's
+  # socket refuses to send. Refused here, the frame ends its session in the
+  # same way whether or not the app's socket has opened yet.
+  if (!validUTF8(message)) {
+    return(list(valid = FALSE, error = "Text message is not valid UTF-8"))
+  }
+
   return(list(valid = TRUE, sanitized = message))
 }
 

@@ -566,3 +566,37 @@ test_that("an unused on-demand app that is still starting is left to finish", {
     expect_false(cm$is_still_starting("app", process))
   }
 })
+
+test_that("a queued message that cannot be sent when the app's socket opens ends the session", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", port = 1, resident = TRUE)))
+  assign("app_backend_verified", function(app_name) TRUE, envir = config)
+  sent <- character()
+  handlers <- list()
+  fake_socket <- list(
+    onMessage = function(f) handlers$message <<- f, onOpen = function(f) handlers$open <<- f,
+    onClose = function(f) handlers$close <<- f, onError = function(f) handlers$error <<- f,
+    send = function(message) {
+      if (identical(message, "refused")) stop("A payload contained invalid data")
+      sent <<- c(sent, message)
+    },
+    close = function() NULL
+  )
+  local_mocked_bindings(WebSocket = list(new = function(...) fake_socket), .package = "websocket")
+  cm <- ConnectionManager$new(config)
+  closed <- 0
+  client <- list(request = list(PATH_INFO = "/proxy/app/websocket/"), close = function() closed <<- closed + 1)
+  cm$add_client_connection("s", client, "app", "127.0.0.1", "test")
+  cm$create_backend_connection("app", "s", client)
+  for (message in c("first", "refused", "last")) {
+    expect_true(cm$handle_client_message("s", message, "app"))
+  }
+
+  capture_test_log(handlers$open(list()))
+  # As once the socket is open, the session ends instead of going on
+  # without the rest of its messages
+  expect_equal(sent, "first")
+  expect_equal(closed, 1)
+  expect_null(config$get_ws_connection("s"))
+  expect_null(config$get_backend_connection("s"))
+})

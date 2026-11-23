@@ -144,23 +144,30 @@ app_start_problem <- function(app_config) {
   )
 }
 
-# quarto_serve() renders a document before serving it, which takes many
-# seconds on every start, including each start of an on-demand app. The
-# rendered page stays valid while it is newer than every other source file in
-# the app directory, so render only when it is missing or something has changed.
-# The server's logs are not sources: when log_dir lies in the app directory,
-# they change at every start. start_app() hands this function to the app's
-# own process, which need not load this package, so it may call only base R.
-quarto_needs_render <- function(qmd_file, log_dir = NULL) {
+# A Quarto document is rendered before it is served, which takes many seconds,
+# so it is rendered only when its page is missing or may be out of date. The
+# server records each render of its own in state_file: a render that did not
+# finish, such as one stopped part-way, leaves an incomplete page; and once a
+# render has finished, the page is current while the source files are the
+# ones it was rendered from, with the same names, sizes, and modification
+# times, so that a file copied in with an older time, or deleted, counts. A
+# page that the server did not render, such as one deployed with the app or
+# rendered since, is current while it is newer than every source file. Files
+# that rendering writes, and the server's own files in log_dir, are not
+# sources: when log_dir lies in the app directory, they change at every start.
+#
+# The result carries the sources as attribute "sources", for
+# render_quarto_document() to record. start_app() hands this function to the
+# app's own process, which need not load this package, so it may call only
+# base R.
+quarto_needs_render <- function(qmd_file, log_dir = NULL, state_file = NULL) {
   # Quarto names the page "doc.html" for "doc.qmd" and "doc.QMD" alike
   output <- sub("\\.qmd$", ".html", qmd_file, ignore.case = TRUE)
-  if (!file.exists(output)) {
-    return(TRUE)
-  }
-
   app_dir <- dirname(qmd_file)
-  # Files that rendering itself writes
-  generated <- c(basename(output), sub("\\.qmd$", "_files", basename(qmd_file), ignore.case = TRUE), ".quarto")
+  # Files that rendering itself writes: the page, its resources, the data of
+  # "context: data" chunks, and the knitr cache
+  stem <- sub("\\.qmd$", "", basename(qmd_file), ignore.case = TRUE)
+  generated <- c(basename(output), paste0(stem, c("_files", "_data", "_cache")), ".quarto")
   sources <- list.files(app_dir, recursive = TRUE, all.files = TRUE)
   sources <- sources[!sub("/.*$", "", sources) %in% generated]
   # Files that change without the document changing: hidden files and
@@ -171,7 +178,8 @@ quarto_needs_render <- function(qmd_file, log_dir = NULL) {
   renv_owned <- grepl("^renv/(library|local|python|sandbox|staging)/", sources)
   sources <- sources[!hidden & !renv_owned]
 
-  # The .log files directly in log_dir: server.log and every app's logs
+  # The files directly in log_dir that the server writes: server.log, every
+  # app's logs, and every app's record of its renders
   if (!is.null(log_dir)) {
     windows <- .Platform$OS.type == "windows"
     canonical <- function(path) {
@@ -184,13 +192,124 @@ quarto_needs_render <- function(qmd_file, log_dir = NULL) {
       prefix <- if (identical(logs, root)) "" else paste0(substring(logs, nchar(root) + 2), "/")
       listed <- if (windows) tolower(sources) else sources
       in_logs <- startsWith(listed, prefix) & !grepl("/", substring(listed, nchar(prefix) + 1), fixed = TRUE)
-      sources <- sources[!(in_logs & endsWith(listed, ".log"))]
+      sources <- sources[!(in_logs & (endsWith(listed, ".log") | endsWith(listed, "_render.rds")))]
+    }
+  }
+
+  sources <- sort(sources, method = "radix")
+  paths <- file.path(app_dir, sources)
+  snapshot <- list(files = sources, mtime = as.numeric(file.mtime(paths)), size = as.numeric(file.size(paths)))
+  answer <- function(render) structure(render, sources = snapshot)
+
+  if (!file.exists(output)) {
+    return(answer(TRUE))
+  }
+
+  state <- if (is.null(state_file)) NULL else tryCatch(suppressWarnings(readRDS(state_file)), error = function(e) NULL)
+  if (is.list(state) && identical(state$document, qmd_file)) {
+    # A render that has not finished may have left an incomplete page
+    if (!identical(state$status, "rendered")) {
+      return(answer(TRUE))
+    }
+    page <- file.info(output)
+    same_page <- identical(state$page, list(mtime = as.numeric(page$mtime), size = as.numeric(page$size)))
+    # A page that has changed since was rendered elsewhere, and is judged as one
+    if (same_page) {
+      return(answer(!identical(state$sources, snapshot)))
     }
   }
 
   # A file as new as the page may have changed after it was rendered
-  changed <- file.mtime(file.path(app_dir, sources)) >= file.mtime(output)
-  any(is.na(changed) | changed)
+  changed <- snapshot$mtime >= as.numeric(file.mtime(output))
+  answer(any(is.na(changed) | changed))
+}
+
+# Render a Quarto document with the Quarto CLI, recording in state_file that a
+# render has begun and, once it has finished, the page and the sources it was
+# rendered from (see quarto_needs_render()). The CLI is run directly rather
+# than through the quarto package: an app's profile, such as one that
+# activates renv, may have replaced the library paths with ones that lack it.
+# As the quarto package does, the CLI is the one that QUARTO_PATH names or
+# that PATH finds, here in the app's environment, which its .Renviron and
+# .Rprofile may have set; quarto_bin, the one this server found, comes next.
+# Called in the app's own process, so it may call only base R.
+render_quarto_document <- function(qmd_file, sources, state_file, quarto_bin) {
+  own <- Sys.getenv("QUARTO_PATH", unset = "")
+  if (!nzchar(own)) own <- unname(Sys.which("quarto"))
+  if (nzchar(own)) quarto_bin <- own
+  if (is.null(quarto_bin) || !nzchar(quarto_bin)) {
+    stop("Cannot render ", qmd_file, ": the Quarto CLI was not found. Install it from https://quarto.org/",
+      call. = FALSE
+    )
+  }
+  record <- function(state) {
+    tryCatch(saveRDS(c(list(document = qmd_file), state), state_file), error = function(e) {
+      message("Could not record the render in ", state_file, ": ", conditionMessage(e))
+    })
+  }
+  record(list(status = "rendering"))
+  # Quarto then renders with this R, as the quarto package arranges
+  if (is.na(Sys.getenv("QUARTO_R", unset = NA))) {
+    Sys.setenv(QUARTO_R = R.home("bin"))
+  }
+  status <- system2(quarto_bin, c("render", shQuote(qmd_file)))
+  if (!identical(as.integer(status), 0L)) {
+    stop("quarto render ", qmd_file, " failed with exit status ", status, call. = FALSE)
+  }
+  page <- file.info(sub("\\.qmd$", ".html", qmd_file, ignore.case = TRUE))
+  record(list(
+    status = "rendered", sources = sources,
+    page = list(mtime = as.numeric(page$mtime), size = as.numeric(page$size))
+  ))
+  invisible(TRUE)
+}
+
+# Library paths for an app whose environment file sets R_LIBS or R_LIBS_USER,
+# as R gives them at startup. callr gives every app this session's library
+# paths, and sets these variables back to this session's values once the
+# app's process has started, after R has read the app's environment file. The
+# file is read again for them alone; other variables keep the values that R
+# gave them. Called in the app's own process, so it may call only base R.
+apply_environ_libraries <- function(environ_file) {
+  if (!is.character(environ_file) || length(environ_file) != 1 || is.na(environ_file) ||
+    !nzchar(environ_file) || !file.exists(environ_file) || dir.exists(environ_file)) {
+    return(invisible(FALSE))
+  }
+  lines <- tryCatch(readLines(environ_file, warn = FALSE), error = function(e) character())
+  assigned <- unique(sub(
+    "^[[:space:]]*([^=[:space:]]+)[[:space:]]*=.*$", "\\1",
+    grep("^[[:space:]]*[^#=[:space:]]+[[:space:]]*=", lines, value = TRUE)
+  ))
+  library_vars <- intersect(c("R_LIBS", "R_LIBS_USER"), assigned)
+  if (length(library_vars) == 0) {
+    return(invisible(FALSE))
+  }
+  others <- setdiff(assigned, library_vars)
+  saved <- Sys.getenv(others, unset = NA, names = TRUE)
+  read <- tryCatch(readRenviron(environ_file), error = function(e) FALSE, warning = function(w) FALSE)
+  for (name in others) {
+    if (is.na(saved[[name]])) {
+      Sys.unsetenv(name)
+    } else {
+      do.call(Sys.setenv, structure(list(saved[[name]]), names = name))
+    }
+  }
+  if (!isTRUE(read)) {
+    return(invisible(FALSE))
+  }
+  paths <- function(name) {
+    value <- Sys.getenv(name)
+    if (!nzchar(value)) {
+      return(character())
+    }
+    # R expands "%v" and the like in R_LIBS_USER
+    if (name == "R_LIBS_USER" && exists(".expand_R_libs_env_var", envir = baseenv())) {
+      value <- get(".expand_R_libs_env_var", envir = baseenv())(value)
+    }
+    strsplit(value, .Platform$path.sep, fixed = TRUE)[[1]]
+  }
+  .libPaths(c(paths("R_LIBS"), paths("R_LIBS_USER")))
+  invisible(TRUE)
 }
 
 # The user environment file that R reads when it starts in an app's directory:
@@ -246,7 +365,9 @@ ProcessManager <- setRefClass("ProcessManager",
       logger::log_info("Starting app {app_name} on port {app_port}", app_name = app_name, app_port = app_port)
 
       if (app$type == "qmd") {
-        logger::log_info("Detected Quarto document for {app_name}, using quarto::quarto_serve", app_name = app_name)
+        logger::log_info("Detected Quarto document for {app_name}, rendering it with the Quarto CLI when needed and serving it with rmarkdown::run",
+          app_name = app_name
+        )
       } else if (app$type == "rmd") {
         logger::log_info("Detected R Markdown app for {app_name}, using rmarkdown::run", app_name = app_name)
       } else {
@@ -286,8 +407,25 @@ ProcessManager <- setRefClass("ProcessManager",
       # without this package's namespace.
       needs_render <- quarto_needs_render
       environment(needs_render) <- baseenv()
+      render_document <- render_quarto_document
+      environment(render_document) <- baseenv()
+      environ_libraries <- apply_environ_libraries
+      environment(environ_libraries) <- baseenv()
       profile_file <- startup_profile_file
       environment(profile_file) <- baseenv()
+      environ_file <- app_environ_file(app_path)
+      # Only the app's own environment file sets its library paths. Without
+      # one, the app keeps this session's, such as a renv library, even where
+      # ~/.Renviron, which R would read instead, sets R_LIBS_USER.
+      library_file <- if (identical(environ_file, file.path(app_path, ".Renviron"))) environ_file else ""
+      # The record of the server's renders of the app's Quarto document
+      state_file <- file.path(log_dir, paste0(app_name, "_render.rds"))
+      # Found here, where the quarto package is loaded; needed only to render
+      quarto_bin <- if (identical(app$type, "qmd")) {
+        tryCatch(quarto::quarto_path() %||% "", error = function(e) "")
+      } else {
+        ""
+      }
 
       # Start the app process. Its stdout and stderr go straight to the log
       # files so that output from child processes and native code is captured
@@ -300,10 +438,13 @@ ProcessManager <- setRefClass("ProcessManager",
       # apply. callr would read the files of this session's working directory
       # instead: its profile option is turned off, and it is told which
       # environment file to use. The profile runs after callr has set the
-      # library paths, which renv then replaces. As at R's own startup, an
-      # error in the profile is reported and the app still starts.
+      # library paths, and after those that the environment file sets, which
+      # renv then replaces. As at R's own startup, an error in the profile is
+      # reported and the app still starts. The site profile runs too.
       process <- callr::r_bg(
-        function(app_path, port, type, file, needs_render, log_dir, profile_file, profile_setting) {
+        function(app_path, port, type, file, needs_render, render_document, log_dir, state_file,
+                 quarto_bin, environ_libraries, library_file, profile_file, profile_setting) {
+          environ_libraries(library_file)
           profile <- profile_file(profile_setting)
           if (nzchar(profile) && file.exists(profile)) {
             tryCatch(source(profile), error = function(e) {
@@ -311,15 +452,17 @@ ProcessManager <- setRefClass("ProcessManager",
             })
           }
           if (type == "qmd") {
-            render <- needs_render(file, log_dir)
+            render <- needs_render(file, log_dir, state_file)
             message(if (render) "Rendering " else "Serving the rendered page of ", file)
-            quarto::quarto_serve(
-              input = file,
-              render = render,
+            if (render) render_document(file, attr(render, "sources"), state_file, quarto_bin)
+            # As quarto::quarto_serve() does: the rendered page is served
+            # without rmarkdown rendering it again
+            Sys.setenv(RMARKDOWN_RUN_PRERENDER = "0")
+            rmarkdown::run(file, shiny_args = list(
               port = port,
               host = "127.0.0.1",
-              browse = FALSE
-            )
+              launch.browser = FALSE
+            ))
           } else if (type == "rmd") {
             # The document chosen here is the one served at the app's root.
             # rmarkdown::run() would otherwise choose its own, among the .qmd
@@ -348,14 +491,20 @@ ProcessManager <- setRefClass("ProcessManager",
           type = app$type,
           file = app$file,
           needs_render = needs_render,
+          render_document = render_document,
           log_dir = log_dir,
+          state_file = state_file,
+          quarto_bin = quarto_bin,
+          environ_libraries = environ_libraries,
+          library_file = library_file,
           profile_file = profile_file,
           profile_setting = Sys.getenv("R_PROFILE_USER", unset = NA)
         ),
         stdout = output_log,
         stderr = error_log,
+        system_profile = TRUE,
         user_profile = FALSE,
-        env = c(callr::rcmd_safe_env(), R_ENVIRON_USER = app_environ_file(app_path)),
+        env = c(callr::rcmd_safe_env(), R_ENVIRON_USER = environ_file),
         # Passed on to processx: the directory the app's R session starts in
         wd = app_path,
         # Stop the app even if this R session dies without cleaning up
@@ -726,9 +875,12 @@ ProcessManager <- setRefClass("ProcessManager",
         }
       }
 
-      # Remove closed connections
+      # Remove closed connections. Their sockets' close handlers then find
+      # them gone, so the close is logged here, once.
       for (session_id in sessions_to_remove) {
-        config$remove_ws_connection(session_id)
+        if (isTRUE(config$remove_ws_connection(session_id))) {
+          logger::log_info("WebSocket connection closed for session {session_id}", session_id = session_id)
+        }
       }
     },
     cleanup_stale_connections = function() {
@@ -923,7 +1075,9 @@ ProcessManager <- setRefClass("ProcessManager",
       # each app's connection count
       client_session_ids <- names(config$get_all_ws_connections())
       for (session_id in client_session_ids) {
-        config$remove_ws_connection(session_id)
+        if (isTRUE(config$remove_ws_connection(session_id))) {
+          logger::log_info("WebSocket connection closed for session {session_id}", session_id = session_id)
+        }
       }
 
       # A process that is still tracked is still running

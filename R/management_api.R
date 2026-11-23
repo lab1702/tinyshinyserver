@@ -48,6 +48,10 @@ is_loopback_host_header <- function(host) {
   if (is.null(host) || identical(host, "")) {
     return(TRUE)
   }
+  # A loopback name is ASCII, and tolower() cannot read a value that is not UTF-8
+  if (!is_ascii(host)) {
+    return(FALSE)
+  }
   host <- tolower(trimws(host))
   host <- sub("^(\\[[^]]*\\]):[0-9]+$", "\\1", host)
   host <- sub("^([^:]+):[0-9]+$", "\\1", host)

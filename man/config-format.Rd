@@ -32,6 +32,7 @@ other values shown are the defaults.
   "restart_delay": 5,
   "health_check_interval": 10,
   "max_request_size_mb": 100,
+  "max_response_size_mb": 1024,
   "idle_timeout_minutes": 30,
   "log_level": "INFO"
 }
@@ -64,6 +65,7 @@ warning in \code{server.log} at startup and after a reload.
   \item{\code{restart_delay}}{Seconds to wait before restarting a failed app; a non-negative number of at most 86400, one day (default: 5). A resident app restarts then, and an on-demand app at the next request after that; an earlier request receives HTTP 503 with a \code{Retry-After} header. A restart requested from the management dashboard or API does not wait, and ends the wait of an on-demand app.}
   \item{\code{health_check_interval}}{Seconds between health checks, which find app processes that have exited; a positive number of at most 86400 (default: 10).}
   \item{\code{max_request_size_mb}}{Largest HTTP request body, in megabytes, that the proxy accepts; a positive finite number (default: 100). Larger bodies, and bodies sent with chunked transfer encoding, are rejected with HTTP 413 before they are read. Apps that raise \code{shiny.maxRequestSize} above this need a larger value.}
+  \item{\code{max_response_size_mb}}{Largest app response, in megabytes, that the proxy forwards; a positive finite number (default: 1024). The proxy stops receiving a larger response and answers HTTP 502.}
   \item{\code{idle_timeout_minutes}}{Minutes without a WebSocket message, in either direction, after which a session is closed and the browser shows the app as disconnected; a non-negative finite number (default: 30). \code{0} keeps idle sessions open. Idle sessions are checked every 5 minutes.}
   \item{\code{log_level}}{Least severe messages written to \code{server.log}: \code{"DEBUG"}, \code{"INFO"}, \code{"WARN"}, or \code{"ERROR"}, in any letter case (default: \code{"INFO"}). \code{"DEBUG"} also records the first 100 characters of every WebSocket message, which can include what users type.}
 }
@@ -120,7 +122,8 @@ Supported proxy hosts are:
   \item \code{"127.0.0.1"} or \code{"localhost"}: Localhost only (most secure)
   \item \code{"::1"}: IPv6 localhost
   \item \code{"0.0.0.0"}: All IPv4 interfaces (allows external access)
-  \item \code{"::"}: All IPv6 interfaces
+  \item \code{"::"}: All IPv6 interfaces, and on most systems all IPv4
+    interfaces too
 }
 
 To protect against DNS rebinding, the management server rejects requests

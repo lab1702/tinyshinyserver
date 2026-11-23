@@ -145,7 +145,11 @@ handle_apps_api <- function(config, process_manager = NULL) {
         app[intersect(c("name", "status", "resident", "connections"), names(app))]
       })
 
-      return(create_json_response(apps_status))
+      response <- create_json_response(apps_status)
+      # The proxy answers with and without the base_path prefix, so an open
+      # landing page learns from this that a reload has changed it
+      response$headers[["X-TinyShinyServer-Base-Path"]] <- config$config$base_path %||% ""
+      return(response)
     },
     error = function(e) {
       logger::log_error("Error getting app status: {error}", error = e$message)
@@ -188,23 +192,61 @@ parse_proxy_path <- function(path) {
   list(valid = TRUE, app_name = app_name, backend_path = substring(rest, nchar(app_name) + 1L))
 }
 
-# Start an on-demand app that a request or WebSocket has arrived for, unless it
-# is already running. FALSE when the app could not be started.
-# Whether a request names an R Markdown or Quarto document other than the one
-# that an R Markdown app serves. rmarkdown::run() renders, and so runs the code
-# of, any such document under the app directory whose path a page or its
-# WebSocket asks for, such as a partial whose name starts with "_" or a draft
-# in a subdirectory. rmarkdown decodes the path first.
-is_other_document_path <- function(document, backend_path) {
-  if (is.null(document) || !identical(document$type, "rmd")) {
+# Whether a request asks an R Markdown or Quarto app for a file other than
+# the document it serves. rmarkdown::run() serves both, and unless a document
+# is prerendered it renders, and so runs the code of, whatever file under the
+# app directory a WebSocket's path names: a partial whose name starts with
+# "_", a draft in a subdirectory, or an R script, which it spins into a
+# report. As rmarkdown does, the path is decoded before "/websocket/" is
+# removed, so that an encoded "%2Fwebsocket%2F" names the same file. Only the
+# document's own name is allowed; any other name of a document or R script is
+# refused, and so is a WebSocket for any other file, found with file.path()
+# as rmarkdown finds it, which on Windows also finds "/_child.Rmd/". Of HTTP
+# requests, rmarkdown answers those for a document's page; other files, such
+# as images, are not rendered and are served as usual.
+is_other_document_path <- function(document, backend_path, websocket = FALSE) {
+  if (is.null(document) || !document$type %in% c("rmd", "qmd")) {
     return(FALSE)
   }
-  path <- sub("/websocket/$", "", backend_path)
-  path <- tryCatch(utils::URLdecode(path), error = function(e) path)
-  grepl("\\.[rq]md$", path, ignore.case = TRUE) &&
-    !identical(tolower(path), tolower(paste0("/", basename(document$file))))
+  path <- tryCatch(utils::URLdecode(backend_path), error = function(e) backend_path)
+  # A decoded path that is not UTF-8 cannot be compared, and is refused
+  tryCatch({
+    if (websocket) path <- sub("/websocket/$", "", path)
+    if (path %in% c("", "/") || is_document_name(path, document$file)) {
+      return(FALSE)
+    }
+    if (grepl("\\.([rq]md|r)/*$", path, ignore.case = TRUE)) {
+      return(TRUE)
+    }
+    if (!websocket) {
+      return(FALSE)
+    }
+    # A path that names no file, or a directory, renders nothing
+    target <- file.path(dirname(document$file), path)
+    file.exists(target) && !dir.exists(target)
+  }, error = function(e) TRUE)
 }
 
+# Whether a request path, such as "/report.Rmd", names a document itself. A
+# name in another letter case names it on a file system that ignores case,
+# but on one that does not, it may name another file of the directory.
+is_document_name <- function(path, file) {
+  name <- sub("^/", "", path)
+  if (identical(name, basename(file))) {
+    return(TRUE)
+  }
+  identical(tolower(name), tolower(basename(file))) && !name %in% list.files(dirname(file), all.files = TRUE)
+}
+
+# The document that an app's latest process served, or that it would serve if
+# it started now, for an app that has not run
+served_document <- function(app_config, config) {
+  config$get_app_document(app_config$name) %||%
+    tryCatch(detect_app_type(normalizePath(app_config$path, mustWork = FALSE)), error = function(e) NULL)
+}
+
+# Start an on-demand app that a request or WebSocket has arrived for, unless it
+# is already running. FALSE when the app could not be started.
 ensure_on_demand_app_started <- function(app_config, config, process_manager, trigger) {
   app_name <- app_config$name
   if (app_config$resident || is.null(process_manager) || is_process_alive(config$get_app_process(app_name))) {
@@ -237,19 +279,28 @@ handle_proxy_request <- function(path, method, query_string, req, config, proces
     return(create_redirect_response(paste0(config$config$base_path, path, "/"), query_string))
   }
 
+  # Refused before an on-demand app starts, which nothing would then stop
+  if (is_other_document_path(served_document(app_config, config), route$backend_path)) {
+    return(create_error_response("Not Found", 404))
+  }
+
   if (!ensure_on_demand_app_started(app_config, config, process_manager, "HTTP request")) {
     # An app whose process just failed starts again after restart_delay
     backoff <- ceiling(config$start_backoff_seconds(app_name))
     if (backoff > 0) {
       return(as_starting_page(
         create_503_response(sprintf("App '%s' is restarting after a failure, please retry", app_name), backoff),
-        req, method, app_name, template_manager, backoff, app_config$appstart_timeout %||% 2
+        req, method, app_name, template_manager, backoff, app_config$appstart_timeout %||% 2,
+        delay_seconds = backoff
       ))
     }
     return(create_error_response("Failed to start app on demand", 502))
   }
 
+  # A start records the document anew, as the directory now holds it. An app
+  # started for nothing is checked for idleness, as after any request.
   if (is_other_document_path(config$get_app_document(app_name), route$backend_path)) {
+    (connection_manager %||% create_connection_manager(config, process_manager))$schedule_session_check(app_name)
     return(create_error_response("Not Found", 404))
   }
 
@@ -310,10 +361,12 @@ forwarded_request_headers <- function(req, skip = character()) {
   header_names <- toupper(sent_names)
   keys <- gsub("-", "_", header_names, fixed = TRUE)
   # The headers that the client's Connection header names belong to its
-  # connection to the proxy, as the fixed ones above do
+  # connection to the proxy, as the fixed ones above do. A name that is not
+  # ASCII names no header, and trimws() cannot read one that is not UTF-8.
   connection <- as.character(unlist(sent[tolower(sent_names) == "connection"], use.names = FALSE))
-  nominated <- toupper(trimws(unlist(strsplit(connection, ",", fixed = TRUE, useBytes = TRUE))))
-  nominated <- gsub("-", "_", nominated[is_ascii(nominated) & nominated != ""], fixed = TRUE)
+  nominated <- unlist(strsplit(connection, ",", fixed = TRUE, useBytes = TRUE))
+  nominated <- toupper(trimws(nominated[is_ascii(nominated)]))
+  nominated <- gsub("-", "_", nominated[nominated != ""], fixed = TRUE)
   # An app's own server reads "X_Forwarded_User" as X-Forwarded-User, in
   # place of the value a reverse proxy set, so no header whose name has an
   # underscore is passed on. Of headers sent twice, the last one is kept.
@@ -328,16 +381,17 @@ forwarded_request_headers <- function(req, skip = character()) {
 # The proxy's own answers that mean "try again shortly". A browser opening the
 # app's page cannot act on a JSON error or a Retry-After header, so it receives
 # a page that reloads itself, with the same status and headers; every other
-# client receives the JSON.
+# client receives the JSON. delay_seconds is how long the app waits before it
+# can start, after a failure; the page's own limit on its wait begins then.
 as_starting_page <- function(response, req, method, app_name, template_manager, retry_seconds,
-                             answer_seconds = 2) {
+                             answer_seconds = 2, delay_seconds = 0) {
   opens_page <- identical(method, "GET") &&
     grepl("text/html", request_header(req, "accept") %||% "", fixed = TRUE)
   if (is.null(template_manager) || !opens_page) {
     return(response)
   }
   page <- tryCatch(
-    template_manager$generate_starting_page(app_name, retry_seconds, answer_seconds),
+    template_manager$generate_starting_page(app_name, retry_seconds, answer_seconds, delay_seconds),
     error = function(e) {
       logger::log_error("Error generating the starting page: {error}", error = conditionMessage(e))
       NULL
@@ -467,7 +521,8 @@ forward_request <- function(method, target_url, req, app_name, config, template_
       if (!is.null(body)) {
         curl::handle_setopt(handle, postfields = body)
       }
-      promises::then(fetch_backend_async(target_url, handle), function(response) {
+      max_response_bytes <- (config$config$max_response_size_mb %||% DEFAULT_MAX_RESPONSE_SIZE_MB) * 1024^2
+      promises::then(fetch_backend_async(target_url, handle, max_response_bytes), function(response) {
         response_headers <- proxy_response_headers(
           response$headers, target_url, app_name, method, config$config$base_path %||% ""
         )
@@ -617,18 +672,36 @@ RESPONSE_SPOOL_BYTES <- 8 * 1024^2
 
 # Collects a response body from curl's data callback. finish() returns it in
 # a form httpuv sends: a raw vector, or a file that httpuv deletes once it has
-# been sent.
-response_body_collector <- function(limit = RESPONSE_SPOOL_BYTES) {
+# been sent. A body larger than max_bytes is not kept: exceeded() then
+# reports it, and the transfer is to be cancelled.
+response_body_collector <- function(limit = RESPONSE_SPOOL_BYTES, max_bytes = Inf) {
   chunks <- list()
   size <- 0
   path <- NULL
   writer <- NULL
+  too_large <- FALSE
+  discard <- function() {
+    chunks <<- list()
+    if (!is.null(writer)) {
+      writer(raw(), close = TRUE)
+      writer <<- NULL
+    }
+    if (!is.null(path)) {
+      unlink(path)
+      path <<- NULL
+    }
+  }
   list(
     write = function(data, final = FALSE) {
-      if (length(data) == 0) {
+      if (length(data) == 0 || too_large) {
         return(invisible(NULL))
       }
       size <<- size + length(data)
+      if (size > max_bytes) {
+        too_large <<- TRUE
+        discard()
+        return(invisible(NULL))
+      }
       if (is.null(writer) && size > limit) {
         # curl's writer holds no R connection, of which a session has few.
         # A cleaner of /tmp may have removed R's session directory on a
@@ -652,17 +725,19 @@ response_body_collector <- function(limit = RESPONSE_SPOOL_BYTES) {
       path <<- NULL
       spooled
     },
-    discard = function() {
-      chunks <<- list()
-      if (!is.null(writer)) {
-        writer(raw(), close = TRUE)
-        writer <<- NULL
-      }
-      if (!is.null(path)) {
-        unlink(path)
-        path <<- NULL
-      }
-    }
+    discard = discard,
+    exceeded = function() too_large
+  )
+}
+
+# The error of a transfer whose response was larger than the proxy keeps
+response_too_large_error <- function(max_bytes) {
+  structure(
+    class = c("backend_response_too_large", "simpleError", "error", "condition"),
+    list(message = sprintf(
+      "The app's response was larger than max_response_size_mb (%s MB) and was not forwarded",
+      format(max_bytes / 1024^2, scientific = FALSE)
+    ), call = NULL)
   )
 }
 
@@ -677,14 +752,21 @@ discard_response_body <- function(body) {
 # tick, which capped uploads at a few megabytes per second. Each transfer has
 # its own pool and fresh easy handle; neither cookies nor authentication state
 # can survive into another request. The response's `content` is what
-# response_body_collector() returns.
-fetch_backend_async <- function(url, handle) {
+# response_body_collector() returns. A response larger than max_bytes ends
+# the transfer: the proxy sends nothing before it has the whole response, so
+# an app that streams without end, or that the visitor has stopped waiting
+# for, would otherwise fill the disk and keep an on-demand app in use.
+fetch_backend_async <- function(url, handle, max_bytes = Inf) {
   promises::promise(function(resolve, reject) {
     pool <- curl::new_pool()
-    body <- response_body_collector()
+    body <- response_body_collector(max_bytes = max_bytes)
     curl::curl_fetch_multi(url, handle = handle, pool = pool,
       data = body$write,
       done = function(response) {
+        if (body$exceeded()) {
+          reject(response_too_large_error(max_bytes))
+          return()
+        }
         response$content <- body$finish()
         resolve(response)
       },
@@ -697,6 +779,11 @@ fetch_backend_async <- function(url, handle) {
     pump <- function(...) {
       tryCatch({
         result <- curl::multi_run(timeout = 0, pool = pool)
+        if (result$pending > 0 && body$exceeded()) {
+          curl::multi_cancel(handle)
+          reject(response_too_large_error(max_bytes))
+          return()
+        }
         if (result$pending > 0) {
           fds <- curl::multi_fdset(pool)
           # libcurl's timers (connect and stall timeouts) need a call even
@@ -767,6 +854,11 @@ is_same_origin_websocket <- function(req) {
   if (is.null(origin) || identical(origin, "")) {
     return(TRUE) # Non-browser clients do not send Origin
   }
+  # Browsers send host names in ASCII, and tolower() cannot read a value that
+  # is not UTF-8; other values below are ignored for the same reason
+  if (!is_ascii(origin)) {
+    return(FALSE)
+  }
   origin <- tolower(trimws(origin))
   match <- regmatches(origin, regexec("^(https?)://([^/]+)$", origin))[[1]]
   if (length(match) != 3) {
@@ -786,7 +878,7 @@ is_same_origin_websocket <- function(req) {
   # Browsers cannot set this header on a handshake, so it is not forged by a
   # page, and a client that sets it only makes the check stricter.
   forwarded_proto <- request_header(req, "x-forwarded-proto")
-  if (!is.null(forwarded_proto) && match[2] == "http" &&
+  if (!is.null(forwarded_proto) && is_ascii(forwarded_proto) && match[2] == "http" &&
       identical(tolower(trimws(strsplit(forwarded_proto, ",", fixed = TRUE)[[1]][1])), "https")) {
     return(FALSE)
   }
@@ -797,9 +889,10 @@ is_same_origin_websocket <- function(req) {
   forwarded_host <- request_header(req, "x-forwarded-host")
   if (!is.null(remote_addr) && remote_addr %in% c("127.0.0.1", "::1", "::ffff:127.0.0.1") &&
       !is.null(forwarded_host)) {
-    hosts <- c(hosts, strsplit(forwarded_host, ",")[[1]])
+    hosts <- c(hosts, strsplit(forwarded_host, ",", fixed = TRUE, useBytes = TRUE)[[1]])
   }
-  hosts <- hosts[!is.na(hosts) & trimws(hosts) != ""]
+  hosts <- hosts[!is.na(hosts) & is_ascii(hosts)]
+  hosts <- hosts[trimws(hosts) != ""]
   origin_authority %in% normalize(hosts, default_port)
 }
 
@@ -852,14 +945,23 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
     return()
   }
 
+  # Refused before an on-demand app starts, which nothing would then stop
+  if (is_other_document_path(served_document(app_config, config), route$backend_path, websocket = TRUE)) {
+    logger::log_warn("Rejecting WebSocket for a document that app {app_name} does not serve", app_name = app_name)
+    ws$close()
+    return()
+  }
+
   if (!ensure_on_demand_app_started(app_config, config, process_manager, "WebSocket connection")) {
     logger::log_error("Failed to start app {app_name} on demand for WebSocket", app_name = app_name)
     ws$close()
     return()
   }
 
-  if (is_other_document_path(config$get_app_document(app_name), route$backend_path)) {
+  # A start records the document anew, as the directory now holds it
+  if (is_other_document_path(config$get_app_document(app_name), route$backend_path, websocket = TRUE)) {
     logger::log_warn("Rejecting WebSocket for a document that app {app_name} does not serve", app_name = app_name)
+    connection_manager$schedule_session_check(app_name)
     ws$close()
     return()
   }

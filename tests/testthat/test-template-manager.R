@@ -346,7 +346,7 @@ test_that("serve_static_file sends a file's bytes unchanged", {
   writeBin(text, file.path(temp_dir, "styles", "exact.css"))
   result <- tm$serve_static_file("styles/exact.css")
   expect_identical(result$body, text)
-  expect_match(result$headers[["ETag"]], paste0('^"', length(text), "-"))
+  expect_match(result$headers[["ETag"]], paste0('^W/"', length(text), "-"))
 
   # Fonts and other binary files arrive intact, with their own types
   font <- as.raw(c(0x77, 0x4f, 0x46, 0x32, 0x00, 0x0a, 0xff, 0x0d))
@@ -366,14 +366,19 @@ test_that("serve_static_file lets browsers keep a file and answers 304 for an un
   tm <- TemplateManager$new(temp_dir)
   result <- tm$serve_static_file("styles/main.css")
   etag <- result$headers[["ETag"]]
-  expect_match(etag, "^\"[0-9]+-[0-9]+\"$")
+  # httpuv compresses the file for some clients and not others, so the tag
+  # is weak and caches keep the two encodings apart
+  expect_match(etag, "^W/\"[0-9]+-[0-9]+\"$")
   expect_equal(result$headers[["Cache-Control"]], "max-age=300")
+  expect_equal(result$headers[["Vary"]], "Accept-Encoding")
+  strong <- sub("^W/", "", etag)
 
   # A browser that holds this version is told so, in the forms the header takes
-  for (header in list(etag, paste0("W/", etag), paste0("\"other\", ", etag), "*")) {
+  for (header in list(etag, strong, paste0("\"other\", ", etag), paste0("\"other\", ", strong), "*")) {
     unchanged <- tm$serve_static_file("styles/main.css", header)
     expect_equal(unchanged$status, 304)
     expect_equal(unchanged$headers[["ETag"]], etag)
+    expect_equal(unchanged$headers[["Vary"]], "Accept-Encoding")
     # httpuv would send an empty body compressed, which may not follow a 304
     expect_null(unchanged$body)
   }
@@ -530,4 +535,26 @@ test_that("landing and management pages show the configured title escaped", {
   expect_match(management, paste0("<title>Management - ", expected, "</title>"), fixed = TRUE)
   expect_match(management, paste0('<span class="brand-name">', expected, "</span>"), fixed = TRUE)
   expect_no_match(management, "{{title}}", fixed = TRUE)
+})
+
+test_that("the starting page counts its two minutes from the end of an app's restart delay", {
+  tm <- create_template_manager()
+  starting <- tm$generate_starting_page("sales")
+  expect_match(starting, "var delayMs = 0 * 1000;", fixed = TRUE)
+  expect_match(starting, "This application is starting.", fixed = TRUE)
+
+  waiting <- tm$generate_starting_page("sales", retry_seconds = 250, delay_seconds = 250)
+  expect_match(waiting, "var delayMs = 250 * 1000;", fixed = TRUE)
+  expect_match(waiting, "wait = { first: now + delayMs };", fixed = TRUE)
+  expect_match(waiting, "stopped after a failure", fixed = TRUE)
+  expect_false(grepl("{{", waiting, fixed = TRUE))
+})
+
+test_that("the landing page reloads for a new base_path at most once a minute", {
+  html <- create_template_manager(base_url = "/shiny")$generate_landing_page(list(config = list(apps = list())))
+  expect_match(html, "X-TinyShinyServer-Base-Path", fixed = TRUE)
+  expect_match(html, "Date.now() - last < 60000", fixed = TRUE)
+  # It reloads for a new address, through the guard, and for a changed list of apps
+  expect_equal(lengths(regmatches(html, gregexpr("location.reload()", html, fixed = TRUE))), 2)
+  expect_match(html, "reloadForNewAddress()", fixed = TRUE)
 })

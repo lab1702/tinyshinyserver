@@ -77,6 +77,27 @@
       if (actionElement) actionElement.textContent = action;
     }
 
+    // A configuration reload can change base_path, and the page is then
+    // reloaded from the server, which renders it for its current address.
+    // Once only: a page whose status address does not answer for another
+    // reason, such as a reverse proxy that does not pass it on, would
+    // otherwise reload without end. Without storage it is not reloaded.
+    function reloadForNewAddress() {
+      const key = "tss-landing-reloaded:" + window.location.pathname;
+      try {
+        const last = Number(window.sessionStorage.getItem(key));
+        if (last && Date.now() - last < 60000) {
+          return false;
+        }
+        window.sessionStorage.setItem(key, String(Date.now()));
+      } catch (e) {
+        return false;
+      }
+      clearInterval(refreshInterval);
+      location.reload();
+      return true;
+    }
+
     function updateAppStatus() {
       // Create abort controller for timeout
       const controller = new AbortController();
@@ -91,11 +112,15 @@
         signal: controller.signal
       })
         .then(response => {
-          // The server answers, but not at this page's address: a
-          // configuration reload changed base_path, so the page is reloaded
-          // from the server, which renders it for its current address
-          if (response.status === 404) {
-            return null;
+          // The server answers, but not at this page's address, or for
+          // another address than the page's links use: a configuration
+          // reload changed base_path. The proxy also answers without the
+          // prefix, so the header tells a new prefix apart.
+          const servedBase = response.headers.get("X-TinyShinyServer-Base-Path");
+          if (response.status === 404 || (response.ok && servedBase !== null && servedBase !== baseUrl)) {
+            if (reloadForNewAddress()) {
+              return null;
+            }
           }
           if (!response.ok) {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -106,8 +131,6 @@
           clearTimeout(timeoutId);
 
           if (data === null) {
-            clearInterval(refreshInterval);
-            location.reload();
             return;
           }
 

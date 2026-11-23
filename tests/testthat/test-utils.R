@@ -416,3 +416,51 @@ test_that("the configured log level reaches the server log", {
   config$add_ws_connection("detailed", list(app_name = "app"))
   expect_length(debug_lines(), 1)
 })
+
+test_that("get_client_ip takes forwarded addresses only when they are IP addresses", {
+  from_proxy <- function(headers) httpuv_request(headers, REMOTE_ADDR = "127.0.0.1")
+  expect_equal(get_client_ip(from_proxy(list("x-forwarded-for" = "198.51.100.7, 203.0.113.9"))), "203.0.113.9")
+  expect_equal(get_client_ip(from_proxy(list("x-forwarded-for" = "[2001:db8::1]:443"))), "[2001:db8::1]:443")
+  expect_equal(get_client_ip(from_proxy(list("x-real-ip" = " 2001:db8::2 "))), "2001:db8::2")
+  # Text that would be written to the log as it is, such as escape codes
+  # that move a terminal's cursor, is not an address
+  forged <- "\033[1A\033[2KINFO [2026-01-01 00:00:00] forged line"
+  expect_equal(get_client_ip(from_proxy(list("x-real-ip" = forged))), "127.0.0.1")
+  expect_equal(get_client_ip(from_proxy(list("x-forwarded-for" = "unknown", "x-real-ip" = "192.0.2.4"))), "192.0.2.4")
+  expect_equal(get_client_ip(from_proxy(list("x-forwarded-for" = "caf\xe9"))), "127.0.0.1")
+  expect_null(as_ip_address(NULL))
+  expect_null(as_ip_address(strrep("1", 100)))
+})
+
+test_that("absolute_path makes a path absolute without resolving it", {
+  expect_equal(absolute_path("config.json"), file.path(getwd(), "config.json"))
+  expect_equal(absolute_path("/etc/tss/config.json"), "/etc/tss/config.json")
+  expect_equal(absolute_path("C:/tss/config.json"), "C:/tss/config.json")
+  expect_equal(absolute_path("\\\\server\\share\\config.json"), "\\\\server\\share\\config.json")
+  expect_equal(absolute_path("~/config.json"), path.expand("~/config.json"))
+})
+
+test_that("loopback_port_accepts finds a program that listens on a port", {
+  backend <- start_test_http_server(function(req) handle_health_check())
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  expect_true(loopback_port_accepts(backend$port))
+})
+
+test_that("is_port_in_use also asks, where an app could share it, whether a port accepts connections", {
+  backend <- start_test_http_server(function(req) handle_health_check())
+  port <- backend$port
+  stop_test_http_server(backend)
+  asked <- 0
+  local_mocked_bindings(loopback_port_accepts = function(port, ...) {
+    asked <<- asked + 1
+    TRUE
+  })
+  # On Linux, a program that listens on every interface keeps an app from
+  # listening on the port, which the first check finds
+  linux <- identical(Sys.info()[["sysname"]], "Linux")
+  expect_equal(is_port_in_use("127.0.0.1", port), !linux)
+  expect_equal(asked, if (linux) 0 else 1)
+  # Only the loopback address that apps use is asked about
+  is_port_in_use("::1", port)
+  expect_equal(asked, if (linux) 0 else 1)
+})

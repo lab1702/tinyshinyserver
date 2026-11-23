@@ -419,3 +419,56 @@ test_that("read_reload_config reports apps that share a rendered document", {
   expect_false(check$valid)
   expect_match(check$error, "Apps one and two serve the same document, dash.qmd", fixed = TRUE)
 })
+
+test_that("an app that a reload cannot stop keeps the state of its process", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  write_reload_config(path, list(
+    list(name = "stuck", path = "/tmp", resident = TRUE),
+    list(name = "other", path = "/tmp", resident = TRUE)
+  ))
+  test <- reload_test_server(path)
+  config <- test$server$config
+  config$add_app_process("stuck", list(is_alive = function() TRUE))
+  document <- list(type = "rmd", file = "/tmp/report.Rmd")
+  config$set_app_document("stuck", document)
+  config$set_app_document("other", list(type = "shiny"))
+  config$note_start_failure("other")
+
+  write_reload_config(path, list(list(name = "new", path = "/tmp", resident = TRUE)))
+  expect_false(test$server$reload()$valid)
+  # Without its document, the app would serve its other documents
+  expect_identical(config$get_app_document("stuck"), document)
+  expect_true(is_other_document_path(config$get_app_document("stuck"), "/_draft.Rmd"))
+  # The apps that stopped are forgotten as before
+  expect_null(config$get_app_document("other"))
+  expect_equal(config$start_backoff_seconds("other"), 0)
+})
+
+test_that("a reload that changes health_check_interval applies it at once", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  write_reload_config(path, list(list(name = "app", path = "/tmp")), health_check_interval = 86400)
+  test <- reload_test_server(path)
+  timers <- list()
+  local_mocked_bindings(later = function(func, delay = 0, ...) {
+    timer <- new.env()
+    timer$delay <- delay
+    timer$cancelled <- FALSE
+    timers[[length(timers) + 1]] <<- timer
+    function() timer$cancelled <- TRUE
+  }, .package = "later")
+  test$server$start_monitoring_services()
+  first <- Filter(function(timer) timer$delay == 5, timers)
+  expect_length(first, 1)
+
+  write_reload_config(path, list(list(name = "app", path = "/tmp")), health_check_interval = 10)
+  expect_true(test$server$reload()$valid)
+  expect_true(first[[1]]$cancelled)
+  expect_equal(timers[[length(timers)]]$delay, 10)
+
+  # An unchanged interval leaves the pending check alone
+  count <- length(timers)
+  expect_true(test$server$reload()$valid)
+  expect_length(timers, count)
+})

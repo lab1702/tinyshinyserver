@@ -12,7 +12,7 @@
   <main class="container">
     <div class="header">
       <h1>{{app_name}}</h1>
-      <p id="startStatus" role="status">This application is starting.</p>
+      <p id="startStatus" role="status">{{status}}</p>
     </div>
     <div class="info">
       <p>
@@ -31,6 +31,11 @@
       // it answers, plus time for the network
       var answerMs = {{answer_seconds}} * 1000 + 10000;
       var giveUpMs = 120000;
+      // How long an app that failed waits before it can start again. The
+      // limit above counts from the end of that wait, at which the reload
+      // starts the app; a wait that the app's failure begins later, while
+      // the page reloads, counts toward the limit.
+      var delayMs = {{delay_seconds}} * 1000;
       var key = "tss-starting:" + window.location.pathname;
       var now = Date.now();
       var wait = null;
@@ -53,7 +58,7 @@
       var reloaded = wait && typeof wait.reloadedAt === "number" &&
         now >= wait.reloadedAt && now - wait.reloadedAt <= answerMs;
       if (!reloaded) {
-        wait = { first: now };
+        wait = { first: now + delayMs };
       }
       delete wait.reloadedAt;
 

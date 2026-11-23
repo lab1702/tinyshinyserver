@@ -89,6 +89,18 @@ request_header <- function(req, name) {
   if (length(value) == 0) NULL else value[[1]]
 }
 
+# A forwarded client address as an IPv4 or IPv6 address, possibly in
+# brackets or with a port, or NULL for any other value
+as_ip_address <- function(value) {
+  if (is.null(value) || length(value) != 1 || is.na(value) || !is_ascii(value)) {
+    return(NULL)
+  }
+  value <- trimws(value)
+  ipv4 <- "^([0-9]{1,3}\\.){3}[0-9]{1,3}(:[0-9]{1,5})?$"
+  ipv6 <- "^\\[?[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*(%[0-9A-Za-z._-]+)?\\]?(:[0-9]{1,5})?$"
+  if (nchar(value) <= 64 && (grepl(ipv4, value) || grepl(ipv6, value))) value else NULL
+}
+
 # Helper functions for connection tracking
 get_client_ip <- function(req) {
   "Extract client IP address from request headers"
@@ -97,21 +109,23 @@ get_client_ip <- function(req) {
   has_remote_addr <- !is.null(remote_addr) && remote_addr != ""
 
   # Forwarding headers are client-controlled, so trust them only when the
-  # request arrives from a reverse proxy on this machine
+  # request arrives from a reverse proxy on this machine, and only for a
+  # value that is an IP address: the address is shown on the dashboard and
+  # written to the log, where other text could forge a line
   if (has_remote_addr && remote_addr %in% c("127.0.0.1", "::1", "::ffff:127.0.0.1")) {
     forwarded_for <- request_header(req, "x-forwarded-for")
     if (!is.null(forwarded_for) && forwarded_for != "") {
       # The last entry is the one added by the proxy itself
-      ips <- trimws(strsplit(forwarded_for, ",")[[1]])
-      ips <- ips[ips != ""]
-      if (length(ips) > 0) {
-        return(ips[length(ips)])
+      ips <- strsplit(forwarded_for, ",", fixed = TRUE, useBytes = TRUE)[[1]]
+      ip <- if (length(ips) > 0) as_ip_address(ips[length(ips)]) else NULL
+      if (!is.null(ip)) {
+        return(ip)
       }
     }
 
-    real_ip <- request_header(req, "x-real-ip")
-    if (!is.null(real_ip) && real_ip != "") {
-      return(trimws(real_ip))
+    real_ip <- as_ip_address(request_header(req, "x-real-ip"))
+    if (!is.null(real_ip)) {
+      return(real_ip)
     }
   }
 
@@ -191,6 +205,16 @@ check_log_dir <- function(log_dir) {
   )
 
   if (writable) NULL else paste("Cannot write the server log to", log_file)
+}
+
+# A path as an absolute path, without resolving links as normalizePath()
+# does. It need not exist.
+absolute_path <- function(path) {
+  path <- path.expand(path)
+  if (!grepl("^([A-Za-z]:)?[/\\\\]", path)) {
+    path <- file.path(getwd(), path)
+  }
+  path
 }
 
 # Process management helpers
@@ -372,12 +396,34 @@ is_port_in_use <- function(host, port) {
   # Listen on the port briefly, as an app will. Connecting to it instead
   # waits about a second for each free port on Windows, where a refused
   # loopback connection is retried, which held up startup and every reload.
-  tryCatch(
+  in_use <- tryCatch(
     {
       server <- httpuv::startServer(host, port, list(), quiet = TRUE)
       httpuv::stopServer(server)
       FALSE
     },
     error = function(e) TRUE
+  )
+  # On Windows and macOS, a program that listens on every interface does not
+  # keep an app from listening on 127.0.0.1 at the same port, and would then
+  # lose its loopback connections to the app. Such a program accepts a
+  # connection at once, so the wait for a free port is kept short. On Linux,
+  # it keeps the app from listening, which the check above finds.
+  if (!in_use && identical(host, "127.0.0.1") && !identical(Sys.info()[["sysname"]], "Linux")) {
+    in_use <- loopback_port_accepts(port)
+  }
+  in_use
+}
+
+# Whether something accepts a TCP connection on 127.0.0.1 at a port within
+# timeout_ms milliseconds
+loopback_port_accepts <- function(port, timeout_ms = 100) {
+  handle <- new_backend_handle(connect_only = TRUE, forbid_reuse = TRUE, connecttimeout_ms = timeout_ms)
+  tryCatch(
+    {
+      curl::curl_fetch_memory(paste0("http://127.0.0.1:", port, "/"), handle = handle)
+      TRUE
+    },
+    error = function(e) FALSE
   )
 }

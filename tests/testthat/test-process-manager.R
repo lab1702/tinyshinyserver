@@ -1566,10 +1566,13 @@ test_that("start_app leaves the Quarto render decision to the app's own process"
   config$config <- list(apps = list(list(name = "app", path = app_dir, port = 1, resident = TRUE)),
     log_dir = tempdir())
   launched <- NULL
+  options <- NULL
   local_mocked_bindings(r_bg = function(func, args, ...) {
     launched <<- args
+    options <<- list(...)
     list(is_alive = function() TRUE)
   }, .package = "callr")
+  local_mocked_bindings(quarto_path = function(...) "/opt/quarto/bin/quarto", .package = "quarto")
   pm <- ProcessManager$new(config)
   start <- function() {
     pm$start_app(config$config$apps[[1]])
@@ -1588,8 +1591,26 @@ test_that("start_app leaves the Quarto render decision to the app's own process"
   expect_equal(checks, 0)
   expect_equal(launched$type, "qmd")
   expect_equal(basename(launched$file), "doc.qmd")
-  # The app's process need not load this package to run the check
-  expect_identical(environment(launched$needs_render), baseenv())
+  # The app's process need not load this package to run the check, render
+  # the document, or set its library paths
+  for (helper in c("needs_render", "render_document", "environ_libraries", "profile_file")) {
+    expect_identical(environment(launched[[helper]]), baseenv(), info = helper)
+  }
+  # It renders with the Quarto CLI that this session finds, and records the
+  # render in log_dir
+  expect_equal(launched$quarto_bin, "/opt/quarto/bin/quarto")
+  expect_equal(basename(launched$state_file), "app_render.rds")
+  # Without its own .Renviron, the app keeps this session's library paths,
+  # whatever ~/.Renviron sets
+  expect_equal(launched$library_file, "")
+  writeLines("", file.path(app_dir, ".Renviron"))
+  withCallingHandlers(start(), warning = function(w) invokeRestart("muffleWarning"))
+  if (is.na(Sys.getenv("R_ENVIRON_USER", unset = NA))) {
+    expect_equal(launched$library_file, file.path(normalizePath(app_dir), ".Renviron"))
+  }
+  # The site profile runs in apps, as at R's startup
+  expect_true(options$system_profile)
+  expect_false(options$user_profile)
 })
 
 test_that("an app's own process can decide whether its Quarto document needs rendering", {
@@ -2331,4 +2352,223 @@ test_that("stale backends also close fresh client sockets", {
   expect_equal(closed, 1)
   expect_null(config$get_ws_connection("s"))
   expect_null(config$get_backend_connection("s"))
+})
+
+# ============================================================================
+# Records of Quarto renders
+# ============================================================================
+
+# An app directory with a document, a data file, and a page rendered after them
+rendered_quarto_app <- function() {
+  app_dir <- tempfile("tss-qmd-state")
+  dir.create(file.path(app_dir, "data"), recursive = TRUE)
+  qmd <- file.path(app_dir, "doc.qmd")
+  for (file in c(qmd, file.path(app_dir, "data", "a.csv"), file.path(app_dir, "doc.html"))) writeLines("x", file)
+  Sys.setFileTime(qmd, Sys.time() - 300)
+  Sys.setFileTime(file.path(app_dir, "data", "a.csv"), Sys.time() - 300)
+  Sys.setFileTime(file.path(app_dir, "doc.html"), Sys.time() - 200)
+  app_dir
+}
+
+# Record a finished render of the document, as render_quarto_document() does
+record_quarto_render <- function(qmd, state_file, log_dir = NULL) {
+  check <- quarto_needs_render(qmd, log_dir, state_file)
+  page <- file.info(sub("\\.qmd$", ".html", qmd))
+  saveRDS(list(document = qmd, status = "rendered", sources = attr(check, "sources"),
+    page = list(mtime = as.numeric(page$mtime), size = as.numeric(page$size))), state_file)
+}
+
+test_that("a render that did not finish makes a Quarto page stale", {
+  app_dir <- rendered_quarto_app()
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  qmd <- file.path(app_dir, "doc.qmd")
+  state_file <- tempfile(fileext = ".rds")
+  on.exit(unlink(state_file), add = TRUE)
+
+  # Without a record, a page newer than the sources is current
+  expect_false(quarto_needs_render(qmd, NULL, state_file))
+  # A render stopped part-way leaves an incomplete page, newer than the sources
+  saveRDS(list(document = qmd, status = "rendering"), state_file)
+  expect_true(quarto_needs_render(qmd, NULL, state_file))
+  record_quarto_render(qmd, state_file)
+  expect_false(quarto_needs_render(qmd, NULL, state_file))
+  # A record of another document says nothing about this one
+  saveRDS(list(document = file.path(app_dir, "other.qmd"), status = "rendering"), state_file)
+  expect_false(quarto_needs_render(qmd, NULL, state_file))
+})
+
+test_that("a recorded render notices sources that are older, removed, or added", {
+  app_dir <- rendered_quarto_app()
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  qmd <- file.path(app_dir, "doc.qmd")
+  data <- file.path(app_dir, "data", "a.csv")
+  state_file <- tempfile(fileext = ".rds")
+  on.exit(unlink(state_file), add = TRUE)
+  record_quarto_render(qmd, state_file)
+
+  # A copy that keeps an older modification time, as Copy-Item and cp -p do
+  Sys.setFileTime(data, Sys.time() - 3000)
+  expect_true(quarto_needs_render(qmd, NULL, state_file))
+  # Without the record, the page seems current
+  expect_false(quarto_needs_render(qmd))
+  record_quarto_render(qmd, state_file)
+  expect_false(quarto_needs_render(qmd, NULL, state_file))
+
+  unlink(data)
+  expect_true(quarto_needs_render(qmd, NULL, state_file))
+  record_quarto_render(qmd, state_file)
+
+  writeLines("x", file.path(app_dir, "data", "b.csv"))
+  Sys.setFileTime(file.path(app_dir, "data", "b.csv"), Sys.time() - 3000)
+  expect_true(quarto_needs_render(qmd, NULL, state_file))
+  record_quarto_render(qmd, state_file)
+
+  # A page replaced since the render, such as one rendered elsewhere and
+  # deployed, is judged as a page that the server did not render
+  writeLines("other page", file.path(app_dir, "doc.html"))
+  expect_false(quarto_needs_render(qmd, NULL, state_file))
+  Sys.setFileTime(file.path(app_dir, "doc.html"), Sys.time() - 6000)
+  expect_true(quarto_needs_render(qmd, NULL, state_file))
+})
+
+test_that("what a Quarto render writes beside its page is not a source", {
+  app_dir <- rendered_quarto_app()
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  qmd <- file.path(app_dir, "doc.qmd")
+  state_file <- tempfile(fileext = ".rds")
+  on.exit(unlink(state_file), add = TRUE)
+  record_quarto_render(qmd, state_file)
+  # The data of "context: data" chunks and the knitr cache, written by each render
+  for (name in c("doc_data/chunk.RData", "doc_cache/html/x.rdb", "doc_files/libs/a.js")) {
+    dir.create(dirname(file.path(app_dir, name)), recursive = TRUE, showWarnings = FALSE)
+    writeLines("x", file.path(app_dir, name))
+  }
+  expect_false(quarto_needs_render(qmd, NULL, state_file))
+  expect_false(quarto_needs_render(qmd))
+})
+
+test_that("the record of a render in an app directory's log_dir is not a source", {
+  app_dir <- rendered_quarto_app()
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  qmd <- file.path(app_dir, "doc.qmd")
+  log_dir <- file.path(app_dir, "logs")
+  dir.create(log_dir)
+  state_file <- file.path(log_dir, "app_render.rds")
+  record_quarto_render(qmd, state_file, log_dir)
+  sources <- attr(quarto_needs_render(qmd, log_dir, state_file), "sources")$files
+  expect_false("logs/app_render.rds" %in% sources)
+  expect_false(quarto_needs_render(qmd, log_dir, state_file))
+  # Another app's record there is the server's too, but other files are not
+  writeLines("", file.path(log_dir, "other_render.rds"))
+  expect_false(quarto_needs_render(qmd, log_dir, state_file))
+  writeLines("", file.path(log_dir, "notes.rds"))
+  expect_true(quarto_needs_render(qmd, log_dir, state_file))
+})
+
+test_that("render_quarto_document records a render that fails as unfinished", {
+  app_dir <- rendered_quarto_app()
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  qmd <- file.path(app_dir, "doc.qmd")
+  state_file <- tempfile(fileext = ".rds")
+  on.exit(unlink(state_file), add = TRUE)
+  saved <- Sys.getenv(c("QUARTO_PATH", "PATH"), unset = NA)
+  on.exit(for (name in names(saved)) {
+    if (is.na(saved[[name]])) Sys.unsetenv(name) else do.call(Sys.setenv, structure(list(saved[[name]]), names = name))
+  }, add = TRUE)
+  Sys.unsetenv("QUARTO_PATH")
+  Sys.setenv(PATH = "")
+  expect_error(render_quarto_document(qmd, list(), state_file, ""), "Quarto CLI was not found")
+  Sys.setenv(PATH = saved[["PATH"]])
+
+  # A program that exits with an error stands in for the CLI. The app's own
+  # QUARTO_PATH is used before the CLI that the server found.
+  failing <- file.path(R.home("bin"), if (.Platform$OS.type == "windows") "Rscript.exe" else "Rscript")
+  Sys.setenv(QUARTO_PATH = failing)
+  expect_error(suppressWarnings(render_quarto_document(qmd, list(), state_file, "/no/such/quarto")),
+    "failed with exit status")
+  expect_equal(readRDS(state_file)$status, "rendering")
+  expect_true(quarto_needs_render(qmd, NULL, state_file))
+})
+
+test_that("an app's own process renders its Quarto document and records the render", {
+  skip_on_cran() # Starts an R process and the Quarto CLI
+  quarto_bin <- quarto::quarto_path()
+  skip_if(is.null(quarto_bin), "The Quarto CLI is not installed")
+  app_dir <- tempfile("tss-qmd-render")
+  dir.create(app_dir)
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  qmd <- file.path(app_dir, "doc.qmd")
+  writeLines(c("---", "title: Test", "---", "", "Some text."), qmd)
+  state_file <- file.path(app_dir, ".render.rds")
+  needs_render <- quarto_needs_render
+  environment(needs_render) <- baseenv()
+  render_document <- render_quarto_document
+  environment(render_document) <- baseenv()
+  in_app_process <- function() {
+    callr::r(function(needs_render, render_document, file, state_file, quarto_bin) {
+      render <- needs_render(file, NULL, state_file)
+      if (render) render_document(file, attr(render, "sources"), state_file, quarto_bin)
+      as.logical(render)
+    }, args = list(needs_render = needs_render, render_document = render_document, file = qmd,
+      state_file = state_file, quarto_bin = quarto_bin))
+  }
+  expect_true(in_app_process())
+  expect_true(file.exists(file.path(app_dir, "doc.html")))
+  expect_equal(readRDS(state_file)$status, "rendered")
+  expect_false(in_app_process())
+})
+
+test_that("an app's environment file sets its library paths, and only them, again", {
+  skip_on_cran() # Starts an R process
+  app_dir <- tempfile("tss-libs")
+  dir.create(file.path(app_dir, "lib"), recursive = TRUE)
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  environ <- file.path(app_dir, ".Renviron")
+  lib <- normalizePath(file.path(app_dir, "lib"), winslash = "/")
+  writeLines(c(paste0("R_LIBS_USER=", lib), "TSS_TEST_GROWS=${TSS_TEST_GROWS}x", "TSS_TEST_SET=app"), environ)
+  libraries <- apply_environ_libraries
+  environment(libraries) <- baseenv()
+  result <- callr::r(function(libraries, environ) {
+    # As callr leaves them once the app's process has started
+    Sys.setenv(TSS_TEST_GROWS = "a", R_LIBS_USER = "elsewhere")
+    Sys.unsetenv("TSS_TEST_SET")
+    applied <- libraries(environ)
+    list(applied = applied, paths = .libPaths(), grows = Sys.getenv("TSS_TEST_GROWS"),
+      set = Sys.getenv("TSS_TEST_SET", unset = NA), user = Sys.getenv("R_LIBS_USER"))
+  }, args = list(libraries = libraries, environ = environ))
+  expect_true(result$applied)
+  # After any that R_LIBS names, as at R's startup
+  expect_true(lib %in% result$paths)
+  expect_equal(result$user, lib)
+  # Other variables keep the values that R gave them at startup
+  expect_equal(result$grows, "a")
+  expect_true(is.na(result$set))
+
+  # A file that sets no library variable changes nothing
+  writeLines("TSS_TEST_SET=app", environ)
+  unchanged <- callr::r(function(libraries, environ) {
+    before <- .libPaths()
+    list(applied = libraries(environ), same = identical(before, .libPaths()))
+  }, args = list(libraries = libraries, environ = environ))
+  expect_false(unchanged$applied)
+  expect_true(unchanged$same)
+  expect_false(apply_environ_libraries(nullfile()))
+})
+
+test_that("closing an app's sessions from the process manager records each close once", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", port = 1, resident = TRUE)))
+  pm <- ProcessManager$new(config)
+  for (id in c("s1", "s2")) {
+    config$add_ws_connection(id, list(app_name = "app", ws = list(close = function() NULL)))
+  }
+  logged <- capture_test_log(pm$cleanup_app_connections("app"))
+  expect_equal(sum(grepl("WebSocket connection closed for session s[12]", logged)), 2)
+  # The sockets' own close handlers then find nothing to record
+  cm <- ConnectionManager$new(config, pm)
+  expect_length(grep("closed for session", capture_test_log(cm$remove_client_connection("s1"))), 0)
+
+  config$add_ws_connection("s3", list(app_name = "app", ws = list(close = function() NULL)))
+  logged <- capture_test_log(pm$stop_all_apps())
+  expect_equal(sum(grepl("WebSocket connection closed for session s3", logged)), 1)
 })

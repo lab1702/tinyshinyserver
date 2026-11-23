@@ -363,3 +363,45 @@ test_that("a message for a session without an app socket is refused", {
   expect_false(cm$handle_client_message("s", "{}", "app"))
   expect_length(config$get_all_backend_connections(), 0)
 })
+
+test_that("an R Markdown app's socket is refused for any other file, however the path is spelled", {
+  app_dir <- tempfile("tss-rmd")
+  dir.create(file.path(app_dir, "drafts"), recursive = TRUE)
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  for (name in c("report.Rmd", "_child.Rmd", "helper.R", "notes.txt", "drafts/x.Rmd")) {
+    writeLines("", file.path(app_dir, name))
+  }
+  document <- list(type = "rmd", file = file.path(app_dir, "report.Rmd"))
+  # rmarkdown decodes the path before it removes "/websocket/"
+  for (path in c("/_child.Rmd%2Fwebsocket%2F", "/_child.Rmd/websocket%2F", "/%5Fchild.Rmd/websocket/",
+                 "/_child.Rmd/", "/_child.Rmd//websocket/", "/helper.R/websocket/", "/notes.txt/websocket/",
+                 "/drafts%2Fx.Rmd/websocket/", "/missing.Rmd/websocket/")) {
+    expect_true(is_other_document_path(document, path, websocket = TRUE), info = path)
+  }
+  # The document's own socket, and paths that name no file or a directory
+  for (path in c("/websocket/", "/report.Rmd/websocket/", "/autoreload/", "/drafts/websocket/", "")) {
+    expect_false(is_other_document_path(document, path, websocket = TRUE), info = path)
+  }
+})
+
+test_that("a socket for another document does not start a dormant R Markdown app", {
+  app_dir <- tempfile("tss-rmd")
+  dir.create(app_dir)
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  writeLines(c("---", "runtime: shiny", "---"), file.path(app_dir, "report.Rmd"))
+  writeLines("", file.path(app_dir, "_child.Rmd"))
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "reports", path = app_dir, port = 1, resident = FALSE)))
+  starts <- 0
+  pm <- list(start_app_on_demand = function(app_name) {
+    starts <<- starts + 1
+    FALSE
+  })
+  closed <- 0
+  handle_websocket_connection(list(
+    request = list(PATH_INFO = "/proxy/reports/_child.Rmd%2Fwebsocket%2F", HTTP_HOST = "localhost"),
+    close = function() closed <<- closed + 1
+  ), config, ConnectionManager$new(config, pm), pm)
+  expect_equal(closed, 1)
+  expect_equal(starts, 0)
+})

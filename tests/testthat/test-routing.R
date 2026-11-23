@@ -705,7 +705,7 @@ test_that("an app that answers after its startup timed out is served without the
   config$set_app_start_timed_out("app")
   local_mocked_bindings(
     process_owns_port = function(process, port) TRUE,
-    fetch_backend_async = function(url, handle) promises::promise_resolve(list(
+    fetch_backend_async = function(url, handle, ...) promises::promise_resolve(list(
       status_code = 200L, headers = charToRaw("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n"),
       content = charToRaw("ready")
     ))
@@ -845,7 +845,7 @@ test_that("forward_request honors each app's startup grace period", {
         promises::promise_resolve(TRUE)
       },
       process_owns_port = function(process, port) TRUE,
-      fetch_backend_async = function(url, handle) promises::promise_resolve(list(
+      fetch_backend_async = function(url, handle, ...) promises::promise_resolve(list(
         status_code = 200L, headers = charToRaw("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n"),
         content = charToRaw("ready")
       )),
@@ -927,4 +927,103 @@ test_that("a loopback proxy rejects rebound Host names", {
   config$config$proxy_host <- "0.0.0.0"
   req <- list(PATH_INFO = "/health", REQUEST_METHOD = "GET", HTTP_HOST = "server.internal:3838")
   expect_equal(handle_http_request(req, config, NULL, NULL, pm)$status, 200)
+})
+
+test_that("an R Markdown app refuses other documents and R scripts however the path is spelled", {
+  document <- list(type = "rmd", file = file.path(tempdir(), "report.Rmd"))
+  for (path in c("/_partial.Rmd", "/helper.R", "/drafts/notes.Rmd/", "/%5Fpartial.Rmd", "/./report.Rmd")) {
+    expect_true(is_other_document_path(document, path), info = path)
+  }
+  for (path in c("/", "", "/report.Rmd", "/REPORT.rmd", "/report_files/figure.png", "/data.csv", "/websocket/")) {
+    expect_false(is_other_document_path(document, path), info = path)
+  }
+  # rmarkdown::run() serves Quarto documents too, and renders other files
+  # for them in the same way unless they are prerendered
+  quarto <- list(type = "qmd", file = file.path(tempdir(), "dash.qmd"))
+  expect_true(is_other_document_path(quarto, "/helper.R/websocket/", websocket = TRUE))
+  expect_true(is_other_document_path(quarto, "/_other.qmd"))
+  expect_false(is_other_document_path(quarto, "/websocket/", websocket = TRUE))
+  expect_false(is_other_document_path(quarto, "/dash_files/libs/app.js"))
+  # Shiny apps serve such files as they are
+  expect_false(is_other_document_path(list(type = "shiny"), "/helper.R"))
+  expect_false(is_other_document_path(NULL, "/helper.R"))
+})
+
+test_that("a document's name in another letter case names it only where no other file has that name", {
+  app_dir <- tempfile("tss-rmd-case")
+  dir.create(app_dir)
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  writeLines("", file.path(app_dir, "report.Rmd"))
+  document <- list(type = "rmd", file = file.path(app_dir, "report.Rmd"))
+  expect_true(is_document_name("/report.Rmd", document$file))
+  expect_true(is_document_name("/REPORT.rmd", document$file))
+  expect_false(is_document_name("/other.Rmd", document$file))
+  # On a file system that tells letter case apart, this is another document
+  writeLines("", file.path(app_dir, "Report.Rmd"))
+  if (length(list.files(app_dir)) == 2) {
+    expect_false(is_document_name("/Report.Rmd", document$file))
+    expect_true(is_other_document_path(document, "/Report.Rmd/websocket/", websocket = TRUE))
+  }
+})
+
+test_that("a request for another document does not start a dormant R Markdown app", {
+  app_dir <- tempfile("tss-rmd")
+  dir.create(app_dir)
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  writeLines(c("---", "runtime: shiny", "---"), file.path(app_dir, "report.Rmd"))
+  writeLines("", file.path(app_dir, "_partial.Rmd"))
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "reports", path = app_dir, port = 3001, resident = FALSE)))
+  starts <- 0
+  pm <- list(start_app_on_demand = function(app_name) {
+    starts <<- starts + 1
+    FALSE
+  })
+
+  # Nothing would stop an app started for a request that is then refused
+  result <- handle_proxy_request("/proxy/reports/_partial.Rmd", "GET", NULL, list(), config, pm)
+  expect_equal(result$status, 404)
+  expect_equal(starts, 0)
+
+  # The app's own page starts it
+  handle_proxy_request("/proxy/reports/", "GET", NULL, list(), config, pm)
+  expect_equal(starts, 1)
+})
+
+test_that("a document refused after a start leaves the started app to its idle check", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "reports", path = tempdir(), port = 3001, resident = FALSE)))
+  # The directory held a Shiny app, and holds a document by the time it starts
+  config$set_app_document("reports", list(type = "shiny"))
+  pm <- list(start_app_on_demand = function(app_name) {
+    config$set_app_document(app_name, list(type = "rmd", file = file.path(tempdir(), "report.Rmd")))
+    TRUE
+  })
+  checks <- character()
+  cm <- list(schedule_session_check = function(app_name, ...) checks <<- c(checks, app_name))
+  result <- handle_proxy_request("/proxy/reports/_partial.Rmd", "GET", NULL, list(), config, pm, cm)
+  expect_equal(result$status, 404)
+  expect_equal(checks, "reports")
+})
+
+test_that("the public apps API names the current base_path for an open landing page", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", path = tempdir(), port = 3001, resident = TRUE)),
+    base_path = "/shiny")
+  pm <- list(get_all_app_status = function() list(app = list(name = "app", status = "running")))
+  expect_equal(handle_apps_api(config, pm)$headers[["X-TinyShinyServer-Base-Path"]], "/shiny")
+  config$config$base_path <- ""
+  expect_equal(handle_apps_api(config, pm)$headers[["X-TinyShinyServer-Base-Path"]], "")
+})
+
+test_that("header values that are not UTF-8 are ignored or refused, not errors", {
+  req <- httpuv_request(list(connection = "keep-alive, X-\xe9, X-Drop", "x-drop" = "1", "x-name" = "caf\xe9"))
+  headers <- forwarded_request_headers(req)
+  expect_false("X-DROP" %in% names(headers))
+  expect_equal(headers[["X-NAME"]], "caf\xe9")
+  expect_false(is_loopback_host_header("localhost\xe9"))
+  expect_false(etag_matches("\"a\xe9\"", "\"a\""))
+  expect_false(is_same_origin_websocket(httpuv_request(list(origin = "http://h\xe9", host = "h"))))
+  expect_true(is_same_origin_websocket(httpuv_request(list(origin = "http://h", host = "h",
+    "x-forwarded-proto" = "\xe9"))))
 })

@@ -131,11 +131,23 @@ ConnectionManager <- setRefClass("ConnectionManager",
             logger::log_info("Sending {count} pending messages for app {app_name}",
               count = length(pending), app_name = app_name
             )
-            for (msg in pending) {
-              backend_ws$send(msg)
-            }
             conn_info$pending_messages <- list()
             config$add_backend_connection(session_id, conn_info)
+            # A message that cannot be sent ends the session, as it does once
+            # the socket is open, rather than leave it without the rest
+            for (msg in pending) {
+              sent <- tryCatch({
+                backend_ws$send(msg)
+                TRUE
+              }, error = function(e) {
+                logger::log_error("WebSocket message error: {error}", error = conditionMessage(e))
+                FALSE
+              })
+              if (!sent) {
+                close_client_connection(session_id)
+                return()
+              }
+            }
           }
         }
       })

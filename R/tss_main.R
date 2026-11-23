@@ -15,7 +15,10 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
     proxy_server = "ANY",
     management_server = "ANY",
     is_shutting_down = "logical",
-    shutdown_complete = "logical" # A shutdown that was interrupted runs again
+    shutdown_complete = "logical", # A shutdown that was interrupted runs again
+    # Cancels the pending health check, so that a reload that changes
+    # health_check_interval applies it at once; NULL before monitoring starts
+    cancel_health_check = "ANY"
   ),
   methods = list(
     initialize = function(config_file = "config.json") {
@@ -23,6 +26,11 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
 
       # Initialize configuration with the provided config file
       config <<- create_server_config(config_file)
+
+      # A server started with the ports of one that is running stops here,
+      # before it writes to the server log that the other one may be
+      # writing, under port assignments that are not the other's
+      ports_in_use()
 
       # Initialize logging
       setup_logging(config$config$log_dir, config$config$log_level %||% "INFO")
@@ -40,6 +48,7 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       management_server <<- NULL
       is_shutting_down <<- FALSE
       shutdown_complete <<- FALSE
+      cancel_health_check <<- NULL
 
       logger::log_info("Tiny Shiny Server initialized")
     },
@@ -63,8 +72,11 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       # Bind the proxy and management ports first. If another server already
       # holds them, this one stops here, before it starts app processes or
       # rotates the app logs that the other server is writing. Requests are
-      # served only once the event loop runs.
-      start_servers()
+      # served only once the event loop runs. The log says why it stopped.
+      tryCatch(start_servers(), error = function(e) {
+        logger::log_error("Could not start the server: {error}", error = conditionMessage(e))
+        stop(e)
+      })
 
       # Start all Shiny applications
       start_all_apps()
@@ -74,6 +86,23 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
 
       # Main event loop
       run_event_loop()
+    },
+    ports_in_use = function() {
+      "Stop with an error when the proxy or management port is in use"
+
+      ports <- list(
+        list(name = "proxy", host = config$get_proxy_host(), port = config$config$proxy_port %||% 3838),
+        list(name = "management", host = "127.0.0.1", port = config$config$management_port %||% 3839)
+      )
+      for (server in ports) {
+        if (is_port_in_use(server$host, server$port)) {
+          stop(sprintf(
+            "The %s port %s is already in use, perhaps by another server; nothing was started",
+            server$name, server$port
+          ), call. = FALSE)
+        }
+      }
+      invisible(FALSE)
     },
     start_all_apps = function() {
       "Start all configured resident Shiny applications"
@@ -107,18 +136,8 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
 
       logger::log_info("Starting monitoring services")
 
-      # Health check scheduler
-      schedule_health_check <- function() {
-        if (!is_shutting_down) {
-          tryCatch(process_manager$health_check(), error = function(e) {
-            logger::log_error("Health check failed: {error}", error = conditionMessage(e))
-          })
-          if (!is_shutting_down) {
-            later::later(schedule_health_check, config$config$health_check_interval %||% 10)
-          }
-        }
-      }
-      later::later(schedule_health_check, 5)
+      # Health checks, first after 5 seconds
+      schedule_health_check(5)
 
       # Cleanup scheduler. It runs on the event loop like every other callback,
       # so one cleanup always finishes before the next starts. Exited app
@@ -133,6 +152,21 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
         }
       }
       later::later(schedule_cleanup, config$CLEANUP_INTERVAL_SECONDS)
+    },
+    schedule_health_check = function(delay) {
+      "Run a health check after delay seconds, and every health_check_interval seconds after it, in place of any check already pending"
+
+      if (is.function(cancel_health_check)) cancel_health_check()
+      cancel_health_check <<- later::later(function() {
+        cancel_health_check <<- NULL
+        if (is_shutting_down) return()
+        tryCatch(process_manager$health_check(), error = function(e) {
+          logger::log_error("Health check failed: {error}", error = conditionMessage(e))
+        })
+        if (!is_shutting_down) {
+          schedule_health_check(config$config$health_check_interval %||% 10)
+        }
+      }, delay)
     },
     start_servers = function() {
       "Start the HTTP proxy and management servers"
@@ -234,10 +268,11 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
         connection_manager$close_client_connection(session_id)
       }
       process_manager$stop_all_apps()
-      config$reset_app_state()
 
-      # An app that did not stop still holds its port, so keep the ports it was given
+      # An app that did not stop still holds its port, so keep the ports it
+      # was given, and the state of its process
       surviving <- names(config$get_all_app_processes())
+      config$reset_app_state(keep = surviving)
       if (length(surviving) > 0) {
         error <- paste("Could not stop apps:", paste(surviving, collapse = ", "))
         logger::log_error("Configuration reload failed, keeping the previous configuration: {error}", error = error)
@@ -284,6 +319,11 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       template_manager$field("server_title", config$config$title)
       template_manager$field("base_url", config$config$base_path %||% "")
       config$log_port_assignments()
+      # The next health check would otherwise come after the previous interval
+      if (is.function(cancel_health_check) &&
+        !identical(config$config$health_check_interval, old_config$health_check_interval)) {
+        schedule_health_check(config$config$health_check_interval %||% 10)
+      }
 
       start_all_apps()
       message <- result$error

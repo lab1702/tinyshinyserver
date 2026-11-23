@@ -17,7 +17,7 @@ test_that("the server starts logging at the configured level", {
   config <- ShinyServerConfig$new()
   config$config <- list(log_dir = tempdir(), log_level = "WARN")
   level <- NULL
-  local_mocked_bindings(create_server_config = function(...) config,
+  local_mocked_bindings(create_server_config = function(...) config, is_port_in_use = function(...) FALSE,
     setup_logging = function(log_dir, log_level = "INFO") level <<- log_level)
   TinyShinyServer$new()
   expect_equal(level, "WARN")
@@ -95,7 +95,8 @@ test_that("started servers limit request bodies from their headers", {
 test_that("monitoring continues after an unexpected health-check error", {
   config <- ShinyServerConfig$new()
   config$config <- list(log_dir = tempdir())
-  local_mocked_bindings(create_server_config = function(...) config, setup_logging = function(...) NULL)
+  local_mocked_bindings(create_server_config = function(...) config, setup_logging = function(...) NULL,
+    is_port_in_use = function(...) FALSE)
   server <- TinyShinyServer$new()
   assign("health_check", function() stop("Unexpected failure"), envir = server$process_manager)
   scheduled <- list()
@@ -113,7 +114,8 @@ test_that("monitoring continues after an unexpected health-check error", {
 test_that("the event loop stops when the management API requests shutdown", {
   config <- ShinyServerConfig$new()
   config$config <- list(log_dir = tempdir())
-  local_mocked_bindings(create_server_config = function(...) config, setup_logging = function(...) NULL)
+  local_mocked_bindings(create_server_config = function(...) config, setup_logging = function(...) NULL,
+    is_port_in_use = function(...) FALSE)
   server <- TinyShinyServer$new()
   handle_server_shutdown(config)
   local_mocked_bindings(service = function(...) stop("Loop must stop before servicing"), .package = "httpuv")
@@ -125,7 +127,8 @@ test_that("the event loop stops when the management API requests shutdown", {
 test_that("an event-loop error shuts the server down once", {
   config <- ShinyServerConfig$new()
   config$config <- list(log_dir = tempdir())
-  local_mocked_bindings(create_server_config = function(...) config, setup_logging = function(...) NULL)
+  local_mocked_bindings(create_server_config = function(...) config, setup_logging = function(...) NULL,
+    is_port_in_use = function(...) FALSE)
   server <- TinyShinyServer$new()
   stops <- 0
   server$field("process_manager", list(stop_all_apps = function() stops <<- stops + 1))
@@ -146,7 +149,8 @@ test_that("an event-loop error shuts the server down once", {
 test_that("a shutdown that was interrupted runs again", {
   config <- ShinyServerConfig$new()
   config$config <- list(log_dir = tempdir())
-  local_mocked_bindings(create_server_config = function(...) config, setup_logging = function(...) NULL)
+  local_mocked_bindings(create_server_config = function(...) config, setup_logging = function(...) NULL,
+    is_port_in_use = function(...) FALSE)
   server <- TinyShinyServer$new()
   attempts <- 0
   server$field("process_manager", list(stop_all_apps = function() {
@@ -163,7 +167,8 @@ test_that("a shutdown that was interrupted runs again", {
 test_that("shutdown names the apps it could not stop", {
   config <- ShinyServerConfig$new()
   config$config <- list(log_dir = tempdir())
-  local_mocked_bindings(create_server_config = function(...) config, setup_logging = function(...) NULL)
+  local_mocked_bindings(create_server_config = function(...) config, setup_logging = function(...) NULL,
+    is_port_in_use = function(...) FALSE)
   server <- TinyShinyServer$new()
   # A process that is still tracked after stop_all_apps() is still running
   config$add_app_process("stuck", list())
@@ -192,10 +197,36 @@ test_that("an unwritable server log does not stop logging or shutdown", {
 
   config <- ShinyServerConfig$new()
   config$config <- list(log_dir = log_dir)
-  local_mocked_bindings(create_server_config = function(...) config, setup_logging = function(...) NULL)
+  local_mocked_bindings(create_server_config = function(...) config, setup_logging = function(...) NULL,
+    is_port_in_use = function(...) FALSE)
   server <- TinyShinyServer$new()
   stopped <- FALSE
   server$field("process_manager", list(stop_all_apps = function() stopped <<- TRUE))
   expect_no_error(server$shutdown())
   expect_true(stopped)
+})
+
+test_that("a server whose ports are in use stops before it writes to the server log", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  writeLines(jsonlite::toJSON(list(apps = list(list(name = "app", path = "/tmp")),
+    log_dir = tempdir(), starting_port = 3001), auto_unbox = TRUE), path)
+  logging <- 0
+  local_mocked_bindings(setup_logging = function(...) logging <<- logging + 1,
+    is_port_in_use = function(host, port) port == 3839)
+  expect_error(TinyShinyServer$new(path), "management port 3839 is already in use")
+  expect_equal(logging, 0)
+})
+
+test_that("a port that the server cannot open is named in the server log", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  writeLines(jsonlite::toJSON(list(apps = list(list(name = "app", path = "/tmp")),
+    log_dir = tempdir(), starting_port = 3001), auto_unbox = TRUE), path)
+  local_mocked_bindings(is_port_in_use = function(...) FALSE, setup_logging = function(...) NULL,
+    create_process_manager = function(config) list(stop_all_apps = function() NULL))
+  server <- TinyShinyServer$new(path)
+  local_mocked_bindings(startServer = function(...) stop("Failed to create server"), .package = "httpuv")
+  logged <- capture_test_log(expect_error(server$start(), "Failed to create server"))
+  expect_true(any(grepl("Could not start the server: Failed to create server", logged, fixed = TRUE)))
 })

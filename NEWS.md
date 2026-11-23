@@ -6,7 +6,9 @@
 
 * **The proxy now rejects HTTP request bodies larger than 100 MB, and all chunked request bodies,** with HTTP 413 before reading them. Previously the whole body was read into memory before being forwarded, so one very large upload could exhaust the server's memory and stop every app. Apps that accept larger uploads through `shiny.maxRequestSize` need the new `max_request_size_mb` option raised to match. The management server, whose requests need no body, rejects bodies larger than 64 KB.
 
-* **App processes now start in their app directory and read the `.Renviron` and `.Rprofile` there,** as R does when the app is run on its own, so an app's own environment variables and profile, such as one that activates renv, now apply to it. As at R's startup, `R_ENVIRON_USER` and `R_PROFILE_USER` take precedence, and an app directory without these files falls back to the user's `~/.Renviron` or `~/.Rprofile`. Previously every app read the `.Renviron` and `.Rprofile` of the directory that `start_tss()` was called from; an app that relied on those files needs its own copy. An error in an app's profile is written to its error log, and the app still starts.
+* **App processes now start in their app directory and read the `.Renviron` and `.Rprofile` there,** as R does when the app is run on its own, so an app's own environment variables and profile, such as one that activates renv, now apply to it. As at R's startup, `R_ENVIRON_USER` and `R_PROFILE_USER` take precedence, and an app directory without these files falls back to the user's `~/.Renviron` or `~/.Rprofile`. Previously every app read the `.Renviron` and `.Rprofile` of the directory that `start_tss()` was called from; an app that relied on those files needs its own copy. An error in an app's profile is written to its error log, and the app still starts. The site profile, `Rprofile.site`, also runs in apps, and an app's own `.Renviron` that sets `R_LIBS` or `R_LIBS_USER` gives the app the library paths that R makes from them; apps previously always had the server's library paths unless a profile changed them.
+
+* **The proxy no longer forwards app responses larger than 1024 MB.** It stops receiving such a response and answers HTTP 502. The proxy sends nothing before it has a whole response and cannot tell when a visitor stops waiting, so a response that an app streams without end filled the disk and kept an on-demand app from stopping. Apps that serve larger downloads need the new `max_response_size_mb` option raised to match. A response that never ends but stays below the limit still keeps its request, and an on-demand app, in use.
 
 * The proxy's public `/api/apps` endpoint now returns only each app's name, status, mode, and connection count. App paths, ports, and process IDs are available only from the loopback management API.
 
@@ -14,9 +16,11 @@
 
 ## New features
 
-* The management dashboard has a **Reload Config & Restart All** button, also available as `POST /api/reload`. It reads the configuration file again, stops every app, and starts the resident apps under the new configuration, so apps can be added, removed, or changed without restarting the server. An invalid file, a `log_dir` where the server log cannot be written, or a change to `proxy_host`, `proxy_port`, or `management_port` is rejected before any app stops. If an app cannot be stopped, the previous configuration stays in effect. The dashboard reports the reload's outcome, which `/api/status` also returns as `last_reload`. The landing page picks up added and removed apps.
+* The management dashboard has a **Reload Config & Restart All** button, also available as `POST /api/reload`. It reads the configuration file again, stops every app, and starts the resident apps under the new configuration, so apps can be added, removed, or changed without restarting the server. An invalid file, a `log_dir` where the server log cannot be written, or a change to `proxy_host`, `proxy_port`, or `management_port` is rejected before any app stops. If an app cannot be stopped, the previous configuration stays in effect, and the app that is still running keeps its state, such as the document that an R Markdown app serves. A changed `health_check_interval` applies at once. The dashboard reports the reload's outcome, which `/api/status` also returns as `last_reload`. The landing page picks up added and removed apps.
 
 * New `base_path` option serves the landing page and apps under a URL prefix, such as `https://example.com/shiny/`, behind a reverse proxy. The proxy accepts requests with or without the prefix, so the reverse proxy may pass it through or strip it, and landing page links, redirects, and app cookie paths include it. The management dashboard now uses relative URLs, so it also works under a prefix that the reverse proxy strips.
+
+* New `max_response_size_mb` option sets the largest app response that the proxy forwards (default: 1024); see "Breaking changes".
 
 * New `idle_timeout_minutes` option sets how long a session may carry no WebSocket message before it is closed (default: 30, the limit that was fixed before). `0` keeps idle sessions open, for dashboards that people leave open without interacting.
 
@@ -30,7 +34,7 @@
 
 * The management dashboard shows the server's uptime and memory use, and each running app's memory use and uptime. `/api/status` returns `uptime_seconds`, `server_memory_bytes`, and `apps_memory_bytes` in place of the `server_uptime` and `memory_usage` fields, which were always `"N/A"`; the management `/api/apps` returns `memory_bytes` and `uptime_seconds` for running apps. Memory is the resident memory of each R process and is left out where the `ps` package cannot read it.
 
-* A Quarto document is rendered only when its rendered page is missing or older than another file in the app directory, instead of on every start, so on-demand Quarto apps and restarts no longer wait for a full render each time. Delete the document's `.html` file to force a render. The check runs in the app's own process, so reading a large app directory does not hold up the other apps' traffic, and the app's error log records whether the document was rendered. When `log_dir` lies in the app directory, the server's log files there do not count as changes, since they are written at every start. Neither do hidden files and directories, such as `.git`, `.Rproj.user`, and `.Rhistory`, other than a top-level `.Rprofile` or `.Renviron`, nor the packages that renv installs under `renv/`, since version control, the IDE, and renv change them without the document changing.
+* A Quarto document is rendered only when its rendered page may be out of date, instead of on every start, so on-demand Quarto apps and restarts no longer wait for a full render each time. The server records each render it makes in `{log_dir}/{app_name}_render.rds`, and renders again when the page is missing, when its last render did not finish, which can leave an incomplete page, or when a file in the app directory has been added, removed, or changed since that render, including one copied in with an older modification time. A page that the server did not render, such as one deployed with the app or one that has changed since the server rendered it, is served while it is newer than every other file in the app directory. The CLI is the one that `QUARTO_PATH` names or that `PATH` finds in the app's environment. Delete the document's `.html` file to force a render. The document is rendered with the Quarto CLI and served with `rmarkdown::run()`, as `quarto::quarto_serve()` does, so the app's own R process does not need the quarto R package, which a renv project library for a Quarto document usually lacks. The check runs in the app's own process, so reading a large app directory does not hold up the other apps' traffic, and the app's error log records whether the document was rendered, and the render's output. What rendering writes beside the page, `{name}_files`, `{name}_data`, and `{name}_cache`, does not count as a change. When `log_dir` lies in the app directory, the server's log files and render records there do not count either, since they are written at every start. Neither do hidden files and directories, such as `.git`, `.Rproj.user`, and `.Rhistory`, other than a top-level `.Rprofile` or `.Renviron`, nor the packages that renv installs under `renv/`, since version control, the IDE, and renv change them without the document changing.
 
 * Starting an app keeps the previous run's logs as `{app_name}_output.prev.log` and `{app_name}_error.prev.log`, so a crash traceback survives the automatic restart.
 
@@ -46,7 +50,9 @@
 
 * A request header spelled with an underscore no longer takes the place of the real header. R's web server reads `Content_Length` as `Content-Length` and `X_Forwarded_User` as `X-Forwarded-User`, and the underscore spelling wins. A client could therefore send a body of any size, chunked or not, past `max_request_size_mb` by also declaring a small `Content_Length`, and a user behind an authenticating reverse proxy could replace the identity header that the reverse proxy set. The proxy now reads the body size, the forwarding headers behind the client IP addresses it shows, and every other header that a decision depends on, such as `Host`, `Origin`, and `If-None-Match`, under the names the client sent. It rejects a chunked body whatever length is also declared, and it does not pass a header whose name contains an underscore on to an app.
 
-* Client IP addresses shown in the management dashboard and logs are taken from `X-Forwarded-For` or `X-Real-IP` only when the request comes from a reverse proxy on the same machine, and then from the entry that proxy added.
+* Client IP addresses shown in the management dashboard and logs are taken from `X-Forwarded-For` or `X-Real-IP` only when the request comes from a reverse proxy on the same machine, then from the last entry, which that proxy adds, and only when the value is an IP address, so that a forwarded value cannot write other text, such as terminal escape codes, into the log. The README now says that nginx must add the client's address with `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`: otherwise it passes on the address that the client chose.
+
+* The README now says that `proxy_host: "::"` also listens on all IPv4 interfaces on most systems.
 
 * App WebSocket sessions now receive the same request headers as proxied HTTP requests, so `session$request` includes the identity headers that an authenticating reverse proxy adds, such as `X-Forwarded-User`, as well as `User-Agent` and `X-Forwarded-For`. Previously only `Cookie` and `Authorization` were forwarded.
 
@@ -58,7 +64,7 @@
 
 * The INFO message that records a WebSocket connection to an app no longer includes the connection's query string, which can carry a token. The full address is logged at DEBUG.
 
-* An R Markdown app serves only its entry document. `rmarkdown::run()` renders, and so runs the code of, any `.Rmd` or `.qmd` document under the app directory that a request names, including partials whose names start with `_` and drafts in subdirectories; such requests, and WebSocket connections for such documents, are now refused with HTTP 404.
+* An R Markdown or Quarto app serves only its entry document. `rmarkdown::run()`, which serves both, renders, and so runs the code of, any file under the app directory that a page or its WebSocket names, unless the document is prerendered, including partials whose names start with `_`, drafts in subdirectories, and R scripts, which it spins into reports. A request for another document's page is now refused with HTTP 404, and a WebSocket for any other file is closed. The path is read as `rmarkdown` reads it, so a percent-encoded path, such as one ending in `%2Fwebsocket%2F`, names the same file. Such a request does not start an on-demand app, which nothing would then stop.
 
 * When a reverse proxy reports with `X-Forwarded-Proto: https` that a WebSocket arrived over HTTPS, the proxy refuses it if the page that opens it comes from the plain-HTTP site of the same host. A page injected into unencrypted traffic could otherwise use the HTTPS site's sessions and credentials.
 
@@ -98,7 +104,7 @@
 
 * App processes are now supervised, so they stop instead of holding their ports if the R session running the server is killed or crashes.
 
-* The server now opens the proxy and management ports before it starts any app. A second server started by mistake on the same ports stops with an error straight away; it previously started its own app processes and renamed the running server's app logs to `.prev.log` first.
+* The server now opens the proxy and management ports before it starts any app. A second server started by mistake on the same ports stops with an error straight away, before it writes to the running server's log; it previously started its own app processes and renamed the running server's app logs to `.prev.log` first, and then wrote its own port assignments and shutdown to that log. A failure to open a port is written to `server.log`.
 
 * Shutdown and a configuration reload try once more to stop an app process that outlives the first attempt, and `server.log` names any app that is still running afterwards. It reported "All applications stopped" and "Server shutdown complete" regardless.
 
@@ -114,7 +120,7 @@
 
 * Apps can now be stopped and restarted on platforms where the `ps` package cannot list processes. Stopping an app failed there, which also blocked restarts, reloads, and shutdown; on those platforms only the app's own process is stopped, not processes it started.
 
-* Assigning app ports no longer waits about a second for each app on Windows, which delayed startup and paused all apps' traffic during a configuration reload. A port now counts as in use when the server cannot listen on it.
+* Assigning app ports no longer waits about a second for each app on Windows, which delayed startup and paused all apps' traffic during a configuration reload. A port now counts as in use when the server cannot listen on it, or, on Windows and macOS, when another program that listens on every interface accepts a connection on it within 100 milliseconds. Such a program did not keep an app from listening on `127.0.0.1` at its port, and then lost its loopback connections to the app. On Windows, where a connection to a free port waits for its timeout, this adds about a tenth of a second for each app to startup and to every reload.
 
 * An on-demand app's finished HTTP requests no longer each leave a timer queued for 30 seconds; a newer idle check now replaces the pending one.
 
@@ -164,6 +170,10 @@
 
 * A WebSocket message no longer rewrites the server's records of every connected session, so busy sessions cost less as the number of sessions grows. Exited app processes are removed by the health check alone; the five-minute cleanup repeated that work.
 
+* A text WebSocket message that is not valid UTF-8 closes its session whether or not the app's socket has opened yet. Sent while it was opening, such a message silently dropped the messages queued after it and left the session half started.
+
+* A request header whose value is not valid UTF-8 in a field that the proxy reads, such as `Connection`, `Host`, `Origin`, or `If-None-Match`, is ignored or refused as an invalid value. It made the proxy answer HTTP 502, or HTTP 500 instead of 403 for `Host`.
+
 ## Server pages and management API
 
 * Every answer to a `HEAD` request that the proxy or the management server makes itself is sent without a body, such as the landing page, `/health`, the pages' style sheet, and the 503 for an app that is starting. The body was sent after the headers, so a client that sent another request on the same connection, as uptime monitors and HTTP libraries do, read it as the start of the next answer and failed.
@@ -182,13 +192,13 @@
 
 * The dashboard updates its app cards and connection list in place when it refreshes, instead of rebuilding them every 5 seconds, so the keyboard focus stays on a Restart button, a click that spans a refresh still lands, and selected text, such as a client's IP address, stays selected.
 
-* The page shown while an app starts stops reloading after two minutes in every case. A reload continued the same wait only if it came soon enough after the page before it, judged by this page's own retry time, so a page that waited out a long `restart_delay`, a slow answer, or a browser that delays the timers of background tabs began the two minutes again, and a tab left open restarted a failing app forever.
+* The page shown while an app starts stops reloading after two minutes in every case. A reload continued the same wait only if it came soon enough after the page before it, judged by this page's own retry time, so a page that waited out a long `restart_delay`, a slow answer, or a browser that delays the timers of background tabs began the two minutes again, and a tab left open restarted a failing app forever. A page that waits out the restart delay of an app that failed, opened before the app can start again, says so, and counts its two minutes from the end of that delay, when the app starts.
 
-* An open landing page reloads itself when a configuration reload changes `base_path`. Its status requests went to an address that no longer exists, and it showed every app as "server down".
+* An open landing page reloads itself when a configuration reload changes `base_path`, including from no prefix to one, which the status requests, answered with and without the prefix, did not show: `/api/apps` now names the current prefix in an `X-TinyShinyServer-Base-Path` header. Its status requests went to an address that no longer exists, and it showed every app as "server down". The page reloads for this at most once a minute, so a page whose status address is not found for another reason, such as a reverse proxy that does not pass it on, shows the server as unreachable rather than reloading without pause.
 
 * The R version and operating system are now shown on the management dashboard instead of the public landing page, and are read once instead of on every page load.
 
-* The pages' style sheet and script are sent with `Cache-Control` and `ETag` headers, so browsers reuse them instead of fetching them again for every page, including each reload of the page shown while an app starts.
+* The pages' style sheet and script are sent with `Cache-Control` and `ETag` headers, so browsers reuse them instead of fetching them again for every page, including each reload of the page shown while an app starts. The tag is weak and the responses carry `Vary: Accept-Encoding`, since R's web server compresses them for clients that accept gzip, so a shared cache does not give the compressed file to a client that did not ask for it.
 
 * Files under `/templates/` are sent as their bytes. Files other than images were read as lines of text, which changed line endings and dropped a final newline, and would have corrupted fonts and other binary files; web fonts and WebP images are now sent with their own types, and unknown types as `application/octet-stream` instead of `text/plain`.
 
@@ -210,6 +220,10 @@
 
 * A configuration reload checks that the server log can be written in `log_dir` even when `log_dir` has not changed, and stops no app if it cannot. Such a reload stopped every app, and resident apps could then not open their log files. When the server log cannot be moved to a changed `log_dir`, a changed `log_level` is now applied anyway, and the reload's outcome says that the previous server log was kept.
 
+* A configuration file that is not UTF-8 text, such as one that Windows PowerShell 5.1 saved as UTF-16 or one with a Latin-1 character, is reported as such. A small file failed with "file name conversion problem", and a file holding only the name of another file, or a URL, loaded that instead.
+
+* A reload reads the configuration file through the path that it was loaded from, without resolving links, so it reads a file that a link has since been pointed at, such as a mounted Kubernetes ConfigMap or a `current` release link. It read the previous target, and failed once that was removed.
+
 ## Logging
 
 * App processes now write their stdout and stderr directly to the per-app log files. Output from child processes and native code (for example, Pandoc) is now logged and can no longer fill an unread pipe and hang the app.
@@ -218,7 +232,7 @@
 
 * If `server.log` can no longer be written while the server runs, messages still go to the console. Previously the write error stopped health checks and interrupted shutdown, leaving the proxy, management server, and apps running. If `log_dir` is removed, starting an app creates it again, so apps can still start and `server.log` resumes. A `log_dir` where `server.log` cannot be written at startup is reported as such.
 
-* `server.log` records the close of a WebSocket session once. A session that the proxy closed was recorded twice, and one that was never opened was recorded as closed.
+* `server.log` records the close of a WebSocket session once. A session that the proxy closed was recorded twice, and one that was never opened was recorded as closed. Sessions closed because their app restarted, crashed, or stopped at shutdown were not recorded.
 
 * Port assignments are now written to `server.log`, not only to the console.
 
@@ -232,7 +246,7 @@
 
 * The package now requires R 4.1.0 or later, as its `promises` and `quarto` dependencies already do.
 
-* The package now requires `httpuv` 1.5.2 or later, the first version whose `startServer()` has the `quiet` argument; with an older `httpuv`, every port was reported as in use and the server did not start. It also requires `later` 1.4.0 (for `later_fd()`, which the faster transfers use), `curl` 3.3 (for `file_writer()`, which writes large responses to disk), `websocket` 1.1.0 (whose client accepts the `maxMessageSize` that large app messages need), and `ps` 1.2.0 (for `ps_connections()`, which identifies the process listening on an app's port).
+* The package now requires `httpuv` 1.5.5 or later, the first version that sends a response without a body, as the proxy sends answers to `HEAD` requests and 204 and 304 responses, and whose `startServer()` has the `quiet` argument; with an older `httpuv`, every port was reported as in use and the server did not start. It also requires `later` 1.4.0 (for `later_fd()`, which the faster transfers use), `curl` 3.3 (for `file_writer()`, which writes large responses to disk), `websocket` 1.1.0 (whose client accepts the `maxMessageSize` that large app messages need), and `ps` 1.2.0 (for `ps_connections()`, which identifies the process listening on an app's port).
 
 * Removed the unused `future` dependency, and `digest` and `openssl`: session IDs only key the server's own connection tables and are never read from a request, so they are now numbered in order instead of hashed from random bits and request details. `tools` and `utils` are now declared imports, as is `glue`, which `logger` needs to format the package's log messages. Added `ps`, already required by `callr`.
 

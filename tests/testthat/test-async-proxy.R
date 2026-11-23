@@ -331,7 +331,7 @@ test_that("a large app response is written to a file instead of held in memory",
                     list(method = "HEAD", status = 200L))) {
     spooled <- tempfile("tss-response-")
     writeBin(payload, spooled)
-    local_mocked_bindings(fetch_backend_async = function(url, handle) promises::promise_resolve(list(
+    local_mocked_bindings(fetch_backend_async = function(url, handle, ...) promises::promise_resolve(list(
       status_code = case$status, headers = charToRaw(sprintf("HTTP/1.1 %d X\r\n\r\n", case$status)),
       content = list(file = spooled, owned = TRUE)
     )))
@@ -463,7 +463,7 @@ test_that("readiness probes close their connections without garbage collection",
     options <<- list(...)
     new_handle()
   }, .package = "curl")
-  local_mocked_bindings(fetch_backend_async = function(url, handle) promises::promise_resolve(NULL))
+  local_mocked_bindings(fetch_backend_async = function(url, handle, ...) promises::promise_resolve(NULL))
   expect_true(await_response(wait_for_backend("http://127.0.0.1:1/")))
   expect_true(options$connect_only)
   expect_true(options$forbid_reuse)
@@ -528,7 +528,7 @@ test_that("a refused connection to a verified app returns 503 and rechecks its p
   expect_true(config$app_backend_verified("app"))
   local_mocked_bindings(
     wait_for_backend = function(...) stop("A running app must not be probed"),
-    fetch_backend_async = function(url, handle) promises::promise_reject(structure(
+    fetch_backend_async = function(url, handle, ...) promises::promise_reject(structure(
       class = c("backend_connect_error", "simpleError", "error", "condition"),
       list(message = "Could not connect to 127.0.0.1 port 3001", call = NULL)
     ))
@@ -652,7 +652,7 @@ test_that("async transfer failures become 502 responses", {
   config <- proxy_test_config(3001)
   local_mocked_bindings(
     wait_for_backend = function(url, wait_seconds) promises::promise_resolve(TRUE),
-    fetch_backend_async = function(url, handle) promises::promise_reject(simpleError("transfer failed")),
+    fetch_backend_async = function(url, handle, ...) promises::promise_reject(simpleError("transfer failed")),
     process_owns_port = function(process, port) TRUE
   )
   result <- await_response(forward_request("GET", "http://127.0.0.1:3001/", list(), "app", config))
@@ -1211,4 +1211,37 @@ test_that("cookies with no path get an app-scoped default path", {
   expect_equal(result$`set-cookie`, "session=abc; HttpOnly; Path=/proxy/app/")
   nested <- proxy_response_headers(headers, "http://127.0.0.1:3001/folder/page?x=1", "app", "GET")
   expect_equal(nested$`set-cookie`, "session=abc; HttpOnly; Path=/proxy/app/folder")
+})
+
+test_that("a response larger than max_response_size_mb is not kept or forwarded", {
+  # A collector that passes the limit keeps nothing, in memory or on disk
+  spooled <- function() list.files(tempdir(), pattern = "^tss-response-")
+  before <- spooled()
+  body <- response_body_collector(limit = 10, max_bytes = 25)
+  body$write(as.raw(1:20))
+  expect_false(body$exceeded())
+  body$write(as.raw(1:20))
+  expect_true(body$exceeded())
+  body$write(as.raw(1:5))
+  expect_identical(body$finish(), raw())
+  expect_length(setdiff(spooled(), before), 0)
+
+  payload <- as.raw(seq_len(4096) %% 251)
+  backend <- start_test_http_server(function(req) {
+    list(status = 200L, headers = list("Content-Type" = "application/octet-stream"), body = payload)
+  })
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  config <- proxy_test_config(backend$port)
+  config$config$max_response_size_mb <- 1024 / 1024^2
+  logged <- capture_test_log({
+    response <- await_response(forward_request("GET", backend$url, list(), "app", config), timeout = 10)
+  })
+  expect_equal(response$status, 502)
+  expect_true(any(grepl("larger than max_response_size_mb", logged, fixed = TRUE)))
+
+  # Within the limit, the response is forwarded
+  config$config$max_response_size_mb <- 1
+  response <- await_response(forward_request("GET", backend$url, list(), "app", config), timeout = 10)
+  expect_equal(response$status, 200)
+  expect_identical(response$body, payload)
 })

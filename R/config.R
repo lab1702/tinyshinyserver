@@ -5,8 +5,8 @@
 # misspelled option, has no effect and is reported in the server log.
 KNOWN_CONFIG_FIELDS <- c(
   "apps", "log_dir", "starting_port", "proxy_port", "proxy_host", "management_port",
-  "restart_delay", "health_check_interval", "max_request_size_mb", "title", "base_path",
-  "idle_timeout_minutes", "log_level"
+  "restart_delay", "health_check_interval", "max_request_size_mb", "max_response_size_mb", "title",
+  "base_path", "idle_timeout_minutes", "log_level"
 )
 KNOWN_APP_FIELDS <- c("name", "path", "resident", "appstart_timeout")
 
@@ -15,6 +15,9 @@ LOG_LEVELS <- c("DEBUG", "INFO", "WARN", "ERROR")
 
 # The longest restart_delay, health_check_interval, and appstart_timeout: one day
 MAX_TIMER_SECONDS <- 86400
+
+# The largest app response, in megabytes, that the proxy forwards by default
+DEFAULT_MAX_RESPONSE_SIZE_MB <- 1024
 
 duplicated_config_fields <- function(config) {
   "Describe the fields that a configuration gives more than once, at its top level or in an app"
@@ -142,8 +145,11 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     load_config = function(config_file = "config.json") {
       "Load and validate configuration from file"
 
-      # Keep the absolute path so a reload finds the file after setwd()
-      config_file <<- normalizePath(config_file, mustWork = TRUE)
+      # Keep the absolute path so a reload finds the file after setwd().
+      # Links are not resolved: a reload reads the file that the path names
+      # then, such as a mounted Kubernetes ConfigMap, whose link is pointed
+      # at a new file when it is updated.
+      config_file <<- absolute_path(config_file)
       config <<- read_config(config_file)
 
       # Auto-assign ports to apps
@@ -158,9 +164,21 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         stop("Configuration file not found: ", file)
       }
 
-      # Read with explicit UTF-8 encoding
-      config_text <- readLines(file, encoding = "UTF-8", warn = FALSE)
-      parsed_config <- jsonlite::fromJSON(paste(config_text, collapse = "\n"), simplifyDataFrame = FALSE)
+      # JSON is UTF-8 text. A file saved in another encoding, as Windows
+      # PowerShell 5.1 saves one in UTF-16 by default, is named as such.
+      start <- readBin(file, "raw", 2)
+      if (identical(start, as.raw(c(0xff, 0xfe))) || identical(start, as.raw(c(0xfe, 0xff)))) {
+        stop("Configuration file ", file, " is saved as UTF-16; save it as UTF-8", call. = FALSE)
+      }
+      config_text <- paste(readLines(file, encoding = "UTF-8", warn = FALSE), collapse = "\n")
+      if (!validUTF8(config_text)) {
+        stop("Configuration file ", file, " is not valid UTF-8 text; save it as UTF-8", call. = FALSE)
+      }
+      # A byte-order mark is allowed, as other JSON readers allow it.
+      # jsonlite::fromJSON() would read text that is not JSON as the name of
+      # a file or as a URL, and load that instead.
+      config_text <- sub(paste0("^", intToUtf8(0xFEFF)), "", config_text)
+      parsed_config <- jsonlite::parse_json(config_text, simplifyVector = TRUE, simplifyDataFrame = FALSE)
 
       # Validate configuration
       validation_result <- validate_config(parsed_config)
@@ -190,6 +208,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       new_config$starting_port <- new_config$starting_port %||% 3001
       new_config$title <- trimws(new_config$title %||% DEFAULT_SERVER_TITLE)
       new_config$max_request_size_mb <- new_config$max_request_size_mb %||% 100
+      new_config$max_response_size_mb <- new_config$max_response_size_mb %||% DEFAULT_MAX_RESPONSE_SIZE_MB
       new_config$base_path <- new_config$base_path %||% ""
       new_config$idle_timeout_minutes <- new_config$idle_timeout_minutes %||% CONNECTION_TIMEOUT_MINUTES
       new_config$log_level <- toupper(new_config$log_level %||% "INFO")
@@ -248,16 +267,26 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
 
       list(valid = TRUE, config = new_config)
     },
-    reset_app_state = function() {
-      "Forget per-app runtime state after all apps have stopped"
+    reset_app_state = function(keep = character()) {
+      "Forget per-app runtime state after apps have stopped, except that of the apps named in keep, which still run"
 
-      # app_sessions needs no reset: closing each connection emptied it
-      pending_session_checks <<- new.env(hash = TRUE, parent = emptyenv())
-      app_startup_state <<- new.env(hash = TRUE, parent = emptyenv())
-      verified_backends <<- new.env(hash = TRUE, parent = emptyenv())
-      start_problems <<- new.env(hash = TRUE, parent = emptyenv())
-      start_failures <<- new.env(hash = TRUE, parent = emptyenv())
-      app_documents <<- new.env(hash = TRUE, parent = emptyenv())
+      # app_sessions needs no reset: closing each connection emptied it. An
+      # app that is still running keeps its state: among it, the document
+      # that its process serves, without which other documents of an R
+      # Markdown app would be served.
+      kept <- function(state) {
+        fresh <- new.env(hash = TRUE, parent = emptyenv())
+        for (app_name in intersect(keep, ls(state, all.names = TRUE))) {
+          assign(app_name, get(app_name, envir = state), envir = fresh)
+        }
+        fresh
+      }
+      pending_session_checks <<- kept(pending_session_checks)
+      app_startup_state <<- kept(app_startup_state)
+      verified_backends <<- kept(verified_backends)
+      start_problems <<- kept(start_problems)
+      start_failures <<- kept(start_failures)
+      app_documents <<- kept(app_documents)
     },
     set_app_document = function(app_name, app) {
       "Record the document that an app's new process serves"
@@ -360,10 +389,10 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         }
       }
 
-      if ("max_request_size_mb" %in% names(config)) {
-        value <- config$max_request_size_mb
+      for (field in intersect(c("max_request_size_mb", "max_response_size_mb"), names(config))) {
+        value <- config[[field]]
         if (!is.numeric(value) || length(value) != 1 || !is.finite(value) || value <= 0) {
-          return(list(valid = FALSE, error = "max_request_size_mb must be a single positive finite number of megabytes"))
+          return(list(valid = FALSE, error = paste(field, "must be a single positive finite number of megabytes")))
         }
       }
 

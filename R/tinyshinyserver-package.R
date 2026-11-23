@@ -37,7 +37,7 @@
 #' @importFrom httpuv startServer service stopServer
 #' @importFrom later later run_now
 #' @importFrom methods new
-#' @importFrom quarto quarto_serve
+#' @importFrom quarto quarto_path
 #' @importFrom rmarkdown run
 #' @importFrom shiny runApp
 #' @importFrom tools file_ext

@@ -448,3 +448,12 @@ test_that("percent-encoded bytes are left for the app to interpret", {
   expect_true(validate_query_string("?a=%00")$valid)
   expect_true(validate_ws_message("a%00b")$valid)
 })
+
+test_that("validate_ws_message refuses text that is not valid UTF-8", {
+  result <- validate_ws_message("caf\xe9")
+  expect_false(result$valid)
+  expect_match(result$error, "UTF-8")
+  expect_true(validate_ws_message(intToUtf8(c(99, 97, 102, 233)))$valid)
+  # Binary messages carry any bytes
+  expect_true(validate_ws_message(as.raw(c(0xe9, 0xff)))$valid)
+})

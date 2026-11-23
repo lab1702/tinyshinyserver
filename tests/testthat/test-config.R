@@ -1333,3 +1333,73 @@ test_that("apps may not share a document that is rendered into its directory", {
   missing <- file.path(root, "missing")
   expect_length(read_apps(c("a", missing), c("b", missing))$apps, 2)
 })
+
+test_that("a configuration file that is not UTF-8 text is named as such", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  json <- '{"apps": [{"name": "app", "path": "/tmp"}], "log_dir": "/tmp", "starting_port": 3001, "title": "Caf\xe9"}'
+  writeBin(charToRaw(json), path)
+  expect_error(ShinyServerConfig$new()$read_config(path), "is not valid UTF-8 text")
+  # Windows PowerShell 5.1 saves files as UTF-16 by default
+  writeBin(c(as.raw(c(0xff, 0xfe)), as.raw(rbind(charToRaw("{}"), as.raw(0)))), path)
+  expect_error(ShinyServerConfig$new()$read_config(path), "saved as UTF-16")
+  # A byte-order mark is allowed, without a warning
+  writeBin(c(as.raw(c(0xef, 0xbb, 0xbf)), charToRaw(enc2utf8(sub("Caf\xe9", "Cafe", json, useBytes = TRUE)))), path)
+  expect_no_warning(config <- ShinyServerConfig$new()$read_config(path))
+  expect_equal(config$title, "Cafe")
+})
+
+test_that("a configuration file is read as JSON, never as the name of another file", {
+  dir <- tempfile("tss-config")
+  dir.create(dir)
+  on.exit(unlink(dir, recursive = TRUE), add = TRUE)
+  other <- file.path(dir, "other.json")
+  writeLines(jsonlite::toJSON(list(apps = list(list(name = "other", path = "/tmp")), log_dir = "/tmp",
+    starting_port = 3001), auto_unbox = TRUE), other)
+  path <- file.path(dir, "config.json")
+  writeLines(other, path)
+  expect_error(ShinyServerConfig$new()$read_config(path), "lexical error|invalid char")
+})
+
+test_that("max_response_size_mb defaults to 1024 and must be a positive number", {
+  expect_equal(read_test_config()$max_response_size_mb, 1024)
+  expect_equal(read_test_config(max_response_size_mb = 5000)$max_response_size_mb, 5000)
+  for (value in list(0, -1, "big", c(1, 2))) {
+    expect_error(read_test_config(max_response_size_mb = value), "max_response_size_mb must be", info = format(value))
+  }
+})
+
+test_that("the configuration file is kept as given, made absolute, without resolving links", {
+  dir <- tempfile("tss-config")
+  dir.create(file.path(dir, "r1"), recursive = TRUE)
+  on.exit(unlink(dir, recursive = TRUE), add = TRUE)
+  write_config <- function(path, name) {
+    writeLines(jsonlite::toJSON(list(apps = list(list(name = name, path = "/tmp")), log_dir = tempdir(),
+      starting_port = 3001), auto_unbox = TRUE), path)
+  }
+  write_config(file.path(dir, "r1", "config.json"), "one")
+  local_mocked_bindings(is_port_in_use = function(...) FALSE)
+
+  old_dir <- setwd(dir)
+  on.exit(setwd(old_dir), add = TRUE, after = FALSE)
+  config <- create_server_config(file.path("r1", "config.json"))
+  expect_equal(config$config_file, file.path(getwd(), "r1", "config.json"))
+
+  # A link that a deployment points at a new release, as a Kubernetes ConfigMap does
+  link <- file.path(dir, "current")
+  linked <- if (.Platform$OS.type == "windows") {
+    suppressWarnings(Sys.junction(file.path(dir, "r1"), link))
+  } else {
+    file.symlink(file.path(dir, "r1"), link)
+  }
+  skip_if_not(isTRUE(linked), "Cannot create a link")
+  config <- create_server_config(file.path(link, "config.json"))
+  dir.create(file.path(dir, "r2"))
+  write_config(file.path(dir, "r2", "config.json"), "two")
+  unlink(link)
+  if (.Platform$OS.type == "windows") Sys.junction(file.path(dir, "r2"), link) else file.symlink(file.path(dir, "r2"), link)
+  unlink(file.path(dir, "r1"), recursive = TRUE)
+  check <- config$read_reload_config()
+  expect_true(check$valid)
+  expect_equal(check$config$apps[[1]]$name, "two")
+})
