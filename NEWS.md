@@ -124,7 +124,7 @@
 
 * Uploads to apps are no longer limited to about 4 MB per second, and every proxied request is faster. A transfer now continues as soon as the app's socket is ready instead of on a 10-millisecond timer, and a request to a running app no longer opens a separate connection first to check that the app is listening.
 
-* An app response larger than 8 MB is written to a temporary file as it arrives and sent from there, instead of being held in the server's memory, so a large download no longer occupies the memory of the process that serves every app. If R's temporary directory has been removed, for example by a cleaner of `/tmp` on a server that runs for weeks, it is created again. The README notes that httpuv keeps a response that a client stops downloading, in memory or as this file, until the server stops.
+* An app response larger than 8 MB is written to a temporary file as it arrives and sent from there, instead of being held in the server's memory, so a large download no longer occupies the memory of the process that serves every app. If R's temporary directory has been removed, for example by a cleaner of `/tmp` on a server that runs for weeks, it is created again. The README notes that httpuv keeps a response that a client on a keep-alive connection stops downloading, in memory or as this file, until the server stops (rstudio/httpuv#448).
 
 * Proxied responses keep their headers when the app sends a chunked response with trailer fields. The trailer fields took the place of the response's headers, such as its `Content-Type`, cookies, and redirect.
 

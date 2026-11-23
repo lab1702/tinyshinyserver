@@ -403,7 +403,7 @@ Responses:
 - If a running app does not accept connections, the proxy returns HTTP 503. Once the app accepts a connection, a request fails with HTTP 502 if the connection breaks or the app sends no data for 10 minutes; there is no limit on the total transfer time.
 - A response reaches the browser once the app has finished sending it. A response that an app streams, such as server-sent events, is therefore not delivered piece by piece, and a download shows no progress until the proxy has received all of it.
 - A response larger than 8 MB is written to a file in R's temporary directory as it arrives, sent from there, and then deleted. It needs that much free disk space for the duration of the request, instead of the server's memory.
-- If the client disconnects while a response is being sent, R's web server, httpuv, does not release the response: it stays in memory, or on disk as that file, until the R session that runs the server ends. Repeated aborted downloads of large responses therefore use up memory or disk; restart the server if that happens.
+- If a client disconnects while a response is being sent over a keep-alive connection, which browsers and most reverse proxies use, R's web server, httpuv, does not release the response ([rstudio/httpuv#448](https://github.com/rstudio/httpuv/issues/448)). It stays in memory, or in that file, until the R session that runs the server ends. Repeated aborted downloads of large responses therefore use up memory or disk; restart the server if that happens.
 
 WebSocket sessions:
 
