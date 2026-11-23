@@ -69,20 +69,21 @@ that can affect existing users are:
 * The package now requires R >= 4.1.0, as its `promises` and `quarto`
   dependencies already do, and newer minimum versions of `httpuv` (1.5.5),
   `later` (1.4.0), `curl` (3.3), `websocket` (1.1.0), `ps` (1.7.0), `callr`
-  (3.7.0), and `logger` (0.2.0) for functions it now uses. It no longer
-  imports `future`, `digest`, or `openssl`.
+  (3.7.0), `jsonlite` (1.6), and `logger` (0.2.0) for functions it now uses.
+  It no longer imports `future`, `digest`, or `openssl`.
 
 ## Test environments
 
 * Local: Windows 11 x64 (build 26300), x86_64-w64-mingw32,
   R 4.6.2 (2026-10-29 ucrt).
   Checked with `R CMD check --as-cran` on the source tarball built from
-  commit 2971b38, including the PDF manual and the CRAN incoming
+  commit 1f158c2, including the PDF manual and the CRAN incoming
   feasibility check. The test suite was also run there at that commit with
   `NOT_CRAN=true`, which runs the tests skipped on CRAN.
-* R-hub (commit 2971b38, run
-  https://github.com/lab1702/tinyshinyserver/actions/runs/45260095667):
-  linux (R-devel), windows (R-devel), macos-arm64 (R-devel), gcc16, and
+* R-hub (commit 1f158c2, run
+  https://github.com/lab1702/tinyshinyserver/actions/runs/45266127642):
+  linux (R-devel), windows (R-devel), windows (R-oldrel, R 4.5.3),
+  macos-arm64 (R-devel), macos-arm64 (R-oldrel, R 4.5.3), gcc16, and
   ubuntu-gcc12.
 
 The commit recording these results changes only this file, which is excluded
@@ -92,22 +93,22 @@ from the build, so the package checked is identical.
 
 Local: 0 errors | 0 warnings | 0 notes.
 
-R-hub at commit 2971b38: 0 errors | 0 warnings | 0 notes on all five platforms.
+R-hub at commit 1f158c2: 0 errors | 0 warnings | 0 notes on all seven platforms.
 
-Test results: 3437 passes locally and on R-hub's windows (R-devel), with 12
-intentional skips on CRAN (timing checks of the port test and of forwarding
-many request headers, and ten tests that run R processes, such as apps that
-load shiny or a render with the Quarto CLI, and check their output, memory
-use, library paths, or cleanup).
-The other four R-hub platforms have one more skip: a test of keeping an
+Test results: 3437 passes locally and on R-hub's two windows platforms
+(R-devel and R-oldrel), with 12 intentional skips on CRAN (timing checks of
+the port test and of forwarding many request headers, and ten tests that run
+R processes, such as apps that load shiny or a render with the Quarto CLI,
+and check their output, memory use, library paths, or cleanup).
+The other five R-hub platforms have one more skip: a test of keeping an
 app's log when it is held open runs only on Windows, the one platform that
 refuses to rename an open file. They have 3438 passes on the three Linux
-platforms and 3436 on macos-arm64 (R-devel): a test of a document name in
-another letter case makes two more checks on a file system that tells
-letter case apart, which macOS's default file system, like Windows', does
-not. All runs had 0 failures and 0 warnings. One test's expectation count
-depends on timing. Locally with `NOT_CRAN=true`, the tests have 3503 passes
-and no skips, failures, or warnings.
+platforms and 3436 on the two macos-arm64 platforms (R-devel and R-oldrel):
+a test of a document name in another letter case makes two more checks on a
+file system that tells letter case apart, which macOS's default file system,
+like Windows', does not. All runs had 0 failures and 0 warnings. One test's
+expectation count depends on timing. Locally with `NOT_CRAN=true`, the tests
+have 3503 passes and no skips, failures, or warnings.
 
 ## Downstream dependencies
 
