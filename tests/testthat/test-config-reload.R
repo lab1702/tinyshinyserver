@@ -24,7 +24,8 @@ test_that("read_reload_config reads the loaded file again with defaults", {
   write_reload_config(path, list(list(name = "one", path = "/tmp")))
   local_mocked_bindings(is_port_in_use = function(...) FALSE)
   config <- create_server_config(path)
-  expect_equal(config$config_file, normalizePath(path))
+  # An absolute path is kept as given, links and all
+  expect_equal(config$config_file, path)
 
   write_reload_config(path, list(list(name = "two", path = "/tmp", resident = TRUE)), title = "  New  ")
   check <- config$read_reload_config()
