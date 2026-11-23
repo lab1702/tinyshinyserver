@@ -18,7 +18,10 @@ port can still accept a connection for a moment. This was a timing fault in
 the test, not in the package, and it is fixed in this release: the test now
 waits up to 5 seconds for the port to close, and on CRAN skips its last
 check rather than fail if the port is still in use then, since another
-program on a shared check machine can take a freed port.
+program on a shared check machine can take a freed port. The helper with
+which other tests wait for a stopped test server's port to close had the
+same fault in another form: it tested the port by listening on it, and that
+listener was closed a moment later too. It now only connects to the port.
 
 ## Changes in this release
 
@@ -37,6 +40,10 @@ that can affect existing users are:
 * The proxy no longer forwards app responses larger than the new
   `max_response_size_mb` option (default 1024 MB). It ends the transfer and
   answers HTTP 502, instead of writing a response of any size to disk.
+* No more than 64 requests with a body, such as uploads, are received or
+  awaited at a time. Further ones are answered with HTTP 503 and a
+  `Retry-After` header before their bodies are read, so that unfinished
+  uploads cannot take all of the R session's connections.
 * App processes start in their app directory and read the `.Renviron` and
   `.Rprofile` there, as R does when the app is run on its own, instead of
   those of the directory that `start_tss()` was called from. The site
@@ -70,11 +77,11 @@ that can affect existing users are:
 * Local: Windows 11 x64 (build 26300), x86_64-w64-mingw32,
   R 4.6.2 (2026-10-29 ucrt).
   Checked with `R CMD check --as-cran` on the source tarball built from
-  commit b9ec5c2, including the PDF manual and the CRAN incoming
+  commit 2971b38, including the PDF manual and the CRAN incoming
   feasibility check. The test suite was also run there at that commit with
   `NOT_CRAN=true`, which runs the tests skipped on CRAN.
-* R-hub (commit b9ec5c2, run
-  https://github.com/lab1702/tinyshinyserver/actions/runs/45234015049):
+* R-hub (commit 2971b38, run
+  https://github.com/lab1702/tinyshinyserver/actions/runs/45260095667):
   linux (R-devel), windows (R-devel), macos-arm64 (R-devel), gcc16, and
   ubuntu-gcc12.
 
@@ -85,21 +92,21 @@ from the build, so the package checked is identical.
 
 Local: 0 errors | 0 warnings | 0 notes.
 
-R-hub at commit b9ec5c2: 0 errors | 0 warnings | 0 notes on all five platforms.
+R-hub at commit 2971b38: 0 errors | 0 warnings | 0 notes on all five platforms.
 
-Test results: 3178 passes locally and on R-hub's windows (R-devel), with 12
+Test results: 3437 passes locally and on R-hub's windows (R-devel), with 12
 intentional skips on CRAN (timing checks of the port test and of forwarding
 many request headers, and ten tests that run R processes, such as apps that
 load shiny or a render with the Quarto CLI, and check their output, memory
 use, library paths, or cleanup).
 The other four R-hub platforms have one more skip: a test of keeping an
 app's log when it is held open runs only on Windows, the one platform that
-refuses to rename an open file. They have 3179 passes on the three Linux
-platforms and 3177 on macos-arm64 (R-devel): a test of a document name in
+refuses to rename an open file. They have 3438 passes on the three Linux
+platforms and 3436 on macos-arm64 (R-devel): a test of a document name in
 another letter case makes two more checks on a file system that tells
 letter case apart, which macOS's default file system, like Windows', does
 not. All runs had 0 failures and 0 warnings. One test's expectation count
-depends on timing. Locally with `NOT_CRAN=true`, the tests have 3244 passes
+depends on timing. Locally with `NOT_CRAN=true`, the tests have 3503 passes
 and no skips, failures, or warnings.
 
 ## Downstream dependencies
