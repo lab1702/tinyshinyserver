@@ -190,6 +190,21 @@ parse_proxy_path <- function(path) {
 
 # Start an on-demand app that a request or WebSocket has arrived for, unless it
 # is already running. FALSE when the app could not be started.
+# Whether a request names an R Markdown or Quarto document other than the one
+# that an R Markdown app serves. rmarkdown::run() renders, and so runs the code
+# of, any such document under the app directory whose path a page or its
+# WebSocket asks for, such as a partial whose name starts with "_" or a draft
+# in a subdirectory. rmarkdown decodes the path first.
+is_other_document_path <- function(document, backend_path) {
+  if (is.null(document) || !identical(document$type, "rmd")) {
+    return(FALSE)
+  }
+  path <- sub("/websocket/$", "", backend_path)
+  path <- tryCatch(utils::URLdecode(path), error = function(e) path)
+  grepl("\\.[rq]md$", path, ignore.case = TRUE) &&
+    !identical(tolower(path), tolower(paste0("/", basename(document$file))))
+}
+
 ensure_on_demand_app_started <- function(app_config, config, process_manager, trigger) {
   app_name <- app_config$name
   if (app_config$resident || is.null(process_manager) || is_process_alive(config$get_app_process(app_name))) {
@@ -228,10 +243,14 @@ handle_proxy_request <- function(path, method, query_string, req, config, proces
     if (backoff > 0) {
       return(as_starting_page(
         create_503_response(sprintf("App '%s' is restarting after a failure, please retry", app_name), backoff),
-        req, method, app_name, template_manager, backoff
+        req, method, app_name, template_manager, backoff, app_config$appstart_timeout %||% 2
       ))
     }
     return(create_error_response("Failed to start app on demand", 502))
+  }
+
+  if (is_other_document_path(config$get_app_document(app_name), route$backend_path)) {
+    return(create_error_response("Not Found", 404))
   }
 
   # Only the routing prefix is removed; the backend path is passed on verbatim.
@@ -273,7 +292,7 @@ EXPECT_CONTINUE_BYTES <- 65536
 UNFORWARDED_REQUEST_HEADERS <- c(
   "HOST", "CONNECTION", "KEEP_ALIVE", "TRANSFER_ENCODING",
   "TE", "TRAILER", "UPGRADE", "PROXY_AUTHORIZATION",
-  "PROXY_AUTHENTICATE", "CONTENT_LENGTH", "CONTENT_TYPE",
+  "PROXY_AUTHENTICATE", "PROXY_CONNECTION", "CONTENT_LENGTH", "CONTENT_TYPE",
   # httpuv has already answered the client's expectation and read the body
   "EXPECT"
 )
@@ -282,17 +301,27 @@ forwarded_request_headers <- function(req, skip = character()) {
   "The request headers to send to an app, for HTTP requests and WebSocket handshakes alike"
 
   sent <- request_headers(req)
-  headers <- list()
-  for (name in names(sent)) {
-    # An app's own server reads "X_Forwarded_User" as X-Forwarded-User, in
-    # place of the value a reverse proxy set, so no header whose name has an
-    # underscore is passed on
-    if (grepl("_", name, fixed = TRUE)) next
-    header_name <- toupper(name)
-    if (!gsub("-", "_", header_name, fixed = TRUE) %in% c(UNFORWARDED_REQUEST_HEADERS, skip)) {
-      headers[[header_name]] <- sent[[name]]
-    }
+  if (length(sent) == 0) {
+    return(list())
   }
+  # Selected in one pass: a request may carry thousands of headers, and
+  # building the list one header at a time took seconds of the event loop
+  sent_names <- names(sent)
+  header_names <- toupper(sent_names)
+  keys <- gsub("-", "_", header_names, fixed = TRUE)
+  # The headers that the client's Connection header names belong to its
+  # connection to the proxy, as the fixed ones above do
+  connection <- as.character(unlist(sent[tolower(sent_names) == "connection"], use.names = FALSE))
+  nominated <- toupper(trimws(unlist(strsplit(connection, ",", fixed = TRUE, useBytes = TRUE))))
+  nominated <- gsub("-", "_", nominated[is_ascii(nominated) & nominated != ""], fixed = TRUE)
+  # An app's own server reads "X_Forwarded_User" as X-Forwarded-User, in
+  # place of the value a reverse proxy set, so no header whose name has an
+  # underscore is passed on. Of headers sent twice, the last one is kept.
+  keep <- !grepl("_", sent_names, fixed = TRUE) &
+    !keys %in% c(UNFORWARDED_REQUEST_HEADERS, nominated, skip) &
+    !duplicated(header_names, fromLast = TRUE)
+  headers <- as.list(sent[keep])
+  names(headers) <- header_names[keep]
   headers
 }
 
@@ -300,14 +329,15 @@ forwarded_request_headers <- function(req, skip = character()) {
 # app's page cannot act on a JSON error or a Retry-After header, so it receives
 # a page that reloads itself, with the same status and headers; every other
 # client receives the JSON.
-as_starting_page <- function(response, req, method, app_name, template_manager, retry_seconds) {
+as_starting_page <- function(response, req, method, app_name, template_manager, retry_seconds,
+                             answer_seconds = 2) {
   opens_page <- identical(method, "GET") &&
     grepl("text/html", request_header(req, "accept") %||% "", fixed = TRUE)
   if (is.null(template_manager) || !opens_page) {
     return(response)
   }
   page <- tryCatch(
-    template_manager$generate_starting_page(app_name, retry_seconds),
+    template_manager$generate_starting_page(app_name, retry_seconds, answer_seconds),
     error = function(e) {
       logger::log_error("Error generating the starting page: {error}", error = conditionMessage(e))
       NULL
@@ -333,7 +363,9 @@ forward_request <- function(method, target_url, req, app_name, config, template_
 
   retry_seconds <- 2
   for_browser <- function(response) {
-    as_starting_page(response, req, method, app_name, template_manager, retry_seconds)
+    as_starting_page(response, req, method, app_name, template_manager, retry_seconds,
+      config$get_app_config(app_name)$appstart_timeout %||% 2
+    )
   }
   unavailable <- function(message) {
     for_browser(create_503_response(message, retry_seconds))
@@ -489,7 +521,12 @@ parse_response_headers <- function(raw_headers) {
   if (length(blocks) == 0) {
     return(list())
   }
-  lines <- strsplit(blocks[length(blocks)], "\r\n|\n|\r", useBytes = TRUE)[[1]]
+  # The final response's block is the last one that starts with a status line.
+  # libcurl adds the trailer fields of a chunked response after it, and those
+  # would otherwise take the place of its Content-Type, cookies, and redirect.
+  responses <- which(startsWith(blocks, "HTTP/"))
+  final <- if (length(responses) > 0) responses[length(responses)] else length(blocks)
+  lines <- strsplit(blocks[final], "\r\n|\n|\r", useBytes = TRUE)[[1]]
   colon <- regexpr(":", lines, fixed = TRUE, useBytes = TRUE)
   names <- substr(lines, 1, colon - 1)
   fields <- colon > 1 & grepl("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$", names, useBytes = TRUE)
@@ -534,16 +571,19 @@ proxy_response_headers <- function(raw_headers, target_url, app_name, method, ba
       headers[[i]] <- value
     } else if (names(headers)[i] == "set-cookie") {
       # Backend cookies must not become shared cookies for every hosted app.
-      if (!grepl(";[[:space:]]*path=/", value, ignore.case = TRUE)) {
+      # Browsers trim spaces around attribute names and values and use the
+      # last Path, so every Path attribute is rewritten, however it is spaced.
+      path_attribute <- "(;[[:space:]]*path[[:space:]]*=[[:space:]]*)(/[^;]*)"
+      if (!grepl(path_attribute, value, ignore.case = TRUE, perl = TRUE)) {
         request_path <- sub("[?#].*$", "", substring(target_url, nchar(authority) + 1))
         default_path <- sub("/[^/]*$", "", request_path)
         if (default_path == "" || !startsWith(default_path, "/")) default_path <- "/"
         value <- paste0(value, "; Path=", default_path)
       }
-      value <- gsub("(;[[:space:]]*path=)(/[^;]*)", paste0("\\1", prefix, "\\2"), value,
+      value <- gsub(path_attribute, paste0("\\1", prefix, "\\2"), value,
         ignore.case = TRUE, perl = TRUE)
-      value <- gsub(";[[:space:]]*domain=\\.?((127\\.0\\.0\\.1)|localhost)(?=;|$)", "", value,
-        ignore.case = TRUE, perl = TRUE)
+      value <- gsub(";[[:space:]]*domain[[:space:]]*=[[:space:]]*\\.?((127\\.0\\.0\\.1)|localhost)[[:space:]]*(?=;|$)",
+        "", value, ignore.case = TRUE, perl = TRUE)
       headers[[i]] <- value
     }
   }
@@ -590,8 +630,10 @@ response_body_collector <- function(limit = RESPONSE_SPOOL_BYTES) {
       }
       size <<- size + length(data)
       if (is.null(writer) && size > limit) {
-        # curl's writer holds no R connection, of which a session has few
-        path <<- tempfile("tss-response-")
+        # curl's writer holds no R connection, of which a session has few.
+        # A cleaner of /tmp may have removed R's session directory on a
+        # server that runs for weeks; tempdir() then creates it again.
+        path <<- tempfile("tss-response-", tmpdir = tempdir(check = TRUE))
         writer <<- curl::file_writer(path)
         for (chunk in chunks) writer(chunk)
         chunks <<- list()
@@ -736,6 +778,19 @@ is_same_origin_websocket <- function(req) {
   default_port <- if (match[2] == "https") "443" else "80"
   origin_authority <- normalize(match[3], default_port)
 
+  # A handshake that reached the reverse proxy over HTTPS belongs to the HTTPS
+  # site. A page on the plain-HTTP site of the same host, which an attacker on
+  # the network can write, may not open it with that site's credentials.
+  # Only this direction is refused: a reverse proxy behind another one that
+  # ends TLS reports "http" for pages that the browser loaded over HTTPS.
+  # Browsers cannot set this header on a handshake, so it is not forged by a
+  # page, and a client that sets it only makes the check stricter.
+  forwarded_proto <- request_header(req, "x-forwarded-proto")
+  if (!is.null(forwarded_proto) && match[2] == "http" &&
+      identical(tolower(trimws(strsplit(forwarded_proto, ",", fixed = TRUE)[[1]][1])), "https")) {
+    return(FALSE)
+  }
+
   hosts <- request_header(req, "host")
   # A reverse proxy on this machine may rewrite Host but report the original
   remote_addr <- req$REMOTE_ADDR
@@ -755,7 +810,7 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
   logger::log_info("WebSocket connection opened")
 
   if (!is_allowed_proxy_host(ws$request, config)) {
-    logger::log_warn("Rejecting WebSocket with Host {host}", host = request_header(ws$request, "host"))
+    logger::log_warn("Rejecting WebSocket with Host {host}", host = log_value(request_header(ws$request, "host")))
     ws$close()
     return()
   }
@@ -763,7 +818,7 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
   # Browsers attach cookies and cached credentials to cross-site WebSocket
   # handshakes, so only accept sessions opened by pages served from this host
   if (!is_same_origin_websocket(ws$request)) {
-    logger::log_warn("Rejecting cross-origin WebSocket from {origin}", origin = request_header(ws$request, "origin"))
+    logger::log_warn("Rejecting cross-origin WebSocket from {origin}", origin = log_value(request_header(ws$request, "origin")))
     ws$close()
     return()
   }
@@ -799,6 +854,12 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
 
   if (!ensure_on_demand_app_started(app_config, config, process_manager, "WebSocket connection")) {
     logger::log_error("Failed to start app {app_name} on demand for WebSocket", app_name = app_name)
+    ws$close()
+    return()
+  }
+
+  if (is_other_document_path(config$get_app_document(app_name), route$backend_path)) {
+    logger::log_warn("Rejecting WebSocket for a document that app {app_name} does not serve", app_name = app_name)
     ws$close()
     return()
   }

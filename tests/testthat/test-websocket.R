@@ -36,6 +36,52 @@ test_that("same-origin WebSocket handshakes are recognised", {
   expect_false(same(HTTP_HOST = "127.0.0.1:3838", HTTP_ORIGIN = "https://myapp.example.com",
     REMOTE_ADDR = "203.0.113.5", HTTP_X_FORWARDED_HOST = "myapp.example.com"))
   expect_false(same(HTTP_HOST = "localhost:3838", HTTP_ORIGIN = "http://localhost:3839"))
+  # A page on the plain-HTTP site may not open the HTTPS site's sessions
+  expect_false(same(HTTP_HOST = "myapp.example.com", HTTP_ORIGIN = "http://myapp.example.com",
+    HTTP_X_FORWARDED_PROTO = "https"))
+  expect_false(same(HTTP_HOST = "myapp.example.com", HTTP_ORIGIN = "http://myapp.example.com:80",
+    HTTP_X_FORWARDED_PROTO = "HTTPS, http"))
+  expect_true(same(HTTP_HOST = "myapp.example.com", HTTP_ORIGIN = "https://myapp.example.com",
+    HTTP_X_FORWARDED_PROTO = "https"))
+  # Behind a second proxy that ends TLS, the inner one reports "http"
+  expect_true(same(HTTP_HOST = "myapp.example.com", HTTP_ORIGIN = "https://myapp.example.com",
+    HTTP_X_FORWARDED_PROTO = "http"))
+  expect_true(same(HTTP_HOST = "myapp.example.com", HTTP_ORIGIN = "http://myapp.example.com"))
+})
+
+test_that("rejected handshakes log their Host and Origin without control characters", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", port = 1, resident = TRUE)))
+  cm <- ConnectionManager$new(config)
+  hostile <- paste0("evil\033[2K\033[1Afake line\r", strrep("x", 500))
+  logged <- capture_test_log({
+    handle_websocket_connection(list(request = list(PATH_INFO = "/proxy/app/websocket/", HTTP_HOST = hostile),
+      close = function() NULL), config, cm)
+    handle_websocket_connection(list(request = list(PATH_INFO = "/proxy/app/websocket/", HTTP_HOST = "localhost",
+      HTTP_ORIGIN = hostile), close = function() NULL), config, cm)
+  })
+  rejected <- grep("Rejecting", logged, value = TRUE)
+  expect_length(rejected, 2)
+  expect_false(any(grepl("[\001-\037]", rejected, useBytes = TRUE)))
+  expect_true(all(grepl("evil?[2K?[1Afake line?xxx", rejected, fixed = TRUE)))
+  expect_true(all(nchar(rejected, type = "bytes") < 400))
+  expect_equal(log_value(NULL), "(none)")
+})
+
+test_that("an R Markdown app's socket may not open another document of its directory", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "reports", port = 1, resident = TRUE)))
+  config$set_app_document("reports", list(type = "rmd", file = file.path(tempdir(), "report.Rmd")))
+  cm <- ConnectionManager$new(config)
+  closed <- 0
+  for (path in c("/_partial.Rmd/websocket/", "/drafts/notes.Rmd/websocket/", "/%5fpartial.rmd/websocket/",
+                 "/other.qmd/websocket/")) {
+    handle_websocket_connection(list(request = list(PATH_INFO = paste0("/proxy/reports", path), HTTP_HOST = "localhost"),
+      close = function() closed <<- closed + 1,
+      onMessage = function(...) stop("The socket must be rejected")), config, cm)
+  }
+  expect_equal(closed, 4)
+  expect_length(config$get_all_ws_connections(), 0)
 })
 
 test_that("a WebSocket path that names no app is rejected like an HTTP path", {
@@ -194,6 +240,73 @@ test_that("backend errors close sessions once and ignore replaced connections", 
   callbacks$error(list(message = "Old error"))
   expect_equal(closed, 1)
   expect_identical(config$get_backend_connection("s"), replacement)
+})
+
+test_that("a backend handshake that times out is tried again, keeping the browser's messages", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", port = 3001, resident = TRUE)))
+  sockets <- list()
+  local_mocked_bindings(WebSocket = list(new = function(...) {
+    socket <- new.env()
+    socket$sent <- list()
+    socket$closed <- FALSE
+    socket$onMessage <- function(f) socket$message <- f
+    socket$onOpen <- function(f) socket$open <- f
+    socket$onError <- function(f) socket$error <- f
+    socket$onClose <- function(f) socket$closed_by_app <- f
+    socket$send <- function(data) socket$sent[[length(socket$sent) + 1]] <- data
+    socket$close <- function() socket$closed <- TRUE
+    sockets[[length(sockets) + 1]] <<- socket
+    socket
+  }), .package = "websocket")
+  local_mocked_bindings(process_owns_port = function(process, port) TRUE)
+  config$add_app_process("app", test_backend_process())
+  cm <- ConnectionManager$new(config)
+  closed <- character()
+  connect <- function(session) {
+    client <- list(close = function() closed <<- c(closed, session), send = function(data) NULL)
+    cm$add_client_connection(session, client, "app", "127.0.0.1", "test")
+    cm$create_backend_connection("app", session, client)
+  }
+  run_until <- function(condition) {
+    deadline <- Sys.time() + 5
+    while (!condition() && Sys.time() < deadline) later::run_now(0.05)
+  }
+  timeout <- list(message = "The opening handshake timed out")
+
+  # A busy app completes the handshake only once it is free again
+  connect("busy")
+  expect_true(cm$handle_client_message("busy", "init", "app"))
+  sockets[[1]]$error(timeout)
+  expect_length(closed, 0)
+  run_until(function() length(sockets) == 2)
+  expect_length(sockets, 2)
+  expect_true(cm$handle_client_message("busy", "update", "app"))
+  sockets[[2]]$open(list())
+  expect_equal(sockets[[2]]$sent, list("init", "update"))
+  expect_true(config$get_backend_connection("busy")$ready)
+  # The failed socket's late events no longer act on the session
+  sockets[[1]]$error(timeout)
+  expect_length(closed, 0)
+
+  # A session that ends while it waits is not connected again
+  connect("left")
+  sockets[[3]]$error(timeout)
+  cm$remove_client_connection("left")
+  later::run_now(1)
+  expect_length(sockets, 3)
+
+  # The app is not waited for without end, and a refused connection fails at once
+  config$WS_BACKEND_CONNECT_SECONDS <- 0
+  connect("slow")
+  sockets[[4]]$error(timeout)
+  expect_equal(closed, "slow")
+  config$WS_BACKEND_CONNECT_SECONDS <- 120
+  connect("refused")
+  sockets[[5]]$error(list(message = "Connection refused"))
+  expect_equal(closed, c("slow", "refused"))
+  later::run_now(1)
+  expect_length(sockets, 5)
 })
 
 test_that("backend closure disconnects its browser and ignores stale callbacks", {

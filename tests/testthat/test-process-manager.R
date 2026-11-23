@@ -427,6 +427,25 @@ test_that("stop_app_immediately stops non-resident app", {
   expect_true(result)
 })
 
+test_that("an on-demand app that the idle check finds dead waits restart_delay", {
+  # A crash closes the app's sessions, and the idle check that follows can
+  # come before the health check that would record the failure
+  config <- ShinyServerConfig$new()
+  config$config <- list(restart_delay = 60, apps = list(
+    list(name = "app1", path = "/path/to/app1", port = 3001, resident = FALSE)
+  ))
+  config$add_app_process("app1", list(get_pid = function() 12345, is_alive = function() FALSE))
+  cleaned <- 0
+  pm <- ProcessManager$new(config)
+  assign("cleanup_app_connections", function(app_name) cleaned <<- cleaned + 1, envir = pm)
+  local_mocked_bindings(kill_process_safely = function(process) TRUE)
+
+  expect_true(pm$stop_app_immediately("app1"))
+  expect_null(config$get_app_process("app1"))
+  expect_equal(cleaned, 1)
+  expect_gt(config$start_backoff_seconds("app1"), 59)
+})
+
 # ============================================================================
 # restart_app() Tests
 # ============================================================================
@@ -1647,9 +1666,61 @@ test_that("start_app starts an app process in the app's directory", {
   expect_true(all(names(callr::rcmd_safe_env()) %in% names(args$env)))
   # The app's process need not load this package to find its profile
   expect_identical(environment(args$args$profile_file), baseenv())
+  # callr drops an empty R_PROFILE_USER, so the server's own setting is passed
+  expect_identical(args$args$profile_setting, Sys.getenv("R_PROFILE_USER", unset = NA))
   # Paths stay valid from the app's directory
   expect_identical(args$stdout, file.path(normalizePath(tempdir()), "app_output.log"))
   expect_identical(args$args$log_dir, normalizePath(tempdir()))
+  expect_identical(config$get_app_document("app"), list(type = "shiny"))
+})
+
+test_that("an R Markdown app serves the document that the server chose at its root", {
+  app_dir <- tempfile("tss-rmd-app")
+  dir.create(app_dir)
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  writeLines(c("---", "runtime: shiny", "---"), file.path(app_dir, "report.Rmd"))
+  # rmarkdown::run() would serve an index document of either kind first
+  writeLines(c("---", "server: shiny", "---"), file.path(app_dir, "index.qmd"))
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", path = app_dir, port = 1, resident = TRUE)),
+    log_dir = tempdir())
+  args <- NULL
+  local_mocked_bindings(r_bg = function(...) {
+    args <<- list(...)
+    list(is_alive = function() TRUE)
+  }, .package = "callr")
+  ProcessManager$new(config)$start_app(config$config$apps[[1]])
+  config$remove_app_process("app")
+
+  expect_equal(args$args$type, "rmd")
+  expect_equal(basename(args$args$file), "report.Rmd")
+  expect_equal(config$get_app_document("app")$file, args$args$file)
+  ran <- NULL
+  local_mocked_bindings(run = function(...) ran <<- list(...), .package = "rmarkdown")
+  do.call(args[[1]], utils::modifyList(args$args, list(profile_setting = "")))
+  expect_equal(ran$default_file, "report.Rmd")
+})
+
+test_that("a log that cannot be renamed is copied to the previous run's log", {
+  # Only Windows refuses to rename a file that a program holds open
+  skip_if_not(.Platform$OS.type == "windows")
+  app_dir <- make_test_app_dir()
+  log_dir <- tempfile("tss-rotate-logs")
+  dir.create(log_dir)
+  on.exit(unlink(c(app_dir, log_dir), recursive = TRUE), add = TRUE)
+  error_log <- file.path(log_dir, "app_error.log")
+  writeLines("crash traceback", error_log)
+  writeLines("older run", file.path(log_dir, "app_error.prev.log"))
+  reader <- file(error_log, "r")
+  on.exit(close(reader), add = TRUE, after = FALSE)
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", path = app_dir, port = 1, resident = TRUE)),
+    log_dir = log_dir)
+  local_mocked_bindings(r_bg = function(...) list(is_alive = function() TRUE), .package = "callr")
+  ProcessManager$new(config)$start_app(config$config$apps[[1]])
+  config$remove_app_process("app")
+
+  expect_equal(readLines(file.path(log_dir, "app_error.prev.log")), "crash traceback")
 })
 
 test_that("an app reads the environment file that R reads in its directory", {
@@ -1667,6 +1738,9 @@ test_that("an app reads the environment file that R reads in its directory", {
   # As at R's startup, a file that R_ENVIRON_USER names takes the place of both
   Sys.setenv(R_ENVIRON_USER = file.path(tempdir(), "shared.Renviron"))
   expect_identical(app_environ_file(app_dir), file.path(tempdir(), "shared.Renviron"))
+  # Set but empty, it names no file: the app reads the null device. Windows
+  # cannot hold an empty variable, so the value is passed in.
+  expect_identical(app_environ_file(app_dir, named = ""), nullfile())
 })
 
 test_that("an app runs the profile that R runs in its directory", {
@@ -1686,6 +1760,8 @@ test_that("an app runs the profile that R runs in its directory", {
   # As at R's startup, a file that R_PROFILE_USER names takes the place of both
   Sys.setenv(R_PROFILE_USER = "~/shared.Rprofile")
   expect_identical(startup_profile_file(), path.expand("~/shared.Rprofile"))
+  # Set but empty, it names no profile, even with one in the directory
+  expect_identical(startup_profile_file(named = ""), "")
 })
 
 test_that("an app process reads its own .Rprofile and .Renviron, not the server's", {

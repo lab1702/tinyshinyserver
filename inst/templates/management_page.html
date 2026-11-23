@@ -200,6 +200,123 @@
             return node;
         }
 
+        // Text that changed is replaced; other text keeps a visitor's selection
+        function setText(node, text) {
+            const value = text == null ? "" : String(text);
+            if (node.textContent !== value) node.textContent = value;
+        }
+
+        // Put nodes in a container in this order, moving only nodes that are
+        // out of place: moving a node takes the keyboard focus from it
+        function arrange(container, nodes) {
+            if (nodes.length === container.children.length &&
+                nodes.every((node, index) => container.children[index] === node)) {
+                return;
+            }
+            container.replaceChildren(...nodes);
+        }
+
+        // Each app's card is made once and then updated in place, so that a
+        // refresh keeps the keyboard focus on a Restart button, and a click
+        // that spans a refresh still lands
+        const appCards = new Map();
+        // Apps whose restart is in progress, so that a refresh does not offer
+        // the Restart button again in the meantime
+        const restarting = new Set();
+        let appsData = {};
+
+        function actionKind(app) {
+            if (app.status === "unavailable") return "unavailable";
+            // A dormant app waiting out restart_delay after a failure can be
+            // restarted, which ends the wait
+            if (app.status === "dormant" && typeof app.restart_in_seconds !== "number") return "dormant";
+            return "restart";
+        }
+
+        function renderAppCard(app) {
+            let entry = appCards.get(app.name);
+            if (!entry) {
+                const card = element("div", "app-card");
+                const header = element("div", "app-header");
+                const badge = element("span");
+                header.append(element("div", "app-name", app.name), badge);
+                const details = element("div", "app-details");
+                const actions = element("div", "app-actions");
+                card.append(header, details, actions);
+                entry = { card, badge, details, actions, kind: null, info: null, button: null };
+                appCards.set(app.name, entry);
+            }
+
+            entry.badge.className = "status-badge status-" + app.status;
+            setText(entry.badge, app.status);
+
+            const rows = [];
+            if (app.resident !== undefined) {
+                rows.push(["type", "Type", app.resident ? "Resident" : "On-demand"]);
+            }
+            rows.push(
+                ["port", "Port", app.port],
+                ["pid", "PID", typeof app.pid === "number" ? app.pid : "N/A"],
+                ["memory", "Memory", orNA(app.memory_bytes, formatBytes)],
+                ["uptime", "Uptime", orNA(app.uptime_seconds, formatDuration)],
+                ["connections", "Connections", app.connections],
+                ["path", "Path", app.path, true]
+            );
+            const keys = rows.map(row => row[0]).join(" ");
+            if (entry.details.dataset.keys !== keys) {
+                entry.details.dataset.keys = keys;
+                entry.details.replaceChildren(...rows.map(row => detail(...row)));
+            }
+            rows.forEach(([key, , value]) => {
+                setText(entry.details.querySelector(`[data-detail="${key}"] .detail-value`), value);
+            });
+
+            const kind = actionKind(app);
+            if (entry.kind !== kind) {
+                entry.kind = kind;
+                entry.info = null;
+                entry.button = null;
+                if (kind === "dormant") {
+                    // Dormant (on-demand, stopped) apps start automatically when opened
+                    entry.actions.replaceChildren(element("div", "app-info", "Starts automatically when opened"));
+                } else if (kind === "unavailable") {
+                    // An on-demand app whose directory cannot be served
+                    entry.actions.replaceChildren(element("div", "app-info", "Cannot start - see server.log for the reason"));
+                } else {
+                    entry.info = element("div", "app-info");
+                    entry.button = element("button", "restart-btn", "Restart");
+                    entry.button.type = "button";
+                    entry.button.addEventListener("click", () => restartApp(app.name));
+                    entry.actions.replaceChildren(entry.info, entry.button);
+                }
+            }
+            if (entry.info) {
+                const waiting = typeof app.restart_in_seconds === "number";
+                entry.info.hidden = !waiting;
+                setText(entry.info, waiting ? `Failed; starts again when opened in ${app.restart_in_seconds}s` : "");
+            }
+            if (entry.button) {
+                const busy = restarting.has(app.name);
+                entry.button.disabled = busy;
+                setText(entry.button, busy ? "Restarting..." : "Restart");
+            }
+            return entry.card;
+        }
+
+        function renderApps() {
+            const apps = Object.values(appsData);
+            const names = new Set(apps.map(app => app.name));
+            for (const name of appCards.keys()) {
+                if (!names.has(name)) appCards.delete(name);
+            }
+            const container = document.getElementById("appsContainer");
+            if (apps.length === 0) {
+                container.replaceChildren(element("div", "empty-state panel", "No applications configured"));
+            } else {
+                arrange(container, apps.map(renderAppCard));
+            }
+        }
+
         function updateApps() {
             fetch("api/apps")
                 .then(response => {
@@ -212,53 +329,8 @@
                     if (!isConnected) {
                         setConnectionStatus(true);
                     }
-
-                    const cards = Object.values(data).map(app => {
-                        const card = element("div", "app-card");
-
-                        const header = element("div", "app-header");
-                        header.append(
-                            element("div", "app-name", app.name),
-                            element("span", "status-badge status-" + app.status, app.status)
-                        );
-
-                        const details = element("div", "app-details");
-                        if (app.resident !== undefined) {
-                            details.append(detail("type", "Type", app.resident ? "Resident" : "On-demand"));
-                        }
-                        details.append(
-                            detail("port", "Port", app.port),
-                            detail("pid", "PID", typeof app.pid === "number" ? app.pid : "N/A"),
-                            detail("memory", "Memory", orNA(app.memory_bytes, formatBytes)),
-                            detail("uptime", "Uptime", orNA(app.uptime_seconds, formatDuration)),
-                            detail("connections", "Connections", app.connections),
-                            detail("path", "Path", app.path, true)
-                        );
-
-                        const actions = element("div", "app-actions");
-                        if (app.status === "dormant") {
-                            // Dormant (on-demand, stopped) apps start automatically when opened
-                            actions.append(element("div", "app-info", "Starts automatically when opened"));
-                        } else if (app.status === "unavailable") {
-                            // An on-demand app whose directory cannot be served
-                            actions.append(element("div", "app-info", "Cannot start - see server.log for the reason"));
-                        } else {
-                            const button = element("button", "restart-btn", "Restart");
-                            button.type = "button";
-                            button.addEventListener("click", () => restartApp(button, app.name));
-                            actions.append(button);
-                        }
-
-                        card.append(header, details, actions);
-                        return card;
-                    });
-
-                    const container = document.getElementById("appsContainer");
-                    if (cards.length === 0) {
-                        container.replaceChildren(element("div", "empty-state panel", "No applications configured"));
-                    } else {
-                        container.replaceChildren(...cards);
-                    }
+                    appsData = data;
+                    renderApps();
                 })
                 .catch(error => {
                     console.error("Error fetching apps:", error);
@@ -282,33 +354,45 @@
                     const container = document.getElementById("connectionsContainer");
 
                     if (Object.keys(data).length === 0) {
+                        connectionsTable = null;
+                        connectionRows.clear();
                         container.replaceChildren(element("p", "empty-state", "No active connections"));
                         return;
                     }
 
-                    const table = document.createElement("table");
-                    table.className = "connections-table";
-                    const heading = table.createTHead().insertRow();
-                    ["App", "Client IP", "User Agent", "Connected", "Duration", "Last Activity"].forEach(label => {
-                        const cell = document.createElement("th");
-                        cell.textContent = label;
-                        heading.appendChild(cell);
-                    });
-                    const body = table.createTBody();
-                    Object.values(data).forEach(conn => {
-                        const row = body.insertRow();
+                    // Rows are kept by session and updated in place, so that a
+                    // refresh does not clear a selected IP address or user agent
+                    if (!connectionsTable || !container.contains(connectionsTable)) {
+                        connectionsTable = document.createElement("table");
+                        connectionsTable.className = "connections-table";
+                        const heading = connectionsTable.createTHead().insertRow();
+                        ["App", "Client IP", "User Agent", "Connected", "Duration", "Last Activity"].forEach(label => {
+                            const cell = document.createElement("th");
+                            cell.textContent = label;
+                            heading.appendChild(cell);
+                        });
+                        connectionsTable.createTBody();
+                        connectionRows.clear();
+                        container.replaceChildren(connectionsTable);
+                    }
+                    const rows = Object.entries(data).map(([session, conn]) => {
+                        let row = connectionRows.get(session);
+                        if (!row) {
+                            row = document.createElement("tr");
+                            for (let index = 0; index < 6; index++) row.insertCell();
+                            row.cells[2].className = "user-agent";
+                            connectionRows.set(session, row);
+                        }
                         [conn.app_name, conn.client_ip, conn.user_agent,
                          conn.connected_at, formatDuration(conn.duration_seconds), conn.last_activity]
-                            .forEach((value, index) => {
-                                const cell = row.insertCell();
-                                cell.textContent = value == null ? "" : String(value);
-                                if (index === 2) {
-                                    cell.className = "user-agent";
-                                    cell.title = cell.textContent;
-                                }
-                            });
+                            .forEach((value, index) => setText(row.cells[index], value));
+                        row.cells[2].title = row.cells[2].textContent;
+                        return row;
                     });
-                    container.replaceChildren(table);
+                    for (const session of connectionRows.keys()) {
+                        if (!(session in data)) connectionRows.delete(session);
+                    }
+                    arrange(connectionsTable.tBodies[0], rows);
                 })
                 .catch(error => {
                     console.error("Error fetching connections:", error);
@@ -316,9 +400,16 @@
                 });
         }
 
-        function restartApp(button, appName) {
-            button.disabled = true;
-            button.textContent = "Restarting...";
+        let connectionsTable = null;
+        const connectionRows = new Map();
+
+        function restartApp(appName) {
+            restarting.add(appName);
+            renderApps();
+            const done = () => {
+                restarting.delete(appName);
+                renderApps();
+            };
 
             fetch("api/apps/" + encodeURIComponent(appName) + "/restart", {
                 method: "POST",
@@ -334,16 +425,14 @@
                 } else {
                     showNotice("Failed to restart " + appName + ": " + errorText(data), "error");
                 }
-                button.disabled = false;
-                button.textContent = "Restart";
+                done();
                 // A restart changes the status tiles and the connection list too
                 refreshAll();
             })
             .catch(error => {
                 console.error("Error restarting app:", error);
                 showNotice("Error restarting " + appName + ": " + error.message, "error");
-                button.disabled = false;
-                button.textContent = "Restart";
+                done();
             });
         }
 

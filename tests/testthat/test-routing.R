@@ -542,6 +542,30 @@ test_that("a request for an app that failed moments ago is asked to retry after 
   expect_match(page$body, paste0("var retryMs = ", page$headers[["Retry-After"]], " * 1000;"), fixed = TRUE)
 })
 
+test_that("an R Markdown app serves only its own document", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "reports", path = "/path", port = 3001, resident = TRUE)))
+  config$set_app_document("reports", list(type = "rmd", file = "/path/report.Rmd"))
+  # rmarkdown::run() would render any of these, running its code
+  for (path in c("/_partial.Rmd", "/drafts/notes.Rmd", "/%5Fpartial.Rmd", "/notes.rmd", "/other.qmd",
+                 "/%2e/report.Rmd")) {
+    result <- handle_proxy_request(paste0("/proxy/reports", path), "GET", NULL, list(), config)
+    expect_equal(result$status, 404, info = path)
+  }
+  forwarded <- character()
+  local_mocked_bindings(forward_request = function(method, target_url, ...) {
+    forwarded <<- c(forwarded, target_url)
+    create_html_response("ok")
+  })
+  for (path in c("/", "/report.Rmd", "/REPORT.rmd", "/report_files/figure.png", "/shared/data.csv")) {
+    expect_equal(handle_proxy_request(paste0("/proxy/reports", path), "GET", NULL, list(), config)$status, 200)
+  }
+  expect_length(forwarded, 5)
+  # Other kinds of app serve such files as they are
+  config$set_app_document("reports", list(type = "shiny"))
+  expect_equal(handle_proxy_request("/proxy/reports/_partial.Rmd", "GET", NULL, list(), config)$status, 200)
+})
+
 test_that("request decisions read headers under the names the client sent", {
   # An underscore spelling replaces the HTTP_ entry, but not the header
   tm <- create_template_manager()

@@ -13,6 +13,28 @@ KNOWN_APP_FIELDS <- c("name", "path", "resident", "appstart_timeout")
 # The values of the log_level field, from most to least detailed
 LOG_LEVELS <- c("DEBUG", "INFO", "WARN", "ERROR")
 
+# The longest restart_delay, health_check_interval, and appstart_timeout: one day
+MAX_TIMER_SECONDS <- 86400
+
+duplicated_config_fields <- function(config) {
+  "Describe the fields that a configuration gives more than once, at its top level or in an app"
+
+  repeated <- function(x) {
+    if (!is.list(x) || is.null(names(x))) character() else unique(names(x)[duplicated(names(x))])
+  }
+  duplicates <- dQuote(repeated(config), FALSE)
+  apps <- config[["apps"]]
+  if (is.list(apps)) {
+    for (i in seq_along(apps)) {
+      extra <- repeated(apps[[i]])
+      if (length(extra) > 0) {
+        duplicates <- c(duplicates, paste(dQuote(extra, FALSE), "in app", i))
+      }
+    }
+  }
+  duplicates
+}
+
 unrecognized_config_fields <- function(config) {
   "Describe the fields of a validated configuration that the server does not use"
 
@@ -54,6 +76,9 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     # next listens on its port. An on-demand app is started again only once
     # restart_delay has passed, as a resident app is.
     start_failures = "environment",
+    # The document that each app's latest process serves, as detect_app_type()
+    # found it
+    app_documents = "environment",
     shutdown_requested = "logical", # Set by the management API; read by the event loop
     reload_requested = "logical", # Set by the management API; read by the event loop
     last_reload = "list", # Outcome of the latest reload; empty while one is pending
@@ -67,6 +92,9 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     MAX_MESSAGE_SIZE = "numeric",
     APP_STARTUP_TIMEOUT_SECONDS = "numeric",
     HTTP_SESSION_GRACE_SECONDS = "numeric",
+    # How long a browser's WebSocket waits for a busy app to complete the
+    # handshake of the proxy's own socket to it
+    WS_BACKEND_CONNECT_SECONDS = "numeric",
     # How long an app may keep starting: the readiness checks stop looking for
     # it then, and the idle check stops an on-demand app that nobody is
     # waiting for
@@ -84,6 +112,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       MAX_MESSAGE_SIZE <<- 1048576
       APP_STARTUP_TIMEOUT_SECONDS <<- 30
       HTTP_SESSION_GRACE_SECONDS <<- 30
+      WS_BACKEND_CONNECT_SECONDS <<- 120
       ON_DEMAND_START_LIMIT_SECONDS <<- 600
       START_PROBLEM_MAX_AGE_SECONDS <<- 30
 
@@ -99,6 +128,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       verified_backends <<- new.env(hash = TRUE, parent = emptyenv())
       start_problems <<- new.env(hash = TRUE, parent = emptyenv())
       start_failures <<- new.env(hash = TRUE, parent = emptyenv())
+      app_documents <<- new.env(hash = TRUE, parent = emptyenv())
       shutdown_requested <<- FALSE
       reload_requested <<- FALSE
       last_reload <<- list()
@@ -207,12 +237,13 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         )))
       }
 
-      # An unwritable log_dir would lose the server log and the app logs
-      if (!identical(new_config$log_dir, config$log_dir)) {
-        log_dir_error <- check_log_dir(new_config$log_dir)
-        if (!is.null(log_dir_error)) {
-          return(list(valid = FALSE, error = log_dir_error))
-        }
+      # An unwritable log_dir would lose the server log and the app logs. The
+      # directory is checked even when the file names the same one, which
+      # may have become unwritable since the server started: the apps that
+      # the reload stops could not start again.
+      log_dir_error <- check_log_dir(new_config$log_dir)
+      if (!is.null(log_dir_error)) {
+        return(list(valid = FALSE, error = log_dir_error))
       }
 
       list(valid = TRUE, config = new_config)
@@ -226,6 +257,15 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       verified_backends <<- new.env(hash = TRUE, parent = emptyenv())
       start_problems <<- new.env(hash = TRUE, parent = emptyenv())
       start_failures <<- new.env(hash = TRUE, parent = emptyenv())
+      app_documents <<- new.env(hash = TRUE, parent = emptyenv())
+    },
+    set_app_document = function(app_name, app) {
+      "Record the document that an app's new process serves"
+      assign(app_name, app, envir = app_documents)
+    },
+    get_app_document = function(app_name) {
+      "The document that an app's latest process serves, or NULL"
+      app_documents[[app_name]]
     },
     note_start_failure = function(app_name) {
       "Record that an app's process exited without being stopped"
@@ -281,6 +321,14 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         return(list(valid = FALSE, error = "Config must be a list"))
       }
 
+      # jsonlite keeps both copies of a field given twice, and every lookup
+      # finds the first, where other JSON readers use the last. Neither
+      # choice is what the file's author can be assumed to mean.
+      duplicates <- duplicated_config_fields(config)
+      if (length(duplicates) > 0) {
+        return(list(valid = FALSE, error = paste("Duplicate fields:", paste(duplicates, collapse = ", "))))
+      }
+
       # Validate required fields
       required_fields <- c("apps", "log_dir", "starting_port")
       for (field in required_fields) {
@@ -297,14 +345,18 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         }
       }
 
-      # Validate timer values before they reach the event-loop scheduler.
+      # Validate timer values before they reach the event-loop scheduler. A
+      # timer of 1e12 seconds or more makes later::run_now() block, and with
+      # it every request, so they are also bounded above.
       for (field in intersect(c("restart_delay", "health_check_interval"), names(config))) {
         value <- config[[field]]
         positive <- field == "health_check_interval"
         if (!is.numeric(value) || length(value) != 1 || !is.finite(value) ||
-          value < 0 || (positive && value == 0)) {
+          value < 0 || (positive && value == 0) || value > MAX_TIMER_SECONDS) {
           bound <- if (positive) "positive" else "non-negative"
-          return(list(valid = FALSE, error = paste(field, "must be a single", bound, "finite number of seconds")))
+          return(list(valid = FALSE, error = paste(
+            field, "must be a single", bound, "number of seconds, at most", MAX_TIMER_SECONDS
+          )))
         }
       }
 
@@ -369,8 +421,11 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
 
         if ("appstart_timeout" %in% names(app)) {
           if (!is.numeric(app$appstart_timeout) || length(app$appstart_timeout) != 1 ||
-            !is.finite(app$appstart_timeout) || app$appstart_timeout <= 0) {
-            return(list(valid = FALSE, error = paste("App", i, "appstart_timeout must be a single positive finite number of seconds")))
+            !is.finite(app$appstart_timeout) || app$appstart_timeout <= 0 ||
+            app$appstart_timeout > MAX_TIMER_SECONDS) {
+            return(list(valid = FALSE, error = paste(
+              "App", i, "appstart_timeout must be a single positive number of seconds, at most", MAX_TIMER_SECONDS
+            )))
           }
         }
 

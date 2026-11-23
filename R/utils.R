@@ -66,6 +66,21 @@ request_headers <- function(req) {
   headers
 }
 
+# A value from a request as it is written to the log. Control characters,
+# with which a client could move the cursor of a terminal that follows the log
+# or overwrite a line, become "?", and a long value is cut short.
+log_value <- function(value, max_bytes = 200) {
+  if (is.null(value) || length(value) == 0) {
+    return("(none)")
+  }
+  value <- gsub("[\001-\037\177]", "?", as.character(value)[1], useBytes = TRUE)
+  bytes <- charToRaw(value)
+  if (length(bytes) > max_bytes) {
+    value <- paste0(rawToChar(bytes[seq_len(max_bytes)]), "...")
+  }
+  value
+}
+
 request_header <- function(req, name) {
   "The value of one request header, named in lower case, or NULL when the request has none"
 

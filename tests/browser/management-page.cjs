@@ -131,6 +131,49 @@ const { chromium } = require('playwright');
     await themed.emulateMedia({ colorScheme: 'dark' });
     await themed.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
     await context.close();
+    // An open landing page whose address a reload of base_path removed reloads itself from the server
+    const oldLanding = fs.readFileSync(path.join(templates, 'landing_page.html'), 'utf8')
+      .replaceAll('{{base_url}}', '/old').replaceAll('{{title}}', 'Apps')
+      .replace('{{app_cards}}', Object.keys(apps).map(card).join(''));
+    let oldLoads = 0;
+    const oldPage = await browser.newPage();
+    await oldPage.route('**/*', route => {
+      if (new URL(route.request().url()).pathname !== '/old/') return serve(route);
+      oldLoads++;
+      return oldLoads === 1 ? route.fulfill({ contentType: 'text/html', body: oldLanding })
+        : route.fulfill({ status: 404, contentType: 'application/json', body: '{"error":"404 - Not Found"}' });
+    });
+    await oldPage.goto('http://tss.test/old/');
+    for (let i = 0; i < 50 && oldLoads < 2; i++) await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(oldLoads, 2);
+    await oldPage.close();
+    // A refresh updates the app cards in place, so the keyboard focus stays on a Restart button
+    await page.evaluate(() => clearInterval(refreshInterval));
+    const liveRestart = page.locator('#appsContainer .app-card').filter({ hasText: 'live' })
+      .getByRole('button', { name: 'Restart', exact: true });
+    await liveRestart.focus();
+    apps.live.uptime_seconds += 5;
+    await page.evaluate(() => updateApps());
+    await page.waitForFunction(() => document.querySelector('[data-detail="uptime"] .detail-value').textContent === '1d 1h 1m');
+    await new Promise(resolve => setTimeout(resolve, 200));
+    assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Restart');
+    assert.equal(await page.evaluate(() =>
+      document.activeElement.closest('.app-card').querySelector('.app-name').textContent), 'live');
+    // A dormant app that waits out restart_delay after a failure offers a restart, which ends the wait
+    apps.waiting = { name: 'waiting', status: 'dormant', resident: false, port: 3003, connections: 0,
+      path: '/apps/waiting', restart_in_seconds: 42 };
+    await page.evaluate(() => updateApps());
+    const waiting = page.locator('#appsContainer .app-card').filter({ hasText: 'waiting' });
+    await waiting.getByRole('button', { name: 'Restart', exact: true }).waitFor();
+    assert.equal(await waiting.locator('.app-info').textContent(), 'Failed; starts again when opened in 42s');
+    delete apps.waiting.restart_in_seconds;
+    await page.evaluate(() => updateApps());
+    await page.waitForFunction(() => Array.from(document.querySelectorAll('#appsContainer .app-card'))
+      .some(card => card.textContent.includes('Starts automatically when opened')));
+    assert.equal(await waiting.getByRole('button').count(), 0);
+    delete apps.waiting;
+    await page.evaluate(() => updateApps());
+    await page.waitForFunction(() => document.querySelectorAll('#appsContainer .app-card').length === 2);
     // A restart refreshes the status tiles with the app cards. The timer is stopped so that only the
     // restart can have refreshed them.
     await page.evaluate(() => clearInterval(refreshInterval));

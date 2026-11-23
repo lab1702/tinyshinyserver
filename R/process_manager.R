@@ -197,10 +197,12 @@ quarto_needs_render <- function(qmd_file, log_dir = NULL) {
 # the file that R_ENVIRON_USER names, the directory's .Renviron, or
 # ~/.Renviron. callr would otherwise copy the .Renviron of this session's
 # working directory into every app.
-app_environ_file <- function(app_path) {
-  named <- Sys.getenv("R_ENVIRON_USER", "")
-  if (nzchar(named)) {
-    return(named)
+app_environ_file <- function(app_path, named = Sys.getenv("R_ENVIRON_USER", unset = NA)) {
+  if (!is.na(named)) {
+    # Set but empty, the variable tells R to read no user environment file.
+    # An empty value does not reach the app's process, so it is given the
+    # null device, which holds no variables.
+    return(if (nzchar(named)) named else nullfile())
   }
   local <- file.path(app_path, ".Renviron")
   if (file.exists(local)) local else path.expand("~/.Renviron")
@@ -208,12 +210,13 @@ app_environ_file <- function(app_path) {
 
 # The user profile that R reads when it starts in the working directory: the
 # file that R_PROFILE_USER names, the directory's .Rprofile, or ~/.Rprofile.
-# start_app() hands this function to the app's own process, which need not
-# load this package, so it may call only base R.
-startup_profile_file <- function() {
-  named <- Sys.getenv("R_PROFILE_USER", "")
-  if (nzchar(named)) {
-    return(path.expand(named))
+# Set but empty, R_PROFILE_USER names none, and "" is returned. start_app()
+# hands this function to the app's own process, which need not load this
+# package, so it may call only base R. callr does not pass an empty variable
+# on, so the server's own value is given to it.
+startup_profile_file <- function(named = Sys.getenv("R_PROFILE_USER", unset = NA)) {
+  if (!is.na(named)) {
+    return(if (nzchar(named)) path.expand(named) else "")
   }
   if (file.exists(".Rprofile")) ".Rprofile" else path.expand("~/.Rprofile")
 }
@@ -260,13 +263,17 @@ ProcessManager <- setRefClass("ProcessManager",
       # traceback) for one restart
       output_log <- file.path(log_dir, paste0(app_name, "_output.log"))
       error_log <- file.path(log_dir, paste0(app_name, "_error.log"))
+      # file.rename() replaces the older .prev.log. A log that cannot be
+      # renamed, such as one that another program holds open on Windows, is
+      # copied instead, because the app's new process empties it.
       for (log_file in c(output_log, error_log)) {
         if (file.exists(log_file)) {
           previous_log <- sub("\\.log$", ".prev.log", log_file)
           tryCatch(
             suppressWarnings({
-              unlink(previous_log)
-              file.rename(log_file, previous_log)
+              if (!file.rename(log_file, previous_log)) {
+                file.copy(log_file, previous_log, overwrite = TRUE)
+              }
             }),
             error = function(e) FALSE
           )
@@ -296,9 +303,9 @@ ProcessManager <- setRefClass("ProcessManager",
       # library paths, which renv then replaces. As at R's own startup, an
       # error in the profile is reported and the app still starts.
       process <- callr::r_bg(
-        function(app_path, port, type, file, needs_render, log_dir, profile_file) {
-          profile <- profile_file()
-          if (file.exists(profile)) {
+        function(app_path, port, type, file, needs_render, log_dir, profile_file, profile_setting) {
+          profile <- profile_file(profile_setting)
+          if (nzchar(profile) && file.exists(profile)) {
             tryCatch(source(profile), error = function(e) {
               message("Error in ", normalizePath(profile), ": ", conditionMessage(e))
             })
@@ -314,8 +321,12 @@ ProcessManager <- setRefClass("ProcessManager",
               browse = FALSE
             )
           } else if (type == "rmd") {
+            # The document chosen here is the one served at the app's root.
+            # rmarkdown::run() would otherwise choose its own, among the .qmd
+            # files of the directory as well.
             rmarkdown::run(
               file = file,
+              default_file = basename(file),
               shiny_args = list(
                 port = port,
                 host = "127.0.0.1",
@@ -338,7 +349,8 @@ ProcessManager <- setRefClass("ProcessManager",
           file = app$file,
           needs_render = needs_render,
           log_dir = log_dir,
-          profile_file = profile_file
+          profile_file = profile_file,
+          profile_setting = Sys.getenv("R_PROFILE_USER", unset = NA)
         ),
         stdout = output_log,
         stderr = error_log,
@@ -351,6 +363,7 @@ ProcessManager <- setRefClass("ProcessManager",
       )
 
       config$add_app_process(app_name, process)
+      config$set_app_document(app_name, app)
 
       # Mark app as starting (for non-blocking startup handling)
       started_at <- Sys.time()
@@ -560,11 +573,14 @@ ProcessManager <- setRefClass("ProcessManager",
           config$clear_start_failure(app_name)
 
           # An on-demand app has no users left to serve, so it starts again
-          # when it is next opened
+          # when it is next opened. One without a process was waiting out
+          # restart_delay after a failure, which ends here.
           if (!app_config$resident) {
-            return(list(success = TRUE, message = paste(
-              "App", app_name, "stopped; it starts again when it is next opened"
-            )))
+            return(list(success = TRUE, message = if (is.null(process)) {
+              paste("App", app_name, "starts again when it is next opened")
+            } else {
+              paste("App", app_name, "stopped; it starts again when it is next opened")
+            }))
           }
 
           # restart_delay spaces out the retries of an app that keeps failing.
@@ -618,6 +634,20 @@ ProcessManager <- setRefClass("ProcessManager",
       if (app_config$resident) {
         logger::log_debug("Not stopping resident app: {app_name}", app_name = app_name)
         return(FALSE)
+      }
+
+      # An app whose process has already exited, such as one that crashed and
+      # so closed its sessions, failed. The health check would record that,
+      # but this idle check can come first, and the app would then start again
+      # at the next request instead of after restart_delay.
+      process <- config$get_app_process(app_name)
+      if (!is.null(process) && !is_process_alive(process)) {
+        logger::log_error("Non-resident app {app_name} died", app_name = app_name)
+        if (!kill_process_safely(process)) return(FALSE)
+        cleanup_app_connections(app_name)
+        config$remove_app_process(app_name)
+        config$note_start_failure(app_name)
+        return(TRUE)
       }
 
       logger::log_info("Immediately stopping non-resident app {app_name} (no active connections)", app_name = app_name)
@@ -841,6 +871,12 @@ ProcessManager <- setRefClass("ProcessManager",
       # because jsonlite writes NULL as {}.
       if (status == "running") {
         app_status$pid <- process$get_pid()
+      }
+      # A dormant app whose process failed starts again only after
+      # restart_delay; a restart from the dashboard ends that wait
+      backoff <- if (status == "dormant") config$start_backoff_seconds(app_name) else 0
+      if (backoff > 0) {
+        app_status$restart_in_seconds <- ceiling(backoff)
       }
       return(app_status)
     },

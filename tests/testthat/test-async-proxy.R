@@ -264,7 +264,7 @@ test_that("startup polling yields and sends a queued POST only once", {
     posts <<- posts + 1
     create_html_response("started")
   })
-  httpuv::stopServer(backend$server)
+  stop_test_http_server(backend)
   restarted <- NULL
   on.exit(if (!is.null(restarted)) httpuv::stopServer(restarted), add = TRUE)
   config <- proxy_test_config(backend$port, timeout = 1)
@@ -324,12 +324,22 @@ test_that("a large app response is written to a file instead of held in memory",
   expect_true(response$body$owned)
   expect_identical(readBin(response$body$file, "raw", size + 1), payload)
 
-  # A response that cannot have a body leaves no file behind
-  files <- function() list.files(tempdir(), pattern = "^tss-response-")
-  before <- files()
-  response <- await_response(forward_request("HEAD", paste0(backend$url, "/large"), list(), "app", config), timeout = 30)
-  expect_null(response$body)
-  expect_setequal(files(), before)
+  # A response that cannot have a body is sent without one, and the file
+  # that a body was written to is removed. libcurl reads no body for HEAD,
+  # so the transfer is replaced by one that returns a written body.
+  for (case in list(list(method = "GET", status = 304L), list(method = "GET", status = 204L),
+                    list(method = "HEAD", status = 200L))) {
+    spooled <- tempfile("tss-response-")
+    writeBin(payload, spooled)
+    local_mocked_bindings(fetch_backend_async = function(url, handle) promises::promise_resolve(list(
+      status_code = case$status, headers = charToRaw(sprintf("HTTP/1.1 %d X\r\n\r\n", case$status)),
+      content = list(file = spooled, owned = TRUE)
+    )))
+    response <- await_response(forward_request(case$method, paste0(backend$url, "/large"), list(), "app", config))
+    expect_equal(response$status, case$status)
+    expect_null(response$body)
+    expect_false(file.exists(spooled), info = paste(case$method, case$status))
+  }
 })
 
 test_that("a collected response body is a raw vector or a file, and a failed one leaves nothing", {
@@ -532,9 +542,7 @@ test_that("a refused connection to a verified app returns 503 and rechecks its p
 
 test_that("only transfers that never connect are marked as connection failures", {
   backend <- start_test_http_server(function(req) create_html_response("unused"))
-  httpuv::stopServer(backend$server)
-  deadline <- Sys.time() + 5
-  while (is_port_in_use("127.0.0.1", backend$port) && Sys.time() < deadline) Sys.sleep(0.05)
+  stop_test_http_server(backend)
   # Windows retries a refused loopback connection for about two seconds
   refused <- tryCatch(
     await_response(fetch_backend_async(backend$url, curl::new_handle(connecttimeout_ms = 500))),
@@ -629,7 +637,7 @@ test_that("transfers wait on their sockets instead of polling on a timer", {
 
 test_that("startup grace expiry returns 503 without blocking timers", {
   backend <- start_test_http_server(function(req) create_html_response("unused"))
-  httpuv::stopServer(backend$server)
+  stop_test_http_server(backend)
   config <- proxy_test_config(backend$port, timeout = 0.2)
   config$set_app_starting("app")
   ran <- FALSE
@@ -754,6 +762,48 @@ test_that("a real backend WebSocket close reaches the browser", {
   expect_length(config$get_all_backend_connections(), 0)
 })
 
+test_that("a browser that closes its WebSocket closes the app's socket and frees the app", {
+  backend_closed <- FALSE
+  backend <- start_test_http_server(function(req) create_html_response("backend"), on_ws = function(ws) {
+    ws$onMessage(function(binary, message) ws$send(paste("echo", message)))
+    ws$onClose(function() backend_closed <<- TRUE)
+  })
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  config <- proxy_test_config(backend$port)
+  config$config$apps[[1]]$resident <- FALSE
+  checks <- character()
+  cm <- ConnectionManager$new(config, list(stop_app_immediately = function(app_name) NULL))
+  schedule <- cm$schedule_session_check
+  assign("schedule_session_check", function(app_name, ...) {
+    checks <<- c(checks, app_name)
+    schedule(app_name, ...)
+  }, envir = cm)
+  proxy <- start_test_http_server(function(req) create_html_response("proxy"), on_ws = function(ws) {
+    handle_websocket_connection(ws, config, cm)
+  })
+  on.exit(httpuv::stopServer(proxy$server), add = TRUE)
+  client <- websocket::WebSocket$new(paste0(sub("^http", "ws", proxy$url), "/proxy/app/websocket/"))
+  on.exit(client$close(), add = TRUE, after = FALSE)
+  echoed <- promises::promise(function(resolve, reject) {
+    client$onOpen(function(event) client$send("init"))
+    client$onMessage(function(event) resolve(event$data))
+    client$onError(function(event) reject(simpleError(event$message)))
+  })
+  expect_equal(await_response(echoed), "echo init")
+  expect_equal(config$get_app_connection_count("app"), 1)
+
+  client$close()
+  deadline <- Sys.time() + 5
+  while (!backend_closed && Sys.time() < deadline) later::run_now(0.05)
+  expect_true(backend_closed)
+  expect_equal(config$get_app_connection_count("app"), 0)
+  expect_length(config$get_all_ws_connections(), 0)
+  expect_length(config$get_all_backend_connections(), 0)
+  # The on-demand app's idle check is scheduled
+  expect_true("app" %in% checks)
+  cm$cancel_session_check("app")
+})
+
 test_that("HTTP routing preserves query delimiters and directory paths", {
   backend <- start_test_http_server(function(req) {
     if (req$PATH_INFO == "/dir") {
@@ -813,7 +863,7 @@ test_that("WebSocket proxy forwards each browser's own authentication headers", 
 test_that("a refused backend WebSocket disconnects the browser and clears tracking", {
   backend <- start_test_http_server(function(req) create_html_response("ok"))
   config <- proxy_test_config(backend$port)
-  httpuv::stopServer(backend$server)
+  stop_test_http_server(backend)
   cm <- ConnectionManager$new(config)
   proxy <- start_test_http_server(function(req) create_html_response("ok"),
     on_ws = function(ws) handle_websocket_connection(ws, config, cm))
@@ -1024,6 +1074,20 @@ test_that("headers spelled with an underscore are not passed on to an app", {
   expect_equal(plain, list("X-FORWARDED-USER" = "alice"))
 })
 
+test_that("headers that the client's Connection header names are not passed on to an app", {
+  req <- httpuv_request(c("connection" = "close, X-Forwarded-User , x-hop", "x-forwarded-user" = "admin",
+    "x-hop" = "1", "proxy-connection" = "keep-alive", "accept" = "text/html"))
+  expect_equal(forwarded_request_headers(req), list(ACCEPT = "text/html"))
+})
+
+test_that("forwarding many request headers takes time in proportion to their number", {
+  # httpuv admits about 80 KB of headers, which can be some 13,000 of them
+  large <- list(HEADERS = stats::setNames(as.list(rep("", 16000)), paste0("a", seq_len(16000))))
+  expect_length(forwarded_request_headers(large), 16000)
+  elapsed <- system.time(forwarded_request_headers(large))[["elapsed"]]
+  expect_lt(elapsed, 0.5)
+})
+
 test_that("an oversized request body is rejected before the app is called", {
   called <- FALSE
   server <- NULL
@@ -1121,6 +1185,24 @@ test_that("response headers come from the final response only", {
   expect_named(result, c("content-type", "x-note"))
   expect_equal(result$`x-note`, "padded value")
   expect_length(proxy_response_headers(raw(), "http://127.0.0.1:3001/", "app", "GET"), 0)
+
+  # libcurl adds a chunked response's trailer fields after its headers
+  trailers <- charToRaw(paste0("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nSet-Cookie: s=1\r\n",
+    "Transfer-Encoding: chunked\r\n\r\nX-Checksum: abc\r\n\r\n"))
+  result <- proxy_response_headers(trailers, "http://127.0.0.1:3001/", "app", "GET")
+  expect_named(result, c("content-type", "set-cookie"))
+  expect_equal(result$`set-cookie`, "s=1; Path=/proxy/app/")
+})
+
+test_that("every Path of a cookie is scoped to the app, however it is spaced", {
+  cookie <- function(value) {
+    headers <- charToRaw(paste0("HTTP/1.1 200 OK\r\nSet-Cookie: ", value, "\r\n\r\n"))
+    proxy_response_headers(headers, "http://127.0.0.1:3001/", "app", "GET")$`set-cookie`
+  }
+  # Browsers use the last Path and trim the spaces around its name
+  expect_equal(cookie("sid=1; Path=/; Path =/"), "sid=1; Path=/proxy/app/; Path =/proxy/app/")
+  expect_equal(cookie("sid=1; path = /x; Domain = localhost; HttpOnly"), "sid=1; path = /proxy/app/x; HttpOnly")
+  expect_equal(cookie("sid=1;Path=/a"), "sid=1;Path=/proxy/app/a")
 })
 
 test_that("cookies with no path get an app-scoped default path", {

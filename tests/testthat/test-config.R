@@ -955,6 +955,31 @@ test_that("scheduler settings reject invalid delays before startup", {
   expect_true(config$validate_config(base)$valid)
   base$health_check_interval <- 0
   expect_false(config$validate_config(base)$valid)
+
+  # A timer of 1e12 seconds blocks later::run_now(), and with it every request
+  for (field in c("restart_delay", "health_check_interval")) {
+    candidate <- base
+    candidate$health_check_interval <- 10
+    candidate[[field]] <- 86400
+    expect_true(config$validate_config(candidate)$valid, info = field)
+    for (value in c(86401, 1e12, .Machine$double.xmax)) {
+      candidate[[field]] <- value
+      result <- config$validate_config(candidate)
+      expect_false(result$valid, info = field)
+      expect_match(result$error, paste(field, ".*at most 86400"))
+    }
+  }
+})
+
+test_that("a field given twice is rejected rather than read from its first copy", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  writeLines(paste0('{"apps": [{"name": "app", "path": "/tmp", "resident": false, "resident": "yes"}],',
+    ' "log_dir": "logs", "starting_port": 3001, "proxy_port": 4000, "proxy_port": "oops"}'), path)
+  expect_error(ShinyServerConfig$new()$read_config(path),
+    'Duplicate fields: "proxy_port", "resident" in app 1', fixed = TRUE)
+  writeLines('{"apps": [{"name": "app", "path": "/tmp"}], "log_dir": "logs", "starting_port": 3001}', path)
+  expect_equal(ShinyServerConfig$new()$read_config(path)$apps[[1]]$name, "app")
 })
 
 test_that("max_request_size_mb must be a positive finite number", {
@@ -987,10 +1012,12 @@ test_that("appstart_timeout validates positive finite seconds", {
     expect_false(result$valid)
     expect_match(result$error, "appstart_timeout")
   }
-  for (value in c(0.5, 2, 60)) {
+  for (value in c(0.5, 2, 60, 86400)) {
     data$apps[[1]]$appstart_timeout <- value
     expect_true(config$validate_config(data)$valid)
   }
+  data$apps[[1]]$appstart_timeout <- 1e12
+  expect_match(config$validate_config(data)$error, "appstart_timeout .*at most 86400")
 })
 
 test_that("load_config defaults appstart_timeout independently for each app", {

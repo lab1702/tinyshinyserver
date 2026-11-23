@@ -495,11 +495,12 @@ test_that("factory works with package templates", {
 
 test_that("generate_starting_page renders a page that reloads itself for the app", {
   tm <- create_template_manager(base_url = "/shiny", title = "My <Server>")
-  html <- tm$generate_starting_page("sales", retry_seconds = 3)
+  html <- tm$generate_starting_page("sales", retry_seconds = 3, answer_seconds = 15)
 
   expect_match(html, "<h1>sales</h1>", fixed = TRUE)
   expect_match(html, "<title>sales - My &lt;Server&gt;</title>", fixed = TRUE)
   expect_match(html, "var retryMs = 3 * 1000;", fixed = TRUE)
+  expect_match(html, "var answerMs = 15 * 1000 + 10000;", fixed = TRUE)
   expect_match(html, 'src="/shiny/templates/scripts/theme.js"', fixed = TRUE)
   expect_match(html, 'href="/shiny/"', fixed = TRUE)
   # The reload stops after a while, so a forgotten tab cannot restart an app forever

@@ -65,6 +65,18 @@ ConnectionManager <- setRefClass("ConnectionManager",
       # not match the app's internal address.
       headers <- forwarded_request_headers(client_ws$request, skip = "ORIGIN")
       headers <- headers[!grepl("^SEC-WEBSOCKET-", names(headers))]
+      connect_backend(app_name, session_id, client_ws, backend_url, headers,
+        process = config$get_app_process(app_name), first_attempt = Sys.time()
+      )
+    },
+    connect_backend = function(app_name, session_id, client_ws, backend_url, headers, process, first_attempt) {
+      "Open the app's side of a session, again after a handshake that the app did not complete"
+
+      # Fixed now, not when a callback first reads them: the process and the
+      # time of the session's first attempt
+      force(process)
+      force(first_attempt)
+
       # Apps may send large outputs (e.g. htmlwidget data) as one message;
       # don't impose the websocket package's 32 MiB default on them.
       backend_ws <- websocket::WebSocket$new(backend_url,
@@ -72,15 +84,17 @@ ConnectionManager <- setRefClass("ConnectionManager",
         maxMessageSize = .Machine$integer.max
       )
 
-      # Store connection info with ready state and timestamp
+      # Store connection info with ready state and timestamp. A new attempt
+      # keeps the messages that the browser sent while it waited.
+      previous <- config$get_backend_connection(session_id)
       config$add_backend_connection(session_id, list(
         app_name = app_name,
         ws = backend_ws,
         client_ws = client_ws,
         ready = FALSE,
-        pending_messages = list(),
+        pending_messages = previous$pending_messages %||% list(),
         last_activity = Sys.time(),
-        created_at = Sys.time()
+        created_at = previous$created_at %||% Sys.time()
       ))
 
       # Handle messages from backend to client
@@ -100,8 +114,13 @@ ConnectionManager <- setRefClass("ConnectionManager",
       backend_ws$onOpen(function(event) {
         logger::log_info("Backend connection opened for {app_name}", app_name = app_name)
 
-        # Mark connection as ready
+        # Mark connection as ready. A socket that the session no longer uses,
+        # because it ended or a later attempt replaced this one, is closed.
         conn_info <- config$get_backend_connection(session_id)
+        if (is.null(conn_info) || !identical(conn_info$ws, backend_ws)) {
+          tryCatch(backend_ws$close(), error = function(e) {})
+          return()
+        }
         if (!is.null(conn_info)) {
           conn_info$ready <- TRUE
           config$add_backend_connection(session_id, conn_info)
@@ -135,6 +154,40 @@ ConnectionManager <- setRefClass("ConnectionManager",
         )
         conn <- config$get_backend_connection(session_id)
         if (is.null(conn) || !identical(conn$ws, backend_ws)) return()
+        # The websocket package gives up on a handshake after 5 seconds. An
+        # app's R process completes handshakes only between its computations,
+        # so an app that is busy for longer, such as with another visitor's
+        # long calculation, misses that limit, while a browser connected to
+        # the app directly would simply wait. The browser's socket is already
+        # open, so it waits here instead, with its messages queued, as long
+        # as the same app process runs.
+        # Only a handshake that timed out is tried again: the app accepted the
+        # connection. One that it refused or answered with an error fails.
+        elapsed <- as.numeric(difftime(Sys.time(), first_attempt, units = "secs"))
+        timed_out <- grepl("handshake timed out", event$message %||% "", ignore.case = TRUE)
+        if (timed_out && !isTRUE(conn$ready) && elapsed < config$WS_BACKEND_CONNECT_SECONDS &&
+            !is.null(config$get_ws_connection(session_id)) &&
+            identical(config$get_app_process(app_name), process) && is_process_alive(process) &&
+            config$app_backend_verified(app_name)) {
+          logger::log_info("Connecting to app {app_name} again for session {session_id}",
+            app_name = app_name, session_id = session_id
+          )
+          later::later(function() {
+            conn <- config$get_backend_connection(session_id)
+            if (is.null(conn) || !identical(conn$ws, backend_ws) ||
+                is.null(config$get_ws_connection(session_id))) return()
+            tryCatch(
+              connect_backend(app_name, session_id, client_ws, backend_url, headers, process, first_attempt),
+              error = function(e) {
+                logger::log_error("Could not connect to app {app_name}: {error}",
+                  app_name = app_name, error = conditionMessage(e)
+                )
+                close_client_connection(session_id)
+              }
+            )
+          }, 0.5)
+          return()
+        }
         close_client_connection(session_id)
       })
 

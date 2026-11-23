@@ -101,6 +101,15 @@ test_that("read_reload_config creates a new log_dir and rejects one it cannot wr
   check <- config$read_reload_config()
   expect_false(check$valid)
   expect_match(check$error, "Cannot write the server log")
+
+  # The log_dir that the server already uses is checked as well: it may
+  # have become unwritable since the server started
+  write_reload_config(path, apps, log_dir = new_logs)
+  config$config$log_dir <- new_logs
+  local_mocked_bindings(check_log_dir = function(log_dir) paste("Cannot write the server log to", log_dir))
+  check <- config$read_reload_config()
+  expect_false(check$valid)
+  expect_match(check$error, "Cannot write the server log")
 })
 
 test_that("reload endpoint rejects a bad file without requesting a reload", {
@@ -223,6 +232,53 @@ test_that("reload finishes when the new log_dir stops being writable after its c
   expect_equal(test$calls$started, "resident")
   expect_equal(test$server$template_manager$server_title, "Reloaded")
   expect_true(test$server$config$last_reload$success)
+  expect_match(test$server$config$last_reload$message, "kept the previous server log: Cannot write the server log")
+})
+
+test_that("a reload with the real process manager stops an app that the file no longer names", {
+  app_dir <- make_test_app_dir()
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(c(path, app_dir), recursive = TRUE), add = TRUE)
+  write_reload_config(path, list(
+    list(name = "removed", path = app_dir, resident = TRUE),
+    list(name = "kept", path = app_dir, resident = TRUE)
+  ), restart_delay = 0)
+  local_mocked_bindings(is_port_in_use = function(...) FALSE, setup_logging = function(...) NULL)
+  started <- character()
+  local_mocked_bindings(r_bg = function(func, args, ...) {
+    started <<- c(started, args$port)
+    alive <- TRUE
+    list(is_alive = function() alive, kill = function() alive <<- FALSE, get_pid = function() 1L)
+  }, .package = "callr")
+  server <- TinyShinyServer$new(path)
+  config <- server$config
+  on.exit(config$app_processes <- list(), add = TRUE, after = FALSE)
+  server$start_all_apps()
+  removed <- config$get_app_process("removed")
+  expect_true(removed$is_alive())
+
+  write_reload_config(path, list(list(name = "kept", path = app_dir, resident = TRUE)), restart_delay = 0)
+  expect_true(server$reload()$valid)
+  expect_false(removed$is_alive())
+  expect_named(config$get_all_app_processes(), "kept")
+  # Nothing that was scheduled for the removed app brings it back
+  server$process_manager$health_check()
+  later::run_now(0.1)
+  expect_named(config$get_all_app_processes(), "kept")
+})
+
+test_that("a reload applies a new log level even when it keeps the previous server log", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  on.exit(logger::log_threshold("INFO", namespace = "tinyshinyserver"), add = TRUE)
+  write_reload_config(path, list(list(name = "app", path = "/tmp")))
+  test <- reload_test_server(path)
+  logger::log_threshold("INFO", namespace = "tinyshinyserver")
+  local_mocked_bindings(setup_logging = function(...) stop("Cannot write the server log"))
+
+  write_reload_config(path, list(list(name = "app", path = "/tmp")), log_level = "ERROR")
+  expect_true(test$server$reload()$valid)
+  expect_equal(attr(logger::log_threshold(namespace = "tinyshinyserver"), "level"), "ERROR")
 })
 
 test_that("an app that fails to start does not stop the other resident apps or the reload", {

@@ -117,7 +117,8 @@ test_that("the event loop stops when the management API requests shutdown", {
   server <- TinyShinyServer$new()
   handle_server_shutdown(config)
   local_mocked_bindings(service = function(...) stop("Loop must stop before servicing"), .package = "httpuv")
-  server$run_event_loop()
+  # The loop ends with an error if it reaches httpuv::service()
+  expect_no_error(server$run_event_loop())
   expect_true(server$is_shutting_down)
 })
 
@@ -129,11 +130,16 @@ test_that("an event-loop error shuts the server down once", {
   stops <- 0
   server$field("process_manager", list(stop_all_apps = function() stops <<- stops + 1))
   local_mocked_bindings(service = function(...) stop("loop failure"), .package = "httpuv")
-  expect_no_error(server$run_event_loop())
+  # The error is raised again once the server has stopped, so that Rscript
+  # exits with a failure status
+  expect_error(server$run_event_loop(), "stopped after an error: loop failure")
   expect_equal(stops, 1)
   expect_true(server$shutdown_complete)
   # A completed shutdown does nothing when start() calls it again on exit
   server$shutdown()
+  expect_equal(stops, 1)
+  # Nor can the server start again, since it could not be shut down again
+  expect_error(server$start(), "has been shut down")
   expect_equal(stops, 1)
 })
 

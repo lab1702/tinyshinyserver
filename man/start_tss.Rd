@@ -16,7 +16,10 @@ The internal server object (a reference class object of class
   \code{TinyShinyServer}), invisibly, after the server stops. The function
   is called for its side effect: it blocks the R session until it is
   interrupted (for example, with Ctrl-C) or shut down through the management
-  dashboard or API.
+  dashboard or API. If an unexpected error stops the server, the function
+  signals an error once the servers and apps have stopped, so that a script
+  run with \command{Rscript} exits with a failure status. The returned
+  object cannot be started again.
 }
 \description{
 Starts the proxy, the management server, and the resident apps listed in a

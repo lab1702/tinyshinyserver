@@ -91,6 +91,12 @@
         signal: controller.signal
       })
         .then(response => {
+          // The server answers, but not at this page's address: a
+          // configuration reload changed base_path, so the page is reloaded
+          // from the server, which renders it for its current address
+          if (response.status === 404) {
+            return null;
+          }
           if (!response.ok) {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
           }
@@ -98,6 +104,12 @@
         })
         .then(data => {
           clearTimeout(timeoutId);
+
+          if (data === null) {
+            clearInterval(refreshInterval);
+            location.reload();
+            return;
+          }
 
           if (!isConnected) {
             setConnectionStatus(true);

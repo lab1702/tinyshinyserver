@@ -52,8 +52,8 @@
 #'   \item{\code{management_port}}{Port for the management dashboard and API (default: 3839).}
 #'   \item{\code{base_path}}{Public URL prefix when a reverse proxy serves the landing page and apps under a path such as \code{"/shiny"} (default: \code{""}, the site root). It must start with \code{/} and be at most 100 characters long; a trailing \code{/} is removed. Path segments may contain only ASCII letters, digits, and \code{. _ ~ -}, may not be \code{.} or \code{..}, and the first segment may not be \code{proxy}, \code{api}, \code{templates}, or \code{health} in any letter case. The proxy accepts requests with or without the prefix, so the reverse proxy may either pass it through or strip it. Links, redirects, and cookie paths use the prefix.}
 #'   \item{\code{title}}{Name shown in the browser tab and top bar of the landing and management pages; a non-empty string of up to 100 characters (default: \code{"Tiny Shiny Server"}).}
-#'   \item{\code{restart_delay}}{Seconds to wait before restarting a failed app; a non-negative finite number (default: 5). A resident app restarts then, and an on-demand app at the next request after that; an earlier request receives HTTP 503 with a \code{Retry-After} header. A restart requested from the management dashboard or API does not wait.}
-#'   \item{\code{health_check_interval}}{Seconds between health checks, which find app processes that have exited; a positive finite number (default: 10).}
+#'   \item{\code{restart_delay}}{Seconds to wait before restarting a failed app; a non-negative number of at most 86400, one day (default: 5). A resident app restarts then, and an on-demand app at the next request after that; an earlier request receives HTTP 503 with a \code{Retry-After} header. A restart requested from the management dashboard or API does not wait, and ends the wait of an on-demand app.}
+#'   \item{\code{health_check_interval}}{Seconds between health checks, which find app processes that have exited; a positive number of at most 86400 (default: 10).}
 #'   \item{\code{max_request_size_mb}}{Largest HTTP request body, in megabytes, that the proxy accepts; a positive finite number (default: 100). Larger bodies, and bodies sent with chunked transfer encoding, are rejected with HTTP 413 before they are read. Apps that raise \code{shiny.maxRequestSize} above this need a larger value.}
 #'   \item{\code{idle_timeout_minutes}}{Minutes without a WebSocket message, in either direction, after which a session is closed and the browser shows the app as disconnected; a non-negative finite number (default: 30). \code{0} keeps idle sessions open. Idle sessions are checked every 5 minutes.}
 #'   \item{\code{log_level}}{Least severe messages written to \code{server.log}: \code{"DEBUG"}, \code{"INFO"}, \code{"WARN"}, or \code{"ERROR"}, in any letter case (default: \code{"INFO"}). \code{"DEBUG"} also records the first 100 characters of every WebSocket message, which can include what users type.}
@@ -65,8 +65,11 @@
 #'   \item{\code{name}}{Unique identifier used in URLs and log file names: 1--50 ASCII letters, digits, underscores, or hyphens. Names must differ by more than letter case. Required.}
 #'   \item{\code{path}}{Path to the app directory, either absolute or relative to the R working directory; see \sQuote{Application Directories}. Required.}
 #'   \item{\code{resident}}{Boolean. If \code{true}, the app starts with the server and is restarted if its process fails. If \code{false} (the default), the app starts on demand and stops once it has had no WebSocket connection and no HTTP request in progress for 30 seconds. Restarting an on-demand app from the management dashboard or API stops it until it is next opened.}
-#'   \item{\code{appstart_timeout}}{Seconds, measured from app startup, that a request waits for the app to become ready before the proxy returns HTTP 503; a positive finite number (default: 2). Fractional seconds are supported.}
+#'   \item{\code{appstart_timeout}}{Seconds, measured from app startup, that a request waits for the app to become ready before the proxy returns HTTP 503; a positive number of at most 86400 (default: 2). Fractional seconds are supported.}
 #' }
+#'
+#' A field may be given only once, at the top level and within each app: a
+#' file that repeats one is invalid.
 #'
 #' @section Application Directories:
 #' An app directory must hold one of these entry points, in order of
@@ -77,13 +80,16 @@
 #' document whose name starts with \code{_} does not count, because R Markdown
 #' and Quarto treat it as a partial that other documents include. An app whose
 #' directory is missing or holds no entry point is not started, and the reason
-#' is written to \code{server.log}.
+#' is written to \code{server.log}. An R Markdown app serves only its entry
+#' document; a request for another \file{.Rmd} or \file{.qmd} document in its
+#' directory receives HTTP 404.
 #'
 #' The app's R process starts in its directory and reads the \file{.Renviron}
 #' and \file{.Rprofile} there, if there are any, such as a profile that
 #' activates renv. As at R's startup, the files that \env{R_ENVIRON_USER} and
-#' \env{R_PROFILE_USER} name take precedence, and a directory without these
-#' files falls back to the user's \file{~/.Renviron} and \file{~/.Rprofile}.
+#' \env{R_PROFILE_USER} name take precedence, a variable that is set but empty
+#' names no file, and a directory without these files falls back to the
+#' user's \file{~/.Renviron} and \file{~/.Rprofile}.
 #'
 #' Two apps may not use the same directory if its document is rendered into
 #' that directory before it is served: a Quarto document, or an R Markdown

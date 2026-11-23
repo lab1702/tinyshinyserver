@@ -66,7 +66,7 @@ With the server running, open:
 | http://localhost:3838/proxy/sales/ | The `sales` app; each app is at `/proxy/{name}/` |
 | http://localhost:3839 | Management dashboard |
 
-`start_tss()` keeps the R console busy until the server stops. To stop it, click **Shutdown Server** on the management dashboard or press **Ctrl-C** in R. Either way, the server closes all connections and stops the app processes. To shut down from a script, see [Management API](#management-api).
+`start_tss()` keeps the R console busy until the server stops. To stop it, click **Shutdown Server** on the management dashboard or press **Ctrl-C** in R. Either way, the server closes all connections and stops the app processes. To shut down from a script, see [Management API](#management-api). If an unexpected error stops the server, `start_tss()` also stops the apps, and then signals the error, so that a server run with `Rscript` exits with a failure status that a service manager can act on.
 
 ## Configuration
 
@@ -92,6 +92,7 @@ The server reads a JSON configuration file. This minimal configuration serves on
 - `apps`, `starting_port`, and `log_dir` are required. Every other setting has a default.
 - Relative paths, in each app's `path` and in `log_dir`, are resolved from the R working directory (`getwd()`), **not** from the directory of the configuration file. Absolute paths also work.
 - JSON does not allow comments. A field that the server does not recognize, such as a misspelled option, has no effect; it is reported as a warning in `server.log` at startup, and in the dashboard's notice after a reload.
+- A field given twice, at the top level or in one app, makes the file invalid, because JSON readers disagree on which copy counts.
 
 To change the configuration while the server runs, see [Reloading the configuration](#reloading-the-configuration). `help("config-format")` gives the validation rules for every setting.
 
@@ -104,7 +105,7 @@ Each entry in `apps` has these settings:
 | `name` | Required | Name used in the app's URL and log file names: 1–50 ASCII letters, digits, underscores, or hyphens. Names must be unique, ignoring letter case |
 | `path` | Required | The app's directory; see [Writing apps](#writing-apps) |
 | `resident` | `false` | `true` starts the app with the server and restarts it after a failure; `false` starts it on demand. See [App lifecycle](#app-lifecycle) |
-| `appstart_timeout` | `2` | Seconds, counted from the app's start, that a request waits for the app to be ready before receiving HTTP 503; fractions are allowed. See [Startup](#startup) |
+| `appstart_timeout` | `2` | Seconds, counted from the app's start, that a request waits for the app to be ready before receiving HTTP 503; fractions are allowed, up to 86400 (one day). See [Startup](#startup) |
 
 ### Server settings
 
@@ -117,8 +118,8 @@ Each entry in `apps` has these settings:
 | `management_port` | `3839` | Port for the management dashboard and API, which listen only on `127.0.0.1` |
 | `base_path` | `""` | Public URL prefix, such as `"/shiny"`, when a reverse proxy serves the apps under a path; see [Serving under a URL prefix](#serving-under-a-url-prefix) |
 | `title` | `"Tiny Shiny Server"` | Name shown in the browser tab and top bar of the landing and management pages; up to 100 characters |
-| `restart_delay` | `5` | Seconds to wait before restarting a failed app: a resident app restarts then, and an on-demand app at the next request after that. A restart requested from the dashboard or API does not wait |
-| `health_check_interval` | `10` | Seconds between health checks, which find app processes that have exited |
+| `restart_delay` | `5` | Seconds to wait before restarting a failed app, up to 86400 (one day): a resident app restarts then, and an on-demand app at the next request after that. A restart requested from the dashboard or API does not wait |
+| `health_check_interval` | `10` | Seconds between health checks, which find app processes that have exited; up to 86400 (one day) |
 | `max_request_size_mb` | `100` | Largest request body, in megabytes, that the proxy accepts; see [Limits and timeouts](#limits-and-timeouts) |
 | `idle_timeout_minutes` | `30` | Minutes without a WebSocket message, in either direction, after which a session is closed; `0` keeps idle sessions open |
 | `log_level` | `"INFO"` | Least severe messages written to `server.log`; see [Log levels](#log-levels) |
@@ -142,9 +143,9 @@ When a directory holds several documents:
 
 - Extensions may be in any letter case, such as `report.rmd`.
 - Files whose names start with `_` are skipped, because R Markdown and Quarto treat them as partials that other documents include.
-- Of the rest, the server chooses as `rmarkdown` does: an `index` or `ui` document first, then one whose front matter sets `runtime: shiny` or `server: shiny`, then one spelled `.Rmd` or `.qmd`, then the first in alphabetical order.
+- Of the rest, the server chooses an `index` or `ui` document first, then one whose front matter sets `runtime: shiny` or `server: shiny`, then one spelled `.Rmd` or `.qmd`, then the first in alphabetical order. The chosen document is the one served at the app's address.
 
-To make the choice explicit, keep one entry document per directory.
+To make the choice explicit, keep one entry document per directory. An R Markdown app serves only its entry document: `rmarkdown` would otherwise render, and run the code of, any other `.Rmd` or `.qmd` document under the directory whose path a request names, so such a request receives HTTP 404. Its other files, such as images and data, are served as usual.
 
 If an app's directory is missing, or holds none of these entry points, the app is not started, and `server.log` gives the reason:
 
@@ -155,7 +156,7 @@ If an app's directory is missing, or holds none of these entry points, the app i
 
 An app's R process starts in the app's directory and reads the `.Renviron` and `.Rprofile` there, as R does when you run the app on its own. The app's own environment variables, such as credentials, therefore apply to it, and a profile that activates renv gives it its own project library.
 
-- As at R's startup, `R_ENVIRON_USER` and `R_PROFILE_USER` take precedence: when one is set, the app reads the file it names instead. An app directory without one of these files falls back to the user's `~/.Renviron` or `~/.Rprofile`.
+- As at R's startup, `R_ENVIRON_USER` and `R_PROFILE_USER` take precedence: when one is set, the app reads the file it names instead, and when one is set but empty, the app reads no such file. An app directory without one of these files falls back to the user's `~/.Renviron` or `~/.Rprofile`.
 - The `.Renviron` and `.Rprofile` of the directory that `start_tss()` is called from do not apply to apps. Apps do inherit the environment variables of the R session that runs `start_tss()`, including any that it read from a `.Renviron` when it started.
 - Unless a profile changes them, apps use the library paths of the R session that runs `start_tss()`.
 - As at R's startup, an error in an app's profile is written to the app's error log, and the app still starts.
@@ -216,7 +217,7 @@ An on-demand app stops once it has had no WebSocket connection and no HTTP reque
 
 An app that is still starting at that point is left to finish, for up to 10 minutes from its start, and stops within 30 seconds after it is ready if it is still unused. A slow start, such as a Quarto render, is therefore not thrown away when the visitor's page stops waiting. On platforms where the `ps` package cannot list a process's sockets, the server cannot tell that an app is still starting, and stops it.
 
-A failed on-demand app, such as one that stops with an error at startup, starts again at the first request that comes at least `restart_delay` seconds after the failure. An earlier request receives HTTP 503 with a `Retry-After` header for the time that is left, and a browser receives the page that reloads itself, so a failing app is not started again by every reload.
+A failed on-demand app, such as one that stops with an error at startup or crashes while in use, starts again at the first request that comes at least `restart_delay` seconds after the failure. An earlier request receives HTTP 503 with a `Retry-After` header for the time that is left, and a browser receives the page that reloads itself, so a failing app is not started again by every reload. A restart from the management dashboard ends the wait.
 
 ### Startup
 
@@ -242,7 +243,7 @@ Both pages refresh their status every 5 seconds. They follow the system's light 
 | Status | Meaning |
 |--------|---------|
 | **running** | The app's process is running |
-| **dormant** | An on-demand app that is not running, including one whose process has exited; opening it starts it |
+| **dormant** | An on-demand app that is not running, including one whose process has exited; opening it starts it, after `restart_delay` if its process failed |
 | **unavailable** | An on-demand app whose directory cannot be served; `server.log` gives the reason |
 | **stopped** | A resident app that is not running, such as one waiting to be restarted |
 | **crashed** | A resident app whose process has exited and has not yet been cleaned up by a health check |
@@ -255,7 +256,7 @@ Memory figures are the resident memory (RSS) of the server's own R process and o
 
 ### Restarting an app
 
-Running, stopped, and crashed apps can be restarted from the management dashboard. A restart disconnects the app's users once their app's process has stopped; if it cannot be stopped, the restart fails and they stay connected. A resident app starts again at once, without waiting for `restart_delay`; an on-demand app stops and starts again when it is next opened. Dormant apps start when opened, and an unavailable app becomes dormant once its directory can be served.
+Running, stopped, and crashed apps can be restarted from the management dashboard. A restart disconnects the app's users once their app's process has stopped; if it cannot be stopped, the restart fails and they stay connected. A resident app starts again at once, without waiting for `restart_delay`; an on-demand app stops and starts again when it is next opened. Dormant apps start when opened, and an unavailable app becomes dormant once its directory can be served. A dormant app whose process failed shows how long it waits before it can start again, and restarting it ends that wait.
 
 ### Reloading the configuration
 
@@ -265,7 +266,7 @@ The new file is checked first. Nothing is stopped if the file is invalid, if the
 
 ### Proxy endpoints
 
-These read-only endpoints are served on the proxy port. Like the landing page, they answer methods other than `GET` and `HEAD` with HTTP 405.
+These read-only endpoints are served on the proxy port. Like the landing page, they answer the other methods that the proxy forwards with HTTP 405, and methods that it does not forward at all with HTTP 501.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -274,18 +275,18 @@ These read-only endpoints are served on the proxy port. Like the landing page, t
 
 ### Management API
 
-These endpoints are served on the management port. `POST` requests must carry the header `X-TinyShinyServer-Request: management`, which browsers send from another website's page only where CORS allows it; the dashboard sends it automatically. The dashboard and the `GET` endpoints also answer `HEAD`, and an endpoint asked with a method it does not serve answers HTTP 405.
+These endpoints are served on the management port. `POST` requests must carry the header `X-TinyShinyServer-Request: management`, which browsers send from another website's page only where CORS allows it; the dashboard sends it automatically. The dashboard and the `GET` endpoints also answer `HEAD`, and an endpoint asked with a method it does not serve answers HTTP 405. The header is checked first, so a `POST` without it receives HTTP 403 from every endpoint, and a method that the server does not recognize at all, such as `PROPFIND`, receives HTTP 501.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/status` | GET | Server overview: app and connection counts, `uptime_seconds`, `server_memory_bytes`, `apps_memory_bytes` (the total of running apps), and the outcome of the latest configuration reload |
-| `/api/apps` | GET | Detailed status of each app, including `pid`, `memory_bytes`, and `uptime_seconds` for running apps |
+| `/api/apps` | GET | Detailed status of each app, including `pid`, `memory_bytes`, and `uptime_seconds` for running apps, and `restart_in_seconds` for a dormant app whose process failed |
 | `/api/connections` | GET | Details of each active WebSocket connection |
 | `/api/apps/{name}/restart` | POST | Restart the named app |
 | `/api/reload` | POST | Reload the configuration file and restart all apps |
 | `/api/shutdown` | POST | Shut down the server |
 
-The `POST` endpoints answer JSON with `success` and `message` fields. A `POST` without the required header receives HTTP 403, a restart of an app that is not configured receives HTTP 404, and a reload of an invalid configuration receives HTTP 400 with the reason. An accepted reload runs after its response is sent; its outcome appears in `/api/status` as `last_reload` once it finishes.
+The `POST` endpoints answer JSON with `success` and `message` fields. A request refused before it reaches the action, such as one without the required header or with an invalid app name, receives JSON with an `error` field instead. A `POST` without the required header receives HTTP 403, a restart of an app that is not configured receives HTTP 404, and a reload of an invalid configuration receives HTTP 400 with the reason. An accepted reload runs after its response is sent; its outcome appears in `/api/status` as `last_reload` once it finishes.
 
 For example:
 
@@ -328,7 +329,8 @@ The server has no authentication or TLS of its own. For access from other machin
 
 The proxy uses the `Host` header to block DNS rebinding, and accepts an app's WebSocket connection only when the browser's `Origin` matches the public host. A reverse proxy must therefore send these headers:
 
-- **On the same machine** (`proxy_host` is a loopback address): forward the upstream address as the `Host` header, because the proxy rejects requests whose `Host` is not `localhost`, `127.0.0.1`, or `[::1]`. Also set `X-Forwarded-Host` to the public host, so that the WebSocket `Origin` check passes. The [Caddy example](#caddy-example) does both: `header_up Host {upstream_hostport}` sets the host, and Caddy sets `X-Forwarded-Host` by default. With nginx, set `X-Forwarded-Host`, as well as the `Upgrade` and `Connection` headers that WebSockets need.
+- **On the same machine** (`proxy_host` is a loopback address): forward the upstream address as the `Host` header, because the proxy rejects requests whose `Host` is not `localhost`, `127.0.0.1`, or `[::1]`. Also set `X-Forwarded-Host` to the public host, including a non-default port, so that the WebSocket `Origin` check passes. The [Caddy example](#caddy-example) does both: `header_up Host {upstream_hostport}` sets the host, and Caddy sets `X-Forwarded-Host` by default. With nginx, use `proxy_set_header X-Forwarded-Host $http_host;` (not `$host`, which drops the port), and set the `Upgrade` and `Connection` headers that WebSockets need. Because the proxy then sees only the upstream address as the host, the reverse proxy takes over the DNS-rebinding check: it must serve the apps only under their own host names, and refuse requests for any other name, as Caddy's site blocks do. An nginx `default_server` that passes every host name to the proxy would let a rebinding website reach the apps through a visitor's browser.
+- **HTTPS**: a reverse proxy that serves the apps over HTTPS should send `X-Forwarded-Proto: https`, as Caddy does by default. The proxy then refuses a WebSocket that a page on the plain-HTTP site of the same host tries to open, so that a page injected into unencrypted traffic cannot use the HTTPS site's sessions.
 - **On another machine** (`proxy_host` is `"0.0.0.0"` or `"::"`): preserve the public `Host` header, because `X-Forwarded-Host` is trusted only from the same machine. With nginx, use `proxy_set_header Host $http_host;`, not `$host`, which drops a non-default port and makes the WebSocket `Origin` check fail.
 - **Management site**: put the management server behind the reverse proxy only if you need remote administration. It always rejects requests whose `Host` is not `localhost`, `127.0.0.1`, or `[::1]`, so forward the upstream address as the host. Keep CORS disabled, and serve it on a different host name from the apps, such as `manage.example.com`, never under a path on the apps' site. Otherwise scripts in other pages could send the management API's required request header, and restart apps or shut down the server.
 
@@ -401,6 +403,7 @@ Responses:
 - If a running app does not accept connections, the proxy returns HTTP 503. Once the app accepts a connection, a request fails with HTTP 502 if the connection breaks or the app sends no data for 10 minutes; there is no limit on the total transfer time.
 - A response reaches the browser once the app has finished sending it. A response that an app streams, such as server-sent events, is therefore not delivered piece by piece, and a download shows no progress until the proxy has received all of it.
 - A response larger than 8 MB is written to a file in R's temporary directory as it arrives, sent from there, and then deleted. It needs that much free disk space for the duration of the request, instead of the server's memory.
+- If the client disconnects while a response is being sent, R's web server, httpuv, does not release the response: it stays in memory, or on disk as that file, until the R session that runs the server ends. Repeated aborted downloads of large responses therefore use up memory or disk; restart the server if that happens.
 
 WebSocket sessions:
 
@@ -408,6 +411,7 @@ WebSocket sessions:
 - Messages from an app to the browser may be up to 2 GB.
 - A session that has carried no message in either direction for `idle_timeout_minutes` (default: 30) is closed, and the browser shows the app as disconnected. Sessions are checked every 5 minutes, and each one closed is recorded in `server.log`. For dashboards that people leave open without interacting, raise the value, or set it to `0` to keep idle sessions open.
 - Up to 100 messages per session are held while the app's WebSocket opens; when more arrive, the oldest are dropped.
+- An app's R process completes a WebSocket handshake only between its computations. If it is busy, for example with another visitor's long calculation, the proxy tries again for up to 2 minutes while the browser waits, and then closes the browser's session.
 
 ## Logging
 

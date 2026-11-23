@@ -27,6 +27,9 @@
     // open on an app that cannot start would otherwise restart it forever.
     (function () {
       var retryMs = {{retry_seconds}} * 1000;
+      // The longest time that the server holds a request for the app before
+      // it answers, plus time for the network
+      var answerMs = {{answer_seconds}} * 1000 + 10000;
       var giveUpMs = 120000;
       var key = "tss-starting:" + window.location.pathname;
       var now = Date.now();
@@ -42,11 +45,17 @@
       } catch (e) {
         wait = null;
       }
-      // A reload that closely follows the last one continues the same wait
-      if (!wait || now - wait.last > retryMs + 10000) {
+      // A page that this script reloaded continues the same wait, measured
+      // from the moment of the reload: the page before may have waited longer
+      // than this one does, as one that reports a restart delay does, and a
+      // browser may delay the timers of a tab in the background. Any other
+      // visit, such as the visitor reloading the page, starts a new wait.
+      var reloaded = wait && typeof wait.reloadedAt === "number" &&
+        now >= wait.reloadedAt && now - wait.reloadedAt <= answerMs;
+      if (!reloaded) {
         wait = { first: now };
       }
-      wait.last = now;
+      delete wait.reloadedAt;
 
       if (now - wait.first >= giveUpMs) {
         try {
@@ -66,6 +75,13 @@
         return;
       }
       window.setTimeout(function () {
+        wait.reloadedAt = Date.now();
+        try {
+          window.sessionStorage.setItem(key, JSON.stringify(wait));
+        } catch (e) {
+          stopReloading("This application is not ready yet.");
+          return;
+        }
         window.location.reload();
       }, retryMs);
     })();

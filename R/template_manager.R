@@ -106,12 +106,13 @@ TemplateManager <- setRefClass("TemplateManager",
         title = title_html()
       )))
     },
-    generate_starting_page = function(app_name, retry_seconds = 2) {
-      "Generate the page a browser shows, and reloads, until an app is ready"
+    generate_starting_page = function(app_name, retry_seconds = 2, answer_seconds = 2) {
+      "Generate the page a browser shows, and reloads, until an app is ready. answer_seconds is the longest time the server holds a request for the app."
 
       return(render_template("starting_page", list(
         app_name = html_escape(app_name),
         retry_seconds = retry_seconds,
+        answer_seconds = answer_seconds,
         title = title_html()
       )))
     },

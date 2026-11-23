@@ -46,6 +46,12 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
     start = function() {
       "Start the complete server system"
 
+      # Its shutdown is done and is not repeated, so it could not stop a
+      # second run's servers and apps
+      if (isTRUE(shutdown_complete)) {
+        stop("This server has been shut down; call start_tss() to start a new one", call. = FALSE)
+      }
+
       # Cover failures before run_event_loop installs its own shutdown guard,
       # and finish a shutdown that a second Ctrl-C interrupted. A completed
       # shutdown does nothing when called again.
@@ -171,7 +177,7 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
     run_event_loop = function() {
       "Main event loop with proper error handling"
 
-      tryCatch({
+      outcome <- tryCatch({
         while (TRUE) {
           # Check for a shutdown requested through the management API
           if (isTRUE(config$shutdown_requested)) {
@@ -198,10 +204,18 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
         logger::log_info("Interrupt received, shutting down...")
       }, error = function(e) {
         logger::log_error("Server error: {error}", error = e$message)
+        e
       }, finally = {
         # The one shutdown for every way out of the loop
         shutdown()
       })
+      # The servers and apps have stopped. An error ends start_tss() with an
+      # error too, so that a script run by Rscript exits with a failure status
+      # and a service manager can restart it.
+      if (inherits(outcome, "error")) {
+        stop("The server stopped after an error: ", conditionMessage(outcome), call. = FALSE)
+      }
+      invisible(NULL)
     },
     reload = function() {
       "Stop all apps, apply the configuration file again, and start the resident apps"
@@ -249,14 +263,23 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
         }
       )
 
+      log_problem <- NULL
       if (!identical(config$config$log_dir, old_config$log_dir) ||
         !identical(config$config$log_level, old_config$log_level)) {
         # The new log_dir was checked before any app stopped. If it has
         # become unwritable since, keep the previous server log rather than
-        # leave the reload half applied.
-        tryCatch(setup_logging(config$config$log_dir, config$config$log_level %||% "INFO"), error = function(e) {
-          logger::log_warn("Keeping the previous server log: {error}", error = conditionMessage(e))
-        })
+        # leave the reload half applied, but use the new log level, and say so.
+        log_problem <- tryCatch(
+          {
+            setup_logging(config$config$log_dir, config$config$log_level %||% "INFO")
+            NULL
+          },
+          error = function(e) {
+            logger::log_threshold(config$config$log_level %||% "INFO", namespace = "tinyshinyserver")
+            logger::log_warn("Keeping the previous server log: {error}", error = conditionMessage(e))
+            conditionMessage(e)
+          }
+        )
       }
       template_manager$field("server_title", config$config$title)
       template_manager$field("base_url", config$config$base_path %||% "")
@@ -275,6 +298,9 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
             message, "; ignored unrecognized fields: ",
             paste(config$ignored_fields, collapse = ", ")
           )
+        }
+        if (!is.null(log_problem)) {
+          message <- paste0(message, "; kept the previous server log: ", log_problem)
         }
       }
       config$field("last_reload", list(success = result$valid, message = message))

@@ -58,6 +58,16 @@
 
 * The INFO message that records a WebSocket connection to an app no longer includes the connection's query string, which can carry a token. The full address is logged at DEBUG.
 
+* An R Markdown app serves only its entry document. `rmarkdown::run()` renders, and so runs the code of, any `.Rmd` or `.qmd` document under the app directory that a request names, including partials whose names start with `_` and drafts in subdirectories; such requests, and WebSocket connections for such documents, are now refused with HTTP 404.
+
+* When a reverse proxy reports with `X-Forwarded-Proto: https` that a WebSocket arrived over HTTPS, the proxy refuses it if the page that opens it comes from the plain-HTTP site of the same host. A page injected into unencrypted traffic could otherwise use the HTTPS site's sessions and credentials.
+
+* Request headers that the client names in its `Connection` header, and `Proxy-Connection`, are no longer passed on to apps, as response headers named in the app's `Connection` header already were not.
+
+* The `Host` and `Origin` of a rejected WebSocket handshake are written to `server.log` with control characters replaced and cut to 200 bytes, so a client cannot move the cursor of a terminal that follows the log or forge log lines.
+
+* Forwarding a request's headers no longer takes time that grows with the square of their number. A request with some 13,000 empty headers, which fit within httpuv's size limit, held up every app for a second.
+
 * The management dashboard shows app paths containing characters such as `<` or `&` literally instead of interpreting them as HTML.
 
 ## Apps
@@ -66,7 +76,7 @@
 
 * R Markdown and Quarto documents are found whatever the letter case of their extension, such as `report.rmd` or `dash.QMD`, as `rmarkdown` and Quarto accept them. Such an app was reported as having nothing to serve.
 
-* A directory with several documents serves the one that `rmarkdown` picks, instead of the first in alphabetical order. Files whose names start with `_`, which are partials that other documents include, are never served; such a file, such as `_child.Rmd`, could be served in place of the app, and a directory holding only partials now says so in `server.log`. An `index` or `ui` document is preferred, then one whose front matter sets `runtime: shiny` or `server: shiny`, so a static page no longer displaces the app. Among the rest, a document spelled `.Rmd` or `.qmd` comes before other letter cases, so a child document such as `appendix.rmd` does not displace `report.Rmd`.
+* A directory with several documents serves the one that the server picks, by the rules below, instead of the first in alphabetical order; `rmarkdown::run()` is told which document to serve, where it would otherwise choose its own, among the directory's `.qmd` files as well. Files whose names start with `_`, which are partials that other documents include, are never served; such a file, such as `_child.Rmd`, could be served in place of the app, and a directory holding only partials now says so in `server.log`. An `index` or `ui` document is preferred, then one whose front matter sets `runtime: shiny` or `server: shiny`, so a static page no longer displaces the app. Among the rest, a document spelled `.Rmd` or `.qmd` comes before other letter cases, so a child document such as `appendix.rmd` does not displace `report.Rmd`.
 
 * A configuration in which two apps serve the same Quarto document, or the same prerendered R Markdown document (`runtime: shinyrmd` or `shiny_prerendered`, or `server: shiny`), is rejected when it is loaded or reloaded. Such documents are rendered into their own directory, and two renders at once could leave a broken page or none, which was then served at every start because it was newer than the document. The README explains how to recover, and that two server instances must not share such a directory either.
 
@@ -80,7 +90,7 @@
 
 * Resident apps that die during startup, or are found without a process by a health check, now wait `restart_delay` before restarting instead of restarting at the next health check.
 
-* An on-demand app whose process failed, for example because the app stops with an error at startup, now starts again only after `restart_delay`, as a resident app does. Until then, a request for it receives HTTP 503 with a `Retry-After` header that counts down the delay, and a browser receives the page that reloads itself. Every request used to start a new R process, so the page that reloads every 2 seconds, open in each visitor's tab, kept starting the failing app. A restart from the management dashboard and a configuration reload end the delay.
+* An on-demand app whose process failed, for example because the app stops with an error at startup, now starts again only after `restart_delay`, as a resident app does. Until then, a request for it receives HTTP 503 with a `Retry-After` header that counts down the delay, and a browser receives the page that reloads itself. Every request used to start a new R process, so the page that reloads every 2 seconds, open in each visitor's tab, kept starting the failing app. This also applies to an app that crashes while in use. The management dashboard shows how long the app waits, and its Restart button, like `POST /api/apps/{name}/restart` and a configuration reload, ends the delay; the management `/api/apps` returns the wait as `restart_in_seconds`.
 
 * An on-demand app whose process has exited is shown as **dormant**, which is what opening it does, until the health check cleans it up. It was shown as **crashed**, its landing page tile was disabled, and the tile advised a restart from the management dashboard, which only stops an on-demand app.
 
@@ -96,6 +106,12 @@
 
 * Stopping the server with Ctrl-C, or after an error in its event loop, no longer runs the shutdown twice, which repeated its log messages. A shutdown interrupted by a second Ctrl-C still runs again.
 
+* An unexpected error that stops the server now ends `start_tss()` with an error once the servers and apps have stopped, so a server run with `Rscript` exits with a failure status that a service manager can restart it on. `start_tss()` used to return normally. The server object that `start_tss()` returns can no longer be started again, which left its servers and apps running after its second shutdown.
+
+* An app's previous log is copied to `.prev.log` when it cannot be renamed, as on Windows when another program holds it open. Both the log and the older `.prev.log` were lost then.
+
+* `R_ENVIRON_USER` and `R_PROFILE_USER` set to an empty value now keep apps from reading a user environment file or profile, as they do for R itself. Apps read the app directory's files, or the user's, instead.
+
 * Apps can now be stopped and restarted on platforms where the `ps` package cannot list processes. Stopping an app failed there, which also blocked restarts, reloads, and shutdown; on those platforms only the app's own process is stopped, not processes it started.
 
 * Assigning app ports no longer waits about a second for each app on Windows, which delayed startup and paused all apps' traffic during a configuration reload. A port now counts as in use when the server cannot listen on it.
@@ -108,7 +124,13 @@
 
 * Uploads to apps are no longer limited to about 4 MB per second, and every proxied request is faster. A transfer now continues as soon as the app's socket is ready instead of on a 10-millisecond timer, and a request to a running app no longer opens a separate connection first to check that the app is listening.
 
-* An app response larger than 8 MB is written to a temporary file as it arrives and sent from there, instead of being held in the server's memory, so a large download no longer occupies the memory of the process that serves every app.
+* An app response larger than 8 MB is written to a temporary file as it arrives and sent from there, instead of being held in the server's memory, so a large download no longer occupies the memory of the process that serves every app. If R's temporary directory has been removed, for example by a cleaner of `/tmp` on a server that runs for weeks, it is created again. The README notes that httpuv keeps a response that a client stops downloading, in memory or as this file, until the server stops.
+
+* Proxied responses keep their headers when the app sends a chunked response with trailer fields. The trailer fields took the place of the response's headers, such as its `Content-Type`, cookies, and redirect.
+
+* Every `Path` attribute of an app's cookie is scoped to the app, including ones written with spaces around `=`, such as `Path =/`. Browsers use the last `Path`, so an app could scope a cookie to every app; `Domain` attributes for the loopback address are removed however they are spaced.
+
+* When an app is too busy to complete a WebSocket handshake within the 5 seconds that the `websocket` package allows, as while another visitor's long calculation runs, the proxy tries again for up to 2 minutes, with the browser's messages queued. The browser's session was closed, and its page greyed out.
 
 * Proxied responses are passed to the browser as the app's bytes. The proxy previously scanned responses with other content types, such as CSV, JSON, and ZIP downloads, for zero bytes and converted text to a string, briefly using about 11 times the response size in memory; text responses over 2 GB failed.
 
@@ -158,6 +180,12 @@
 
 * Restarting an app refreshes the dashboard's status tiles and connection list at once. They previously kept their old values, such as the number of running apps, for up to 5 seconds.
 
+* The dashboard updates its app cards and connection list in place when it refreshes, instead of rebuilding them every 5 seconds, so the keyboard focus stays on a Restart button, a click that spans a refresh still lands, and selected text, such as a client's IP address, stays selected.
+
+* The page shown while an app starts stops reloading after two minutes in every case. A reload continued the same wait only if it came soon enough after the page before it, judged by this page's own retry time, so a page that waited out a long `restart_delay`, a slow answer, or a browser that delays the timers of background tabs began the two minutes again, and a tab left open restarted a failing app forever.
+
+* An open landing page reloads itself when a configuration reload changes `base_path`. Its status requests went to an address that no longer exists, and it showed every app as "server down".
+
 * The R version and operating system are now shown on the management dashboard instead of the public landing page, and are read once instead of on every page load.
 
 * The pages' style sheet and script are sent with `Cache-Control` and `ETag` headers, so browsers reuse them instead of fetching them again for every page, including each reload of the page shown while an app starts.
@@ -175,6 +203,12 @@
 * `base_path` values ending in `//`, such as `"/shiny//"`, are rejected. They were accepted with a trailing slash, which made requests under the prefix return HTTP 404.
 
 * `start_tss()` reports a `config` argument that is not a single file path, instead of failing with an unrelated error.
+
+* `restart_delay`, `health_check_interval`, and `appstart_timeout` may be at most 86400 seconds (one day). A value of about 1e12 or more, such as a large `restart_delay` meant as "never", was accepted, and then made the server stop answering requests.
+
+* A configuration file that gives a field twice, at the top level or in one app, is rejected. The first copy was used without notice, where most JSON readers use the last, and the other copy was not validated.
+
+* A configuration reload checks that the server log can be written in `log_dir` even when `log_dir` has not changed, and stops no app if it cannot. Such a reload stopped every app, and resident apps could then not open their log files. When the server log cannot be moved to a changed `log_dir`, a changed `log_level` is now applied anyway, and the reload's outcome says that the previous server log was kept.
 
 ## Logging
 
