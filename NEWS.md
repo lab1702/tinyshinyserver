@@ -330,6 +330,8 @@
 
 * Removed the unused `future` dependency, and `digest` and `openssl`: session IDs only key the server's own connection tables and are never read from a request, so they are now numbered in order instead of hashed from random bits and request details. `tools` and `utils` are now declared imports, as is `glue`, which `logger` needs to format the package's log messages. Added `ps`, already required by `callr`.
 
+* `roxygen2` and `devtools` are no longer suggested packages: no test or example uses them.
+
 * The browser tests in `tests/browser`, which need Node.js and Playwright, are no longer included in the built package.
 
 # tinyshinyserver 0.2.1

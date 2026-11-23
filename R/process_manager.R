@@ -422,14 +422,39 @@ apply_environ_libraries <- function(environ_file) {
   if (identical(before, Sys.getenv(c("R_LIBS", "R_LIBS_USER"), unset = NA, names = TRUE))) {
     return(invisible(FALSE))
   }
+  # The specifiers that R expands in R_LIBS_USER at startup, as ?.libPaths
+  # describes them: "%" and a letter, with "%%" for a "%" itself. Any other
+  # letter is kept as it is written.
+  expand_specifiers <- function(value) {
+    version <- paste(R.version$major, R.version$minor, sep = ".")
+    series <- sub("[.][^.]*$", "", version)
+    known <- c(V = version, v = series, p = R.version$platform, a = R.version$arch, o = R.version$os, "%" = "%")
+    # Since R 4.2.0, "%U" and "%S" are R's default user and site libraries
+    if (getRversion() >= "4.2.0") {
+      machine <- Sys.info()[["machine"]]
+      user <- if (.Platform$OS.type == "windows") {
+        file.path(Sys.getenv("LOCALAPPDATA"), "R",
+          if (identical(machine, "x86-64")) "win-library" else paste0(machine, "-library"), series)
+      } else if (identical(Sys.info()[["sysname"]], "Darwin")) {
+        file.path(path.expand("~"), "Library", "R", machine, series, "library")
+      } else {
+        file.path(path.expand("~"), "R", paste0(R.version$platform, "-library"), series)
+      }
+      known <- c(known, U = user, S = file.path(R.home(), "site-library"))
+    }
+    found <- gregexpr("%.", value)
+    written <- regmatches(value, found)[[1]]
+    letter <- substring(written, 2)
+    expanded <- ifelse(letter %in% names(known), known[letter], written)
+    paste0(regmatches(value, found, invert = TRUE)[[1]], c(expanded, ""), collapse = "")
+  }
   paths <- function(name) {
     value <- Sys.getenv(name)
     if (!nzchar(value)) {
       return(character())
     }
-    # R expands "%v" and the like in R_LIBS_USER
-    if (name == "R_LIBS_USER" && exists(".expand_R_libs_env_var", envir = baseenv())) {
-      value <- get(".expand_R_libs_env_var", envir = baseenv())(value)
+    if (name == "R_LIBS_USER") {
+      value <- expand_specifiers(value)
     }
     strsplit(value, .Platform$path.sep, fixed = TRUE)[[1]]
   }

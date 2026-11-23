@@ -25,52 +25,15 @@ listener was closed a moment later too. It now only connects to the port.
 
 ## Changes in this release
 
-This release hardens the proxy and management server for local and
-reverse-proxy deployments, adds configuration options, and fixes app
-lifecycle, proxy, and logging problems. NEWS.md lists every change. Those
-that can affect existing users are:
+Besides that fix, this release hardens the proxy and management server for
+local and reverse-proxy deployments, adds configuration options, and fixes
+app lifecycle, proxy, and logging problems. NEWS.md lists every change,
+starting with the breaking ones.
 
-* The management server, and the proxy when bound to a loopback address,
-  reject requests whose `Host` header is not a loopback name (DNS-rebinding
-  protection). Reverse proxies on the same machine must now forward the
-  upstream address as the host; README.md documents the requirements.
-* The proxy rejects request bodies larger than the new `max_request_size_mb`
-  option (default 100 MB), and chunked request bodies, with HTTP 413 before
-  reading them, instead of buffering them in memory.
-* The proxy no longer forwards app responses larger than the new
-  `max_response_size_mb` option (default 1024 MB). It ends the transfer and
-  answers HTTP 502, instead of writing a response of any size to disk.
-* No more than 64 requests with a body, such as uploads, are received or
-  awaited at a time. Further ones are answered with HTTP 503 and a
-  `Retry-After` header before their bodies are read, so that unfinished
-  uploads cannot take all of the R session's connections.
-* App processes start in their app directory and read the `.Renviron` and
-  `.Rprofile` there, as R does when the app is run on its own, instead of
-  those of the directory that `start_tss()` was called from. The site
-  profile also runs in apps, and an app's own `.Renviron` that sets
-  `R_LIBS` or `R_LIBS_USER` sets its library paths.
-* The public `/api/apps` endpoint no longer exposes app paths, ports, or
-  process IDs.
-* On-demand apps stop 30 seconds after their last WebSocket closes instead
-  of immediately, so reloading a page no longer cold-starts the app.
-* A WebSocket session is closed once its app has sent it more than the new
-  `max_unanswered_mb` option (default 256 MB) without a message from the
-  browser, so a client that stops reading cannot make the server hold the
-  app's output in memory without end. A dashboard left open without
-  interaction that receives more needs a larger value, or 0 for no limit.
-* Configuration files that give a field twice, or a `restart_delay`,
-  `health_check_interval`, or `appstart_timeout` above one day, are
-  rejected. A timer of about 1e12 seconds stopped the server from answering.
-* An R Markdown or Quarto app serves only its entry document: requests for
-  its directory's other `.Rmd` and `.qmd` documents and R scripts receive
-  HTTP 404, and its WebSocket connections for any other file are closed.
-* If an unexpected error stops the server, `start_tss()` signals an error
-  once the server and apps have stopped, instead of returning normally.
-* The package now requires R >= 4.1.0, as its `promises` and `quarto`
-  dependencies already do, and newer minimum versions of `httpuv` (1.5.5),
-  `later` (1.4.0), `curl` (3.3), `websocket` (1.1.0), `ps` (1.7.0), `callr`
-  (3.7.0), `jsonlite` (1.6), and `logger` (0.2.0) for functions it now uses.
-  It no longer imports `future`, `digest`, or `openssl`.
+The package now requires R >= 4.1.0, as its `promises` and `quarto`
+dependencies already do, and newer minimum versions of some imported
+packages for functions it now uses. It no longer imports `future`, `digest`,
+or `openssl`, and no longer suggests `roxygen2` or `devtools`.
 
 ## Test environments
 

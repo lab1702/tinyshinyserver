@@ -2053,6 +2053,9 @@ test_that("an app starts without the renv project of the server's session", {
 })
 
 test_that("an app's process calls the .First() that its profile defines", {
+  # The app's function runs in this session, where its profile defines
+  # .First() in the global environment, which a check on CRAN must not change
+  skip_on_cran()
   app_dir <- make_test_app_dir()
   on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
   saved <- Sys.getenv("R_ENVIRON_USER", unset = NA)
@@ -3125,6 +3128,47 @@ test_that("a line that R cannot read in an app's environment file leaves its lib
     expect_false(apply_environ_libraries(environ), info = line)
     expect_identical(.libPaths(), old_paths, info = line)
     expect_true(is.na(Sys.getenv("TSS_TEST_OTHER", unset = NA)), info = line)
+  }
+})
+
+test_that("an app's environment file may write R_LIBS_USER with the specifiers that R expands", {
+  root <- tempfile("tss-specifier-lib")
+  environ <- tempfile("tss-environ")
+  local_data <- tempfile("tss-local-data")
+  # As ?.libPaths describes them
+  version <- paste(R.version$major, R.version$minor, sep = ".")
+  series <- sub("[.][^.]*$", "", version)
+  # "%%" is a "%", and a letter that names nothing is kept as written
+  lib <- file.path(root, series, version, R.version$platform, R.version$arch, R.version$os, "100%", "%x")
+  dir.create(lib, recursive = TRUE)
+  on.exit(unlink(c(root, environ, local_data), recursive = TRUE), add = TRUE)
+  old_paths <- .libPaths()
+  old_env <- Sys.getenv(c("R_LIBS", "R_LIBS_USER", "LOCALAPPDATA"), unset = NA)
+  on.exit({
+    .libPaths(old_paths)
+    for (name in names(old_env)) {
+      if (is.na(old_env[[name]])) Sys.unsetenv(name) else do.call(Sys.setenv, structure(list(old_env[[name]]), names = name))
+    }
+  }, add = TRUE)
+  applied_paths <- function(value) {
+    writeLines(paste0("R_LIBS_USER=", value), environ)
+    applied <- apply_environ_libraries(environ)
+    paths <- .libPaths()
+    .libPaths(old_paths)
+    expect_true(applied, info = value)
+    normalizePath(paths, winslash = "/")
+  }
+
+  paths <- applied_paths(paste0(normalizePath(root, winslash = "/"), "/%v/%V/%p/%a/%o/100%%/%x"))
+  expect_true(normalizePath(lib, winslash = "/") %in% paths)
+
+  # "%U" is R's default user library, which on Windows is under LOCALAPPDATA
+  if (.Platform$OS.type == "windows" && identical(Sys.info()[["machine"]], "x86-64") &&
+    getRversion() >= "4.2.0") {
+    default_lib <- file.path(local_data, "R", "win-library", series)
+    dir.create(default_lib, recursive = TRUE)
+    Sys.setenv(LOCALAPPDATA = normalizePath(local_data, winslash = "/"))
+    expect_true(normalizePath(default_lib, winslash = "/") %in% applied_paths("%U"))
   }
 })
 
