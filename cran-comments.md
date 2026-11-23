@@ -44,6 +44,11 @@ that can affect existing users are:
   process IDs.
 * On-demand apps stop 30 seconds after their last WebSocket closes instead
   of immediately, so reloading a page no longer cold-starts the app.
+* A WebSocket session is closed once its app has sent it more than the new
+  `max_unanswered_mb` option (default 256 MB) without a message from the
+  browser, so a client that stops reading cannot make the server hold the
+  app's output in memory without end. A dashboard left open without
+  interaction that receives more needs a larger value, or 0 for no limit.
 * Configuration files that give a field twice, or a `restart_delay`,
   `health_check_interval`, or `appstart_timeout` above one day, are
   rejected. A timer of about 1e12 seconds stopped the server from answering.
@@ -54,19 +59,19 @@ that can affect existing users are:
   once the server and apps have stopped, instead of returning normally.
 * The package now requires R >= 4.1.0, as its `promises` and `quarto`
   dependencies already do, and newer minimum versions of `httpuv` (1.5.5),
-  `later` (1.4.0), `curl` (3.3), `websocket` (1.1.0), and `ps` (1.2.0) for
-  functions it now uses. It no longer imports `future`, `digest`, or
-  `openssl`.
+  `later` (1.4.0), `curl` (3.3), `websocket` (1.1.0), `ps` (1.7.0), `callr`
+  (3.2.0), and `logger` (0.2.0) for functions it now uses. It no longer
+  imports `future`, `digest`, or `openssl`.
 
 ## Test environments
 
 * Local: Windows 11 x64 (build 26300), x86_64-w64-mingw32,
   R 4.6.2 (2026-10-29 ucrt).
   Checked with `R CMD check --as-cran` on the source tarball built from
-  commit b75c642, including the PDF manual and the CRAN incoming
+  commit e783027, including the PDF manual and the CRAN incoming
   feasibility check.
-* R-hub (commit b75c642, run
-  https://github.com/lab1702/tinyshinyserver/actions/runs/45105322056):
+* R-hub (commit e783027, run
+  https://github.com/lab1702/tinyshinyserver/actions/runs/45113625859):
   linux (R-devel), windows (R-devel), macos-arm64 (R-devel), gcc16, and
   ubuntu-gcc12.
 
@@ -77,16 +82,16 @@ from the build, so the package checked is identical.
 
 Local: 0 errors | 0 warnings | 0 notes.
 
-R-hub at commit b75c642: 0 errors | 0 warnings | 0 notes on all five platforms.
+R-hub at commit e783027: 0 errors | 0 warnings | 0 notes on all five platforms.
 
-Test results: 2659 passes locally and on R-hub's windows (R-devel), with 11
+Test results: 2890 passes locally and on R-hub's windows (R-devel), with 11
 intentional skips on CRAN (a timing check of the port test, and ten tests
 that run R processes, such as apps that load shiny or a render with the
 Quarto CLI, and check their output, memory use, library paths, or cleanup).
 The other four R-hub platforms have one more skip: a test of keeping an
 app's log when it is held open runs only on Windows, the one platform that
-refuses to rename an open file. They have 2660 passes on the three Linux
-platforms and 2658 on macos-arm64 (R-devel): a test of a document name in
+refuses to rename an open file. They have 2891 passes on the three Linux
+platforms and 2889 on macos-arm64 (R-devel): a test of a document name in
 another letter case makes two more checks on a file system that tells
 letter case apart, which macOS's default file system, like Windows', does
 not. All runs had 0 failures and 0 warnings. One test's expectation count
