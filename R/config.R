@@ -86,6 +86,9 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     app_startup_state = "environment", # Track app startup progress (starting/ready)
     verified_backends = "environment", # Process generations confirmed to own their app port
     start_problems = "environment", # Recent app_start_problem() results, by app name
+    # When, in seconds of proc.time()'s elapsed clock, each app's start
+    # problem was last logged for a request; see note_start_problem()
+    start_problems_logged = "environment",
     # When each app's process last exited without being stopped, until the app
     # next listens on its port. An on-demand app is started again only once
     # restart_delay has passed, as a resident app is.
@@ -95,6 +98,8 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     app_documents = "environment",
     shutdown_requested = "logical", # Set by the management API; read by the event loop
     reload_requested = "logical", # Set by the management API; read by the event loop
+    # Set when a callback that catches interrupts received one; read by the event loop
+    interrupt_requested = "logical",
     last_reload = "list", # Outcome of the latest reload; empty while one is pending
     started_at = "ANY", # When the server was created, for the reported uptime
 
@@ -121,7 +126,10 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     ON_DEMAND_START_LIMIT_SECONDS = "numeric",
     # Longest time a finding of whether an app directory can be served is
     # reused, for changes that leave the directory's modification time alone
-    START_PROBLEM_MAX_AGE_SECONDS = "numeric"
+    START_PROBLEM_MAX_AGE_SECONDS = "numeric",
+    # How often the reason that an on-demand app cannot start is logged at
+    # WARN for the requests that ask for it
+    START_PROBLEM_LOG_SECONDS = "numeric"
   ),
   methods = list(
     initialize = function() {
@@ -138,6 +146,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       WS_BACKEND_CONNECT_SECONDS <<- 120
       ON_DEMAND_START_LIMIT_SECONDS <<- 600
       START_PROBLEM_MAX_AGE_SECONDS <<- 30
+      START_PROBLEM_LOG_SECONDS <<- 60
 
       # Initialize runtime state
       app_processes <<- list()
@@ -152,10 +161,12 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       app_startup_state <<- new.env(hash = TRUE, parent = emptyenv())
       verified_backends <<- new.env(hash = TRUE, parent = emptyenv())
       start_problems <<- new.env(hash = TRUE, parent = emptyenv())
+      start_problems_logged <<- new.env(hash = TRUE, parent = emptyenv())
       start_failures <<- new.env(hash = TRUE, parent = emptyenv())
       app_documents <<- new.env(hash = TRUE, parent = emptyenv())
       shutdown_requested <<- FALSE
       reload_requested <<- FALSE
+      interrupt_requested <<- FALSE
       last_reload <<- list()
       started_at <<- Sys.time()
 
@@ -288,6 +299,21 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         return(list(valid = FALSE, error = log_dir_error))
       }
 
+      # Ports are assigned once the apps have stopped. Look for them now, with
+      # the running apps' ports taken to be free, so that apps that cannot
+      # all be given a port, because other programs hold the ports after
+      # starting_port, are reported before any app is stopped.
+      port_error <- tryCatch(
+        {
+          find_app_ports(new_config, free_ports = running_app_ports())
+          NULL
+        },
+        error = function(e) conditionMessage(e)
+      )
+      if (!is.null(port_error)) {
+        return(list(valid = FALSE, error = port_error))
+      }
+
       list(valid = TRUE, config = new_config)
     },
     reset_app_state = function(keep = character()) {
@@ -377,6 +403,21 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         path = path, modified = modified, read_at = read_at, problem = problem
       ), envir = start_problems)
       problem
+    },
+    note_start_problem = function(app_name, problem) {
+      "Log why an on-demand app that a request asked for cannot start: at WARN once every START_PROBLEM_LOG_SECONDS for each app, otherwise at DEBUG"
+
+      # A page, in any visitor's browser and on any website, can ask for such
+      # an app in a loop, which would otherwise fill the server log
+      now <- proc.time()[["elapsed"]]
+      logged_at <- start_problems_logged[[app_name]]
+      if (!is.null(logged_at) && now >= logged_at && now - logged_at < START_PROBLEM_LOG_SECONDS) {
+        logger::log_debug("On-demand app {app_name} cannot start: {problem}", app_name = app_name, problem = problem)
+        return(invisible(FALSE))
+      }
+      assign(app_name, now, envir = start_problems_logged)
+      logger::log_warn("On-demand app {app_name} cannot start: {problem}", app_name = app_name, problem = problem)
+      invisible(TRUE)
     },
     validate_config = function(config) {
       "Validate configuration structure and values"
@@ -526,6 +567,9 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         # Validate path
         if (!is.character(app$path) || length(app$path) != 1) {
           return(list(valid = FALSE, error = paste("App", i, "path must be a string")))
+        }
+        if (is.na(app$path) || !nzchar(trimws(app$path))) {
+          return(list(valid = FALSE, error = paste("App", i, "path must not be empty")))
         }
       }
 
@@ -744,73 +788,23 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     assign_app_ports = function() {
       "Auto-assign ports to apps starting from starting_port"
 
-      starting_port <- config$starting_port
-      # Create a set of reserved ports for O(1) lookup
-      reserved_ports <- c(config$proxy_port, config$management_port)
-      reserved_set <- new.env(hash = TRUE, parent = emptyenv())
-      for (port in reserved_ports) {
-        if (!is.null(port)) {
-          assign(as.character(port), TRUE, envir = reserved_set)
-        }
-      }
-
-      current_port <- starting_port
-      max_attempts <- 1000 # Prevent infinite loops when many ports are in use
-
+      ports <- find_app_ports(config)
       for (i in seq_along(config$apps)) {
-        attempts <- 0
-        port_found <- FALSE
-
-        # Find next available port
-        while (!port_found && attempts < max_attempts) {
-          # Skip reserved ports efficiently
-          if (exists(as.character(current_port), envir = reserved_set)) {
-            current_port <- current_port + 1
-            attempts <- attempts + 1
-            next
-          }
-
-          # Check if port is actually available (not in use by other processes)
-          if (!is_port_in_use("127.0.0.1", current_port)) {
-            # Port is free, we can use it
-            port_found <- TRUE
-          } else {
-            # Port is in use, try next one
-            logger::log_debug("Port {port} is in use by another process, trying next port",
-              port = current_port
-            )
-            current_port <- current_port + 1
-            attempts <- attempts + 1
-          }
-
-          # Safety check to prevent infinite loop
-          if (current_port > 65535) {
-            stop(sprintf(
-              "Port assignment failed: exceeded maximum port 65535 while assigning port for app '%s'",
-              config$apps[[i]]$name
-            ))
-          }
-        }
-
-        if (!port_found) {
-          stop(sprintf(
-            "Port assignment failed: could not find available port for app '%s' after %d attempts",
-            config$apps[[i]]$name, max_attempts
-          ))
-        }
-
-        # Assign port to app
-        config$apps[[i]]$port <<- current_port
+        config$apps[[i]]$port <<- ports[[i]]
         logger::log_debug("Assigned port {port} to app '{app_name}'",
-          port = current_port, app_name = config$apps[[i]]$name
+          port = ports[[i]], app_name = config$apps[[i]]$name
         )
-
-        # Move to next port for next app
-        current_port <- current_port + 1
       }
 
       # Validate no port conflicts
       validate_port_assignments()
+    },
+    running_app_ports = function() {
+      "The ports of the apps whose processes are running, which they free when they stop"
+      ports <- vapply(names(get_all_app_processes()), function(app_name) {
+        as.numeric(get_app_config(app_name)$port %||% NA)
+      }, numeric(1))
+      ports[!is.na(ports)]
     },
     validate_port_assignments = function() {
       "Validate that all assigned ports are unique and don't conflict"
@@ -945,6 +939,56 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     }
   )
 )
+
+# The port of each app in settings, counted up from starting_port past the
+# proxy and management ports and past ports that another program holds. The
+# ports in free_ports are taken to be free, as those of apps that are about to
+# stop. Stops with an error when the apps' ports cannot all be found.
+find_app_ports <- function(settings, free_ports = numeric()) {
+  reserved <- c(settings$proxy_port, settings$management_port)
+  current_port <- settings$starting_port
+  max_attempts <- 1000 # Prevent infinite loops when many ports are in use
+  ports <- numeric(length(settings$apps))
+
+  for (i in seq_along(settings$apps)) {
+    attempts <- 0
+    port_found <- FALSE
+
+    while (!port_found && attempts < max_attempts) {
+      if (current_port %in% reserved) {
+        current_port <- current_port + 1
+        attempts <- attempts + 1
+      } else if (current_port %in% free_ports || !is_port_in_use("127.0.0.1", current_port)) {
+        port_found <- TRUE
+      } else {
+        logger::log_debug("Port {port} is in use by another process, trying next port",
+          port = current_port
+        )
+        current_port <- current_port + 1
+        attempts <- attempts + 1
+      }
+
+      if (current_port > 65535) {
+        stop(sprintf(
+          "Port assignment failed: exceeded maximum port 65535 while assigning port for app '%s'",
+          settings$apps[[i]]$name
+        ))
+      }
+    }
+
+    if (!port_found) {
+      stop(sprintf(
+        "Port assignment failed: could not find available port for app '%s' after %d attempts",
+        settings$apps[[i]]$name, max_attempts
+      ))
+    }
+
+    ports[[i]] <- current_port
+    current_port <- current_port + 1
+  }
+
+  ports
+}
 
 # Create global configuration instance
 # This will be used by other modules

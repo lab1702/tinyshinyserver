@@ -36,6 +36,20 @@ response_body_bytes <- function(body) {
 # server log with warnings.
 REJECTED_HANDSHAKE_LOG_SECONDS <- 10
 
+# A callback for a socket of the websocket package, which runs each callback
+# inside a tryCatch() that catches an interrupt and only prints a message. A
+# Ctrl-C that R notices while the callback runs, as it may while an app
+# streams messages, would then leave the server running. The interrupt is
+# noted, and the event loop shuts the server down as for any other Ctrl-C.
+note_interrupts <- function(config, callback) {
+  force(callback)
+  function(...) {
+    withCallingHandlers(callback(...), interrupt = function(e) {
+      config$interrupt_requested <- TRUE
+    })
+  }
+}
+
 # Connection Manager Class
 ConnectionManager <- setRefClass("ConnectionManager",
   fields = list(
@@ -149,7 +163,7 @@ ConnectionManager <- setRefClass("ConnectionManager",
       ))
 
       # Handle messages from backend to client
-      backend_ws$onMessage(function(event) {
+      backend_ws$onMessage(note_interrupts(config, function(event) {
         logger::log_debug("Backend->Client message for {app_name}: {data}",
           app_name = app_name, data = describe_ws_message(event$data)
         )
@@ -179,10 +193,10 @@ ConnectionManager <- setRefClass("ConnectionManager",
         # Traffic from the app alone keeps a session from counting as idle
         config$touch_session(session_id)
         client_ws$send(event$data)
-      })
+      }))
 
       # Handle backend connection events
-      backend_ws$onOpen(function(event) {
+      backend_ws$onOpen(note_interrupts(config, function(event) {
         logger::log_info("Backend connection opened for {app_name}", app_name = app_name)
 
         # Mark connection as ready. A socket that the session no longer uses,
@@ -221,17 +235,17 @@ ConnectionManager <- setRefClass("ConnectionManager",
             }
           }
         }
-      })
+      }))
 
-      backend_ws$onClose(function(event) {
+      backend_ws$onClose(note_interrupts(config, function(event) {
         logger::log_info("Backend connection closed for app {app_name}", app_name = app_name)
         conn <- config$get_backend_connection(session_id)
         if (is.null(conn) || !identical(conn$ws, backend_ws)) return()
         config$remove_backend_connection(session_id)
         close_client_connection(session_id)
-      })
+      }))
 
-      backend_ws$onError(function(event) {
+      backend_ws$onError(note_interrupts(config, function(event) {
         logger::log_error("Backend connection error for app {app_name}: {error}",
           app_name = app_name, error = event$message
         )
@@ -274,7 +288,7 @@ ConnectionManager <- setRefClass("ConnectionManager",
           return()
         }
         close_client_connection(session_id)
-      })
+      }))
 
       return(backend_ws)
     },

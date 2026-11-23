@@ -118,10 +118,69 @@ test_that("the event loop stops when the management API requests shutdown", {
     is_port_in_use = function(...) FALSE)
   server <- TinyShinyServer$new()
   handle_server_shutdown(config)
-  local_mocked_bindings(service = function(...) stop("Loop must stop before servicing"), .package = "httpuv")
-  # The loop ends with an error if it reaches httpuv::service()
+  waits <- numeric()
+  local_mocked_bindings(service = function(timeoutMs) {
+    waits <<- c(waits, timeoutMs)
+    Sys.sleep(timeoutMs / 1000)
+  }, .package = "httpuv")
+  # The loop serves on briefly, so that httpuv can finish sending the answer
+  # to the shutdown request, and then stops
+  started <- Sys.time()
   expect_no_error(server$run_event_loop())
+  expect_gte(as.numeric(difftime(Sys.time(), started, units = "secs")), SHUTDOWN_RESPONSE_SECONDS - 0.05)
+  expect_gt(length(waits), 0)
+  expect_true(all(waits == 50))
   expect_true(server$is_shutting_down)
+})
+
+test_that("the event loop stops for an interrupt that a WebSocket callback caught", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(log_dir = tempdir())
+  local_mocked_bindings(create_server_config = function(...) config, setup_logging = function(...) NULL,
+    is_port_in_use = function(...) FALSE)
+  server <- TinyShinyServer$new()
+  stops <- 0
+  server$field("process_manager", list(stop_all_apps = function() stops <<- stops + 1))
+
+  # The websocket package catches the interrupt; the callback notes it
+  interrupt <- structure(class = c("interrupt", "condition"), list(message = "", call = NULL))
+  callback <- note_interrupts(config, function(event) signalCondition(interrupt))
+  caught <- tryCatch(callback(list()), interrupt = function(e) "caught by the websocket package")
+  expect_equal(caught, "caught by the websocket package")
+  expect_true(config$interrupt_requested)
+
+  local_mocked_bindings(service = function(...) stop("Loop must stop before servicing"), .package = "httpuv")
+  expect_no_error(server$run_event_loop())
+  expect_equal(stops, 1)
+  expect_true(server$shutdown_complete)
+})
+
+test_that("requests that reach a shutting-down server start nothing", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  writeLines(jsonlite::toJSON(list(apps = list(list(name = "app", path = unused_app_path())),
+    log_dir = tempdir(), starting_port = 3001), auto_unbox = TRUE), path)
+  local_mocked_bindings(is_port_in_use = function(...) FALSE, setup_logging = function(...) NULL,
+    create_process_manager = function(config) list())
+  server <- TinyShinyServer$new(path)
+  apps <- list()
+  local_mocked_bindings(startServer = function(host, port, app, ...) {
+    apps[[as.character(port)]] <<- app
+    list(port = port)
+  }, .package = "httpuv")
+  server$start_servers()
+  local_mocked_bindings(
+    handle_http_request = function(...) stop("A proxy request was handled"),
+    handle_websocket_connection = function(...) stop("A WebSocket was handled"),
+    handle_management_request = function(...) stop("A management request was handled")
+  )
+  server$is_shutting_down <- TRUE
+
+  expect_equal(apps[["3838"]]$call(list())$status, 503)
+  expect_equal(apps[["3839"]]$call(list())$status, 503)
+  closed <- 0
+  apps[["3838"]]$onWSOpen(list(close = function() closed <<- closed + 1))
+  expect_equal(closed, 1)
 })
 
 test_that("an event-loop error shuts the server down once", {

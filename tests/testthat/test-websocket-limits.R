@@ -25,8 +25,10 @@ mock_app_sockets <- function(env = parent.frame()) {
 }
 
 # A browser's socket as httpuv presents it to handle_websocket_connection().
-# httpuv runs the close handler of a socket that the server closes.
-mock_browser_socket <- function(path = "/proxy/app/websocket/", ...) {
+# httpuv runs the close handler of a socket that the server closes once the
+# browser answers the close, which a client that misbehaves never does:
+# answers_close = FALSE.
+mock_browser_socket <- function(path = "/proxy/app/websocket/", ..., answers_close = TRUE) {
   browser <- new.env()
   browser$request <- list(PATH_INFO = path, HTTP_HOST = "localhost", ...)
   browser$sent <- list()
@@ -36,7 +38,7 @@ mock_browser_socket <- function(path = "/proxy/app/websocket/", ...) {
   browser$send <- function(data) browser$sent[[length(browser$sent) + 1]] <- data
   browser$close <- function() {
     browser$closed <- browser$closed + 1
-    if (is.function(browser$on_close)) browser$on_close()
+    if (answers_close && is.function(browser$on_close)) browser$on_close()
   }
   browser
 }
@@ -185,20 +187,32 @@ test_that("an oversized or invalid browser message is answered with an error and
   config <- test_config()
   sockets <- mock_app_sockets()
   cm <- ConnectionManager$new(config)
-  for (message in list(strrep("x", 1048577), rawToChar(as.raw(c(0x61, 0xff))), as.raw(rep(0, 1048577)))) {
-    browser <- mock_browser_socket()
+  messages <- list(strrep("x", 1048577), rawToChar(as.raw(c(0x61, 0xff))), as.raw(rep(0, 1048577)))
+  # Whether or not the browser answers the close, the session ends at once
+  for (answers_close in c(TRUE, FALSE)) for (message in messages) {
+    browser <- mock_browser_socket(answers_close = answers_close)
     handle_websocket_connection(browser, config, cm)
     expect_length(config$get_all_ws_connections(), 1)
+    expect_equal(config$get_app_connection_count("app"), 1)
     socket <- sockets$all[[length(sockets$all)]]
+    socket$open(list())
     logged <- capture_test_log(browser$message(is.raw(message), message))
     expect_length(browser$sent, 1)
     expect_equal(as.character(browser$sent[[1]]), '{"error":"Invalid message"}')
     expect_equal(browser$closed, 1)
     expect_length(config$get_all_ws_connections(), 0)
     expect_length(config$get_all_backend_connections(), 0)
+    expect_equal(config$get_app_connection_count("app"), 0)
     expect_true(socket$closed)
     expect_length(socket$sent, 0)
     expect_true(any(grepl("Invalid WebSocket message for app app, session", logged, fixed = TRUE)))
+
+    # What a browser that ignored the close sends next reaches no app
+    browser$message(FALSE, "after the close")
+    expect_length(socket$sent, 0)
+    expect_length(browser$sent, 1)
+    expect_equal(browser$closed, 1)
+    if (is.function(browser$on_close)) browser$on_close()
   }
 })
 

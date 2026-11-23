@@ -672,7 +672,7 @@ test_that("startup grace expiry returns 503 without blocking timers", {
 test_that("async transfer failures become 502 responses", {
   config <- proxy_test_config(3001)
   local_mocked_bindings(
-    wait_for_backend = function(url, wait_seconds) promises::promise_resolve(TRUE),
+    wait_for_backend = function(url, wait_seconds, ...) promises::promise_resolve(TRUE),
     fetch_backend_async = function(url, handle, ...) promises::promise_reject(simpleError("transfer failed")),
     process_owns_port = function(process, port) TRUE
   )
@@ -1404,7 +1404,7 @@ test_that("a request whose app restarts while it waits for the app is not forwar
   replacement <- list(is_alive = function() TRUE, get_pid = function() -1L)
   fetched <- FALSE
   local_mocked_bindings(
-    wait_for_backend = function(url, wait_seconds) promises::promise(function(resolve, reject) {
+    wait_for_backend = function(url, wait_seconds, ...) promises::promise(function(resolve, reject) {
       # A restart replaces the app's process while the request waits
       later::later(function() {
         config$add_app_process("app", replacement)
@@ -1421,4 +1421,42 @@ test_that("a request whose app restarts while it waits for the app is not forwar
   expect_match(result$body, "App 'app' restarted, please retry", fixed = TRUE)
   expect_equal(result$headers[["Retry-After"]], "2")
   expect_false(fetched)
+})
+
+test_that("a request that waits for a starting app is answered as soon as the app's process fails", {
+  local_mocked_bindings(fetch_backend_async = function(...) promises::promise_reject(simpleError("Connection refused")))
+  wait <- function(process_found_dead) {
+    config <- proxy_test_config(3001, timeout = 15)
+    config$config$restart_delay <- 60
+    alive <- TRUE
+    config$add_app_process("app", list(is_alive = function() alive, get_pid = function() -1L))
+    config$set_app_starting("app")
+    # The app's process fails at startup, whether or not the readiness check
+    # has found it yet
+    later::later(function() {
+      alive <<- FALSE
+      if (process_found_dead) {
+        config$remove_app_process("app")
+        config$set_app_ready("app")
+        config$note_start_failure("app")
+      }
+    }, 0.3)
+    started <- Sys.time()
+    result <- await_response(forward_request("GET", "http://127.0.0.1:3001/", list(), "app", config), timeout = 10)
+    list(result = result, seconds = as.numeric(difftime(Sys.time(), started, units = "secs")))
+  }
+
+  # The answer names the wait before the app can start again, not
+  # appstart_timeout later
+  found <- wait(process_found_dead = TRUE)
+  expect_lt(found$seconds, 5)
+  expect_equal(found$result$status, 503)
+  expect_match(found$result$body, "restarting after a failure", fixed = TRUE)
+  retry <- as.numeric(found$result$headers[["Retry-After"]])
+  expect_true(retry >= 59 && retry <= 60)
+
+  not_found <- wait(process_found_dead = FALSE)
+  expect_lt(not_found$seconds, 5)
+  expect_equal(not_found$result$status, 503)
+  expect_match(not_found$result$body, "App 'app' stopped, please retry", fixed = TRUE)
 })

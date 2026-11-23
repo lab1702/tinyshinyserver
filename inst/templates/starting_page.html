@@ -45,11 +45,51 @@
         document.getElementById("startHint").textContent = "Reload the page to try again.";
       }
 
-      try {
-        wait = JSON.parse(window.sessionStorage.getItem(key));
-      } catch (e) {
-        wait = null;
+      // The wait is kept across reloads in sessionStorage or, where site data
+      // is blocked, in the tab's window.name, unless something else uses it
+      var namePrefix = "tss-starting ";
+      function ownsName() {
+        return window.name === "" || window.name.indexOf(namePrefix) === 0;
       }
+      function loadWait() {
+        var value = null;
+        try {
+          value = JSON.parse(window.sessionStorage.getItem(key));
+        } catch (e) {
+          value = null;
+        }
+        if (value) return value;
+        try {
+          if (window.name.indexOf(namePrefix) === 0) {
+            var kept = JSON.parse(window.name.slice(namePrefix.length));
+            if (kept && kept.key === key) return kept.wait;
+          }
+        } catch (e) {
+          // Not a wait that this page kept
+        }
+        return null;
+      }
+      function saveWait(value) {
+        try {
+          window.sessionStorage.setItem(key, JSON.stringify(value));
+          return true;
+        } catch (e) {
+          // Site data is blocked; try the tab's name
+        }
+        if (!ownsName()) return false;
+        window.name = namePrefix + JSON.stringify({ key: key, wait: value });
+        return true;
+      }
+      function forgetWait() {
+        try {
+          window.sessionStorage.removeItem(key);
+        } catch (e) {
+          // Nothing was stored there
+        }
+        if (window.name.indexOf(namePrefix) === 0) window.name = "";
+      }
+
+      wait = loadWait();
       // A page that this script reloaded continues the same wait, measured
       // from the moment of the reload: the page before may have waited longer
       // than this one does, as one that reports a restart delay does, and a
@@ -63,27 +103,20 @@
       delete wait.reloadedAt;
 
       if (now - wait.first >= giveUpMs) {
-        try {
-          window.sessionStorage.removeItem(key);
-        } catch (e) {
-          // Nothing was stored
-        }
+        forgetWait();
         stopReloading("This application is still not ready.");
         return;
       }
 
-      try {
-        window.sessionStorage.setItem(key, JSON.stringify(wait));
-      } catch (e) {
-        // Without storage the wait cannot be limited, so do not reload
+      // Without a place to keep it, the wait cannot be limited, so the page
+      // does not reload
+      if (!saveWait(wait)) {
         stopReloading("This application is not ready yet.");
         return;
       }
       window.setTimeout(function () {
         wait.reloadedAt = Date.now();
-        try {
-          window.sessionStorage.setItem(key, JSON.stringify(wait));
-        } catch (e) {
+        if (!saveWait(wait)) {
           stopReloading("This application is not ready yet.");
           return;
         }

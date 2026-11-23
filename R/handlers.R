@@ -248,18 +248,26 @@ is_document_name <- function(path, file) {
 # The document that an app's latest process served, or that it would serve if
 # it started now, for an app that has not run
 served_document <- function(app_config, config) {
-  config$get_app_document(app_config$name) %||%
-    tryCatch(detect_app_type(normalizePath(app_config$path, mustWork = FALSE)), error = function(e) NULL)
+  recorded <- config$get_app_document(app_config$name)
+  if (!is.null(recorded)) {
+    return(recorded)
+  }
+  # A directory known not to hold an app is not read again at every request
+  if (is.character(app_config$path) && !is.null(config$cached_start_problem(app_config))) {
+    return(NULL)
+  }
+  tryCatch(detect_app_type(normalizePath(app_config$path, mustWork = FALSE)), error = function(e) NULL)
 }
 
 # Start an on-demand app that a request or WebSocket has arrived for, unless it
-# is already running. FALSE when the app could not be started.
+# is already running. FALSE when the app could not be started. The process
+# manager logs the start, and why an app cannot start.
 ensure_on_demand_app_started <- function(app_config, config, process_manager, trigger) {
   app_name <- app_config$name
   if (app_config$resident || is.null(process_manager) || is_process_alive(config$get_app_process(app_name))) {
     return(TRUE)
   }
-  logger::log_info("Starting non-resident app {app_name} on demand for {trigger}",
+  logger::log_debug("Starting non-resident app {app_name} on demand for {trigger}",
     app_name = app_name, trigger = trigger
   )
   isTRUE(process_manager$start_app_on_demand(app_name))
@@ -295,11 +303,7 @@ handle_proxy_request <- function(path, method, query_string, req, config, proces
     # An app whose process just failed starts again after restart_delay
     backoff <- ceiling(config$start_backoff_seconds(app_name))
     if (backoff > 0) {
-      return(as_starting_page(
-        create_503_response(sprintf("App '%s' is restarting after a failure, please retry", app_name), backoff),
-        req, method, app_name, template_manager, backoff, app_config$appstart_timeout %||% 2,
-        delay_seconds = backoff
-      ))
+      return(restart_wait_response(app_name, backoff, req, method, template_manager, app_config))
     }
     return(create_error_response("Failed to start app on demand", 502))
   }
@@ -418,6 +422,16 @@ as_starting_page <- function(response, req, method, app_name, template_manager, 
   response
 }
 
+# The answer to a request for an app whose process failed, while the app waits
+# backoff seconds, the rest of restart_delay, before it can start again
+restart_wait_response <- function(app_name, backoff, req, method, template_manager, app_config) {
+  as_starting_page(
+    create_503_response(sprintf("App '%s' is restarting after a failure, please retry", app_name), backoff),
+    req, method, app_name, template_manager, backoff, app_config$appstart_timeout %||% 2,
+    delay_seconds = backoff
+  )
+}
+
 forward_request <- function(method, target_url, req, app_name, config, template_manager = NULL) {
   "Forward HTTP requests without blocking the server's event loop"
 
@@ -481,15 +495,32 @@ forward_request <- function(method, target_url, req, app_name, config, template_
     # app starts, or when its port cannot be verified, probe first so the
     # request is never sent before the app is ready.
     probe <- starting || !config$app_backend_verified(app_name)
+    # The wait ends as soon as the app's process exits or is replaced: a
+    # process that fails at startup never answers, and the request is told so
+    # at once rather than after appstart_timeout
+    process_ended <- function() {
+      !identical(config$get_app_process(app_name), request_process) ||
+        (probe && !is.null(request_process) && !is_process_alive(request_process))
+    }
     backend_ready <- if (probe) {
-      wait_for_backend(target_url, wait_seconds)
+      wait_for_backend(target_url, wait_seconds, stop_waiting = process_ended)
     } else {
       promises::promise_resolve(TRUE)
     }
 
     response <- promises::then(backend_ready, function(ready) {
-      if (!identical(config$get_app_process(app_name), request_process)) {
-        return(unavailable(sprintf("App '%s' restarted, please retry", app_name)))
+      if (process_ended()) {
+        # An app whose process failed starts again after restart_delay
+        backoff <- ceiling(config$start_backoff_seconds(app_name))
+        if (backoff > 0) {
+          return(restart_wait_response(app_name, backoff, req, method, template_manager, app_config))
+        }
+        message <- if (is_process_alive(config$get_app_process(app_name))) {
+          "App '%s' restarted, please retry"
+        } else {
+          "App '%s' stopped, please retry"
+        }
+        return(unavailable(sprintf(message, app_name)))
       }
       if (ready && !config$app_backend_verified(app_name)) {
         logger::log_warn("Not forwarding to app {app_name}: its process does not own port {port}",
@@ -876,7 +907,8 @@ fetch_backend_async <- function(url, handle, max_bytes = Inf) {
 
 # Probe TCP readiness without sending an HTTP request (in particular, never
 # replay a POST while waiting for startup). Both the probe and retry are async.
-wait_for_backend <- function(url, wait_seconds = 0) {
+# The wait ends early, with FALSE, once stop_waiting(), if given, is TRUE.
+wait_for_backend <- function(url, wait_seconds = 0, stop_waiting = NULL) {
   promises::promise(function(resolve, reject) {
     # R has no clock that cannot be set back, so the wait adds up the steps of
     # the clock between probes and counts a step back as none: a clock set
@@ -901,7 +933,7 @@ wait_for_backend <- function(url, wait_seconds = 0) {
         onFulfilled = function(response) resolve(TRUE),
         onRejected = function(error) {
           remaining <- seconds_left()
-          if (remaining > 0) {
+          if (remaining > 0 && !(is.function(stop_waiting) && isTRUE(stop_waiting()))) {
             later::later(probe, min(0.1, remaining))
           } else {
             resolve(FALSE)
@@ -1073,18 +1105,33 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
   connection_manager$add_client_connection(session_id, ws, app_name, client_ip, user_agent)
 
   # Set up message handler
+  # A refused message ends the session at once. httpuv reports the socket
+  # closed only once the browser answers the close, and until then delivers
+  # what the browser sends, so a client that ignores the close would keep the
+  # session and its app socket open.
+  end_session <- function() {
+    if (is.null(config$get_ws_connection(session_id))) {
+      tryCatch(ws$close(), error = function(e) {})
+    } else {
+      connection_manager$close_client_connection(session_id)
+    }
+  }
   ws$onMessage(function(binary, message) {
+    # A session that has ended, here or by the proxy, takes no more messages
+    if (is.null(config$get_ws_connection(session_id))) {
+      return(invisible(NULL))
+    }
     tryCatch(
       {
         success <- connection_manager$handle_client_message(session_id, message, app_name)
         if (!success) {
           tryCatch(ws$send(jsonlite::toJSON(list(error = "Invalid message"), auto_unbox = TRUE)), error = function(e) {})
-          tryCatch(ws$close(), error = function(e) {})
+          end_session()
         }
       },
       error = function(e) {
         logger::log_error("Error handling WebSocket message: {error}", error = e$message)
-        tryCatch(ws$close(), error = function(e) {})
+        tryCatch(end_session(), error = function(e) {})
       }
     )
   })

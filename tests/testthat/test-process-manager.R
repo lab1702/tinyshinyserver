@@ -1131,7 +1131,7 @@ test_that("check_app_ready returns TRUE when port is listening", {
   local_mocked_bindings(
     is_process_alive = function(process) TRUE,
     process_owns_port = function(process, port) TRUE,
-    wait_for_backend = function(url, wait_seconds = 0) promises::promise_resolve(TRUE)
+    wait_for_backend = function(url, wait_seconds = 0, ...) promises::promise_resolve(TRUE)
   )
 
   result <- await_response(pm$check_app_ready("app1", 3001, live_process))
@@ -1156,7 +1156,7 @@ test_that("check_app_ready returns FALSE once the startup window has passed", {
 
   local_mocked_bindings(
     is_process_alive = function(process) TRUE,
-    wait_for_backend = function(url, wait_seconds = 0) promises::promise_resolve(FALSE)
+    wait_for_backend = function(url, wait_seconds = 0, ...) promises::promise_resolve(FALSE)
   )
 
   # The app started longer ago than the startup window
@@ -1176,7 +1176,7 @@ test_that("readiness checks continue for apps with a longer appstart_timeout", {
   config$add_app_process("app1", list())
   local_mocked_bindings(
     is_process_alive = function(process) TRUE,
-    wait_for_backend = function(url, wait_seconds = 0) promises::promise_resolve(FALSE)
+    wait_for_backend = function(url, wait_seconds = 0, ...) promises::promise_resolve(FALSE)
   )
   later::with_loop(later::create_loop(), {
     expect_false(await_response(pm$check_app_ready("app1", 3001, list(), started_at = Sys.time() - 31)))
@@ -1195,7 +1195,7 @@ test_that("readiness checks cover the full startup window for short appstart_tim
   config$add_app_process("app1", list())
   local_mocked_bindings(
     is_process_alive = function(process) TRUE,
-    wait_for_backend = function(url, wait_seconds = 0) promises::promise_resolve(FALSE)
+    wait_for_backend = function(url, wait_seconds = 0, ...) promises::promise_resolve(FALSE)
   )
   window <- config$APP_STARTUP_TIMEOUT_SECONDS
   later::with_loop(later::create_loop(), {
@@ -1216,7 +1216,7 @@ test_that("a clock set back during a startup starts its readiness window again",
   config$add_app_process("app1", list())
   local_mocked_bindings(
     is_process_alive = function(process) TRUE,
-    wait_for_backend = function(url, wait_seconds = 0) promises::promise_resolve(FALSE)
+    wait_for_backend = function(url, wait_seconds = 0, ...) promises::promise_resolve(FALSE)
   )
   # The next check is kept, not run; promises still run their callbacks
   rechecks <- list()
@@ -1248,7 +1248,7 @@ test_that("the readiness window is measured in time, not in probes", {
   config$add_app_process("app1", list())
   local_mocked_bindings(
     is_process_alive = function(process) TRUE,
-    wait_for_backend = function(url, wait_seconds = 0) promises::promise_resolve(FALSE)
+    wait_for_backend = function(url, wait_seconds = 0, ...) promises::promise_resolve(FALSE)
   )
   started_at <- Sys.time() - config$APP_STARTUP_TIMEOUT_SECONDS - 1
   later::with_loop(later::create_loop(), {
@@ -1270,7 +1270,7 @@ test_that("readiness checks keep watching an app that is still starting after th
   local_mocked_bindings(
     is_process_alive = function(process) TRUE,
     process_owns_port = function(process, port) TRUE,
-    wait_for_backend = function(url, wait_seconds = 0) promises::promise_resolve(ready)
+    wait_for_backend = function(url, wait_seconds = 0, ...) promises::promise_resolve(ready)
   )
   after_window <- Sys.time() - config$APP_STARTUP_TIMEOUT_SECONDS - 1
   # Whether another check is scheduled, once the promise callbacks that are
@@ -1725,6 +1725,7 @@ test_that("start_app starts an app process in the app's directory", {
   # callr would read the .Rprofile and .Renviron of the server's working directory
   expect_false(args$user_profile)
   expect_identical(args$env[["R_ENVIRON_USER"]], app_environ_file(normalizePath(app_dir)))
+  expect_identical(args$args$environ_file, app_environ_file(normalizePath(app_dir)))
   expect_true(all(names(callr::rcmd_safe_env()) %in% names(args$env)))
   # The app's process need not load this package to find its profile
   expect_identical(environment(args$args$profile_file), baseenv())
@@ -1826,13 +1827,16 @@ test_that("an app runs the profile that R runs in its directory", {
   expect_identical(startup_profile_file(named = ""), "")
 })
 
-test_that("an app whose environment file sets R_PROFILE_USER runs no other profile", {
+test_that("an app whose environment file sets R_PROFILE_USER runs that profile and no other", {
   app_dir <- make_test_app_dir()
   on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
-  old <- Sys.getenv("R_ENVIRON_USER", unset = NA)
-  on.exit(if (is.na(old)) Sys.unsetenv("R_ENVIRON_USER") else Sys.setenv(R_ENVIRON_USER = old), add = TRUE)
+  saved <- Sys.getenv(c("R_ENVIRON_USER", "R_PROFILE_USER", "TSS_APP_PROFILE_USER"), unset = NA, names = TRUE)
+  on.exit(for (name in names(saved)) {
+    if (is.na(saved[[name]])) Sys.unsetenv(name) else do.call(Sys.setenv, structure(list(saved[[name]]), names = name))
+  }, add = TRUE)
   Sys.unsetenv("R_ENVIRON_USER")
   writeLines("options(tss.test.profile = 'app')", file.path(app_dir, ".Rprofile"))
+  writeLines("options(tss.test.profile = 'named')", file.path(app_dir, "named.Rprofile"))
   config <- ShinyServerConfig$new()
   config$config <- list(apps = list(list(name = "app", path = app_dir, port = 1, resident = TRUE)),
     log_dir = tempdir())
@@ -1841,28 +1845,61 @@ test_that("an app whose environment file sets R_PROFILE_USER runs no other profi
     args <<- list(...)
     list(is_alive = function() TRUE)
   }, .package = "callr")
+  app_environ <- file.path(normalizePath(app_dir), ".Renviron")
   # The arguments that the app's process gets, and the profile that its
-  # function then runs, here in the app's directory
-  start <- function(environ) {
+  # function then runs, here in the app's directory. R would have read the
+  # environment file that the process is given; here only the profile that
+  # it keeps is set.
+  start <- function(environ, kept_profile = NA) {
     writeLines(environ, file.path(app_dir, ".Renviron"))
     ProcessManager$new(config)$start_app(config$config$apps[[1]])
     config$remove_app_process("app")
+    if (is.na(kept_profile)) Sys.unsetenv("TSS_APP_PROFILE_USER") else Sys.setenv(TSS_APP_PROFILE_USER = kept_profile)
     old_dir <- setwd(app_dir)
     on.exit(setwd(old_dir), add = TRUE)
     old_option <- options(tss.test.profile = NULL)
     on.exit(options(old_option), add = TRUE)
     local_mocked_bindings(runApp = function(...) getOption("tss.test.profile", "none"), .package = "shiny")
-    list(chosen = args$args$profile_chosen,
+    process_environ <- args$env[["R_ENVIRON_USER"]]
+    list(chosen = args$args$profile_chosen, read = identical(process_environ, app_environ),
       ran = do.call(args[[1]], utils::modifyList(args$args, list(profile_setting = NA))))
   }
 
-  expect_equal(start("TSS_TEST=1"), list(chosen = FALSE, ran = "app"))
-  # R ran the profile that the file names before the app's function runs
-  expect_equal(start("R_PROFILE_USER=named.Rprofile"), list(chosen = TRUE, ran = "none"))
-  expect_equal(start(" R_PROFILE_USER = "), list(chosen = TRUE, ran = "none"))
-  expect_equal(start("# R_PROFILE_USER=named.Rprofile"), list(chosen = FALSE, ran = "app"))
+  expect_equal(start("TSS_TEST=1"), list(chosen = FALSE, read = TRUE, ran = "app"))
+  expect_equal(start("# R_PROFILE_USER=named.Rprofile"), list(chosen = FALSE, read = TRUE, ran = "app"))
+  # R reads the app's file through one that keeps callr's own profile, and
+  # the app's process runs the profile that the app's file chose
+  expect_equal(start("R_PROFILE_USER=named.Rprofile", "named.Rprofile"), list(chosen = TRUE, read = FALSE, ran = "named"))
+  # Processes that the app starts see the app's own file and profile, and the
+  # file that the process read is gone
+  expect_identical(Sys.getenv("R_PROFILE_USER"), "named.Rprofile")
+  expect_identical(Sys.getenv("R_ENVIRON_USER"), app_environ)
+  expect_false(file.exists(args$env[["R_ENVIRON_USER"]]))
+  expect_true(is.na(Sys.getenv("TSS_APP_PROFILE_USER", unset = NA)))
   expect_identical(environ_assigned_names(nullfile()), character())
   expect_identical(environ_assigned_names(file.path(app_dir, "missing")), character())
+})
+
+test_that("the environment file that keeps callr's profile applies the app's file", {
+  app_environ <- tempfile(fileext = ".Renviron")
+  wrapper <- tempfile(fileext = ".Renviron")
+  on.exit(unlink(c(app_environ, wrapper)), add = TRUE)
+  names <- c("R_PROFILE_USER", "TSS_APP_PROFILE_USER", "TSS_CALLR_PROFILE_USER", "TSS_TEST_APP_VAR")
+  saved <- Sys.getenv(names, unset = NA, names = TRUE)
+  on.exit(for (name in names(saved)) {
+    if (is.na(saved[[name]])) Sys.unsetenv(name) else do.call(Sys.setenv, structure(list(saved[[name]]), names = name))
+  }, add = TRUE)
+  # Without a newline at its end, as an editor may save it
+  cat('TSS_TEST_APP_VAR=from app\nR_PROFILE_USER="C:\\app\\named.Rprofile"', file = app_environ)
+  expect_identical(profile_keeping_environ_file(app_environ, wrapper), wrapper)
+
+  # callr names its own profile before R reads the user environment file
+  callr_profile <- file.path(tempdir(), "callr-upr-test")
+  Sys.setenv(R_PROFILE_USER = callr_profile)
+  readRenviron(wrapper)
+  expect_identical(Sys.getenv("R_PROFILE_USER"), callr_profile)
+  expect_identical(Sys.getenv("TSS_APP_PROFILE_USER"), "C:\\app\\named.Rprofile")
+  expect_identical(Sys.getenv("TSS_TEST_APP_VAR"), "from app")
 })
 
 test_that("an app process reads its own .Rprofile and .Renviron, not the server's", {
@@ -1935,6 +1972,15 @@ test_that("an app process reads its own .Rprofile and .Renviron, not the server'
   writeLines(c("TSS_TEST_ENVIRON=app", "R_PROFILE_USER=named.Rprofile"), file.path(app_dir, ".Renviron"))
   restart()
   expect_equal(read_marker(), c("named", "app"))
+
+  # callr still finishes setting up such an app's process, so an error that
+  # ends the app reaches its error log
+  writeLines("stop('the app failed')", file.path(app_dir, "app.R"))
+  stop_test_app_processes(config)
+  ProcessManager$new(config)$start_app(config$config$apps[[1]])
+  config$get_app_process("app")$wait(30000)
+  expect_match(paste(readLines(file.path(server_dir, "logs", "app_error.log")), collapse = "\n"),
+    "the app failed", fixed = TRUE)
 })
 
 test_that("app output from child processes reaches the log without blocking", {
@@ -2536,8 +2582,10 @@ test_that("what a Quarto render writes beside its page is not a source", {
   state_file <- tempfile(fileext = ".rds")
   on.exit(unlink(state_file), add = TRUE)
   record_quarto_render(qmd, state_file)
-  # The data of "context: data" chunks and the knitr cache, written by each render
-  for (name in c("doc_data/chunk.RData", "doc_cache/html/x.rdb", "doc_files/libs/a.js")) {
+  # The data of "context: data" chunks and the knitr cache, written by each
+  # render, and the intermediate files that a render stopped part-way leaves
+  for (name in c("doc_data/chunk.RData", "doc_cache/html/x.rdb", "doc_files/libs/a.js",
+    "doc.rmarkdown", "doc.knit.md", "doc.quarto_ipynb")) {
     dir.create(dirname(file.path(app_dir, name)), recursive = TRUE, showWarnings = FALSE)
     writeLines("x", file.path(app_dir, name))
   }
@@ -2587,6 +2635,72 @@ test_that("render_quarto_document records a render that fails as unfinished", {
     "failed with exit status")
   expect_equal(readRDS(state_file)$status, "rendering")
   expect_true(quarto_needs_render(qmd, NULL, state_file))
+})
+
+test_that("files that a Quarto document writes as it renders do not make its page stale", {
+  app_dir <- rendered_quarto_app()
+  runner <- tempfile("tss-render-runner")
+  dir.create(runner)
+  on.exit(unlink(c(app_dir, runner), recursive = TRUE), add = TRUE)
+  qmd <- file.path(app_dir, "doc.qmd")
+  state_file <- tempfile(fileext = ".rds")
+  on.exit(unlink(state_file), add = TRUE)
+  saved <- Sys.getenv(c("QUARTO_PATH", "QUARTO_R", "R_LIBS", "R_ENVIRON_USER"), unset = NA)
+  on.exit(for (name in names(saved)) {
+    if (is.na(saved[[name]])) Sys.unsetenv(name) else do.call(Sys.setenv, structure(list(saved[[name]]), names = name))
+  }, add = TRUE)
+  Sys.setenv(QUARTO_PATH = file.path(R.home("bin"), if (.Platform$OS.type == "windows") "Rscript.exe" else "Rscript"))
+  old_dir <- setwd(runner)
+  on.exit(setwd(old_dir), add = TRUE, after = FALSE)
+  # Rscript stands in for the CLI: "render doc.qmd" runs the script named
+  # "render" in the working directory, which writes the page and, as a
+  # document's code may, a file of its own and an update of a data file
+  render <- function(...) {
+    writeLines(c(
+      sprintf("writeLines('summary', %s)", deparse(file.path(app_dir, "summary.txt"))),
+      sprintf("writeLines('updated', %s)", deparse(file.path(app_dir, "data", "a.csv"))),
+      ...,
+      sprintf("writeLines('<html></html>', %s)", deparse(file.path(app_dir, "doc.html")))
+    ), file.path(runner, "render"))
+    check <- quarto_needs_render(qmd, NULL, state_file)
+    render_quarto_document(qmd, attr(check, "sources"), state_file, "", attr(check, "snapshot"))
+  }
+
+  render()
+  expect_true("summary.txt" %in% readRDS(state_file)$sources$files)
+  expect_false(quarto_needs_render(qmd, NULL, state_file))
+
+  # The document is recorded as it was when the render began, so that an
+  # edit made to it while it rendered is rendered at the next start
+  render(sprintf("writeLines('edited', %s)", deparse(qmd)))
+  expect_true(quarto_needs_render(qmd, NULL, state_file))
+})
+
+test_that("a Quarto page whose resources are missing is rendered again", {
+  app_dir <- rendered_quarto_app()
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  qmd <- file.path(app_dir, "doc.qmd")
+  page <- file.path(app_dir, "doc.html")
+  state_file <- tempfile(fileext = ".rds")
+  on.exit(unlink(state_file), add = TRUE)
+  write_page <- function(lines) {
+    writeLines(c("<html>", lines, "</html>"), page)
+    Sys.setFileTime(page, Sys.time() - 200)
+  }
+  dir.create(file.path(app_dir, "doc_files", "libs"), recursive = TRUE)
+  write_page("<script src=\"doc_files/libs/shiny.js\"></script>")
+  expect_false(quarto_needs_render(qmd))
+  record_quarto_render(qmd, state_file)
+  expect_false(quarto_needs_render(qmd, NULL, state_file))
+
+  # Deployed without its resources, or with them cleaned away
+  unlink(file.path(app_dir, "doc_files"), recursive = TRUE)
+  expect_true(quarto_needs_render(qmd))
+  expect_true(quarto_needs_render(qmd, NULL, state_file))
+
+  # A page that embeds its resources needs no such directory
+  write_page("<script>/* embedded */</script>")
+  expect_false(quarto_needs_render(qmd))
 })
 
 test_that("a Quarto render's R session gets the app's library paths", {

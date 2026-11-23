@@ -7,26 +7,33 @@
   var KEY = "tss-theme";
   var root = document.documentElement;
   var media = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+  // The visitor's choice, kept here as well: storage may be unavailable
+  // (private mode, blocked site data), and the choice then lasts as long as
+  // the page
+  var chosen = null;
+  var storageFailed = false;
 
   function systemTheme() {
     return media && media.matches ? "dark" : "light";
   }
 
   function storedTheme() {
+    if (storageFailed) return chosen;
     try {
       var value = window.localStorage.getItem(KEY);
       return value === "light" || value === "dark" ? value : null;
     } catch (e) {
-      return null;
+      return chosen;
     }
   }
 
   function store(value) {
+    chosen = value;
     try {
       if (value) window.localStorage.setItem(KEY, value);
       else window.localStorage.removeItem(KEY);
     } catch (e) {
-      // Storage may be unavailable (private mode, blocked site data)
+      storageFailed = true;
     }
   }
 

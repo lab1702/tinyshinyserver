@@ -233,7 +233,9 @@ test_that("reload finishes when the new log_dir stops being writable after its c
   expect_equal(test$calls$started, "resident")
   expect_equal(test$server$template_manager$server_title, "Reloaded")
   expect_true(test$server$config$last_reload$success)
-  expect_match(test$server$config$last_reload$message, "kept the previous server log: Cannot write the server log")
+  expect_match(test$server$config$last_reload$message, "kept the previous log_dir: Cannot write the server log")
+  # The app logs and render records stay beside the server log
+  expect_equal(test$server$config$config$log_dir, tempdir())
 })
 
 test_that("a reload with the real process manager stops an app that the file no longer names", {
@@ -320,7 +322,7 @@ test_that("reload leaves apps running when the file is rejected", {
   expect_true(test$server$config$config$apps[[1]]$resident)
 })
 
-test_that("reload restarts the previous configuration when ports cannot be assigned", {
+test_that("reload reports apps that cannot be given ports without stopping any app", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
   write_reload_config(path, list(list(name = "app", path = unused_app_path(), resident = TRUE)))
@@ -332,9 +334,50 @@ test_that("reload restarts the previous configuration when ports cannot be assig
 
   expect_false(result$valid)
   expect_match(result$error, "Port assignment failed")
+  expect_equal(test$calls$stopped, 0)
+  expect_length(test$calls$started, 0)
+  expect_equal(test$server$config$config$apps[[1]]$name, "app")
+  expect_equal(test$server$config$config$apps[[1]]$port, 3001)
+  expect_false(test$server$config$last_reload$success)
+})
+
+test_that("reload restarts the previous configuration when ports are taken while apps stop", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  write_reload_config(path, list(list(name = "app", path = unused_app_path(), resident = TRUE)))
+  test <- reload_test_server(path)
+
+  write_reload_config(path, list(list(name = "new", path = unused_app_path(), resident = TRUE)))
+  # Another program takes the ports after the check, while the apps stop
+  local_mocked_bindings(is_port_in_use = function(...) test$calls$stopped > 0)
+  result <- test$server$reload()
+
+  expect_false(result$valid)
+  expect_match(result$error, "Port assignment failed")
+  expect_equal(test$calls$stopped, 1)
   expect_equal(test$server$config$config$apps[[1]]$name, "app")
   expect_equal(test$server$config$config$apps[[1]]$port, 3001)
   expect_equal(test$calls$started, "app")
+})
+
+test_that("read_reload_config counts the ports of running apps as free", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  write_reload_config(path, list(list(name = "app", path = unused_app_path(), resident = TRUE)))
+  local_mocked_bindings(is_port_in_use = function(...) FALSE)
+  config <- create_server_config(path)
+  config$add_app_process("app", list(is_alive = function() TRUE))
+
+  # Port 3001 is held by the running app, which the reload stops first
+  write_reload_config(path, list(list(name = "new", path = unused_app_path(), resident = TRUE)))
+  local_mocked_bindings(is_port_in_use = function(host, port, ...) port == 3001)
+  expect_true(config$read_reload_config()$valid)
+
+  # Without the app, the port is another program's
+  config$remove_app_process("app")
+  check <- config$read_reload_config()
+  expect_true(check$valid)
+  expect_equal(find_app_ports(check$config), 3002)
 })
 
 test_that("reload keeps the previous configuration when an app does not stop", {
@@ -400,7 +443,12 @@ test_that("the event loop runs a requested reload", {
   # ends after many turns, and the test fails rather than hangs
   turns <- 0
   local_mocked_bindings(service = function(...) {
-    turns <<- turns + 1
+    # A turn of the loop, not of its short wait after a shutdown request
+    if (...length() == 0) {
+      turns <<- turns + 1
+    } else {
+      Sys.sleep(0.01)
+    }
     if (turns >= 100) server$config$shutdown_requested <- TRUE
     NULL
   }, .package = "httpuv")

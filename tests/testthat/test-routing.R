@@ -491,7 +491,7 @@ test_that("handle_proxy_request starts non-resident app on demand", {
 
   req <- list()
 
-  local_mocked_bindings(wait_for_backend = function(url, wait_seconds) promises::promise_resolve(FALSE))
+  local_mocked_bindings(wait_for_backend = function(url, wait_seconds, ...) promises::promise_resolve(FALSE))
   result <- await_response(handle_proxy_request("/proxy/myapp/", "GET", NULL, req, config, mock_pm))
 
   # App start should have been called
@@ -603,7 +603,7 @@ test_that("forward_request returns 503 for starting apps", {
   config <- ShinyServerConfig$new()
   config$config <- list(apps = list())
   config$set_app_starting("testapp")
-  local_mocked_bindings(wait_for_backend = function(url, wait_seconds) promises::promise_resolve(FALSE))
+  local_mocked_bindings(wait_for_backend = function(url, wait_seconds, ...) promises::promise_resolve(FALSE))
   result <- await_response(forward_request("GET", "http://127.0.0.1:3001/", list(), "testapp", config))
   expect_equal(result$status, 503)
   expect_match(result$body, "starting up")
@@ -614,7 +614,7 @@ test_that("a browser opening an app that is not ready gets a page that reloads i
   config <- ShinyServerConfig$new()
   config$config <- list(apps = list())
   config$set_app_starting("testapp")
-  local_mocked_bindings(wait_for_backend = function(url, wait_seconds) promises::promise_resolve(FALSE))
+  local_mocked_bindings(wait_for_backend = function(url, wait_seconds, ...) promises::promise_resolve(FALSE))
   tm <- create_template_manager(base_url = "/shiny")
   url <- "http://127.0.0.1:3001/"
   browser <- list(HTTP_ACCEPT = "text/html,application/xhtml+xml,*/*;q=0.8")
@@ -680,7 +680,7 @@ test_that("a startup that timed out is reported to one request while the app doe
   assign("testapp", list(
     state = "starting", started_at = Sys.time() - (config$APP_STARTUP_TIMEOUT_SECONDS + 5)
   ), envir = config$app_startup_state)
-  local_mocked_bindings(wait_for_backend = function(url, wait_seconds) promises::promise_resolve(FALSE))
+  local_mocked_bindings(wait_for_backend = function(url, wait_seconds, ...) promises::promise_resolve(FALSE))
   request <- function() {
     await_response(forward_request("GET", "http://127.0.0.1:3001/", list(), "testapp", config))
   }
@@ -756,7 +756,7 @@ test_that("the proxy's own answers to HEAD keep their headers but send no body",
 test_that("an answer to HEAD that the proxy makes for a starting app has no body", {
   config <- ShinyServerConfig$new()
   config$config <- list(apps = list(list(name = "testapp", path = "/path", port = 3001, resident = TRUE)))
-  local_mocked_bindings(wait_for_backend = function(url, wait_seconds) promises::promise_resolve(FALSE))
+  local_mocked_bindings(wait_for_backend = function(url, wait_seconds, ...) promises::promise_resolve(FALSE))
   req <- list(PATH_INFO = "/proxy/testapp/", REQUEST_METHOD = "HEAD", QUERY_STRING = "", HTTP_HOST = "127.0.0.1:3838")
   result <- await_response(handle_http_request(req, config, NULL, ConnectionManager$new(config)))
   expect_equal(result$status, 503)
@@ -796,7 +796,7 @@ test_that("a connection that answered HEAD can carry the next request", {
 
 test_that("forward_request returns 503 when backend is unavailable", {
   config <- ShinyServerConfig$new()
-  local_mocked_bindings(wait_for_backend = function(url, wait_seconds) promises::promise_resolve(FALSE))
+  local_mocked_bindings(wait_for_backend = function(url, wait_seconds, ...) promises::promise_resolve(FALSE))
   result <- await_response(forward_request("GET", "http://127.0.0.1:3001/", list(), "testapp", config))
   expect_equal(result$status, 503)
   expect_match(result$body, "not ready")
@@ -818,7 +818,7 @@ test_that("route_http_request routes proxy requests correctly", {
 
   # Without a running app, this should return 503.
   local_mocked_bindings(
-    wait_for_backend = function(url, wait_seconds) promises::promise_resolve(FALSE)
+    wait_for_backend = function(url, wait_seconds, ...) promises::promise_resolve(FALSE)
   )
 
   result <- await_response(route_http_request("/proxy/testapp/", "GET", NULL, list(), config, template_manager, connection_manager))
@@ -840,7 +840,7 @@ test_that("forward_request honors each app's startup grace period", {
       envir = config$app_startup_state)
     waits <- numeric()
     with_mocked_bindings(
-      wait_for_backend = function(url, wait_seconds) {
+      wait_for_backend = function(url, wait_seconds, ...) {
         waits <<- c(waits, wait_seconds)
         promises::promise_resolve(TRUE)
       },
@@ -1026,4 +1026,37 @@ test_that("header values that are not UTF-8 are ignored or refused, not errors",
   expect_false(is_same_origin_websocket(httpuv_request(list(origin = "http://h\xe9", host = "h"))))
   expect_true(is_same_origin_websocket(httpuv_request(list(origin = "http://h", host = "h",
     "x-forwarded-proto" = "\xe9"))))
+})
+
+test_that("requests for an on-demand app whose directory cannot be served start nothing and log once", {
+  app_dir <- tempfile("tss-empty-app")
+  dir.create(app_dir)
+  on.exit(unlink(app_dir, recursive = TRUE), add = TRUE)
+  # Read more than 2 seconds after its last change, so that the finding is reused
+  Sys.setFileTime(app_dir, Sys.time() - 60)
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "broken", path = app_dir, port = 3001, resident = FALSE)),
+    log_dir = tempdir())
+  pm <- ProcessManager$new(config)
+  assign("start_app", function(app_config) stop("No process may be started"), envir = pm)
+  detections <- 0
+  detect <- detect_app_type
+  local_mocked_bindings(detect_app_type = function(...) {
+    detections <<- detections + 1
+    detect(...)
+  })
+
+  logged <- capture_test_log(for (i in 1:5) {
+    result <- handle_proxy_request("/proxy/broken/", "GET", NULL, list(), config, pm)
+    expect_equal(result$status, 502)
+  })
+  # The directory is read once, and the reason logged once, as a warning
+  expect_equal(detections, 1)
+  expect_equal(sum(grepl("On-demand app broken cannot start", logged, fixed = TRUE)), 1)
+  expect_false(any(grepl("^ERROR", logged)))
+
+  # Once the interval has passed, the reason is logged again
+  assign("broken", proc.time()[["elapsed"]] - config$START_PROBLEM_LOG_SECONDS, envir = config$start_problems_logged)
+  logged <- capture_test_log(handle_proxy_request("/proxy/broken/", "GET", NULL, list(), config, pm))
+  expect_equal(sum(grepl("On-demand app broken cannot start", logged, fixed = TRUE)), 1)
 })

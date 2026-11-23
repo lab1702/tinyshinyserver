@@ -5,6 +5,10 @@
 # In the package context, all modules under R/ are sourced automatically by R's
 # package loader, so we do not call source("R/...") here.
 
+# How long the server keeps serving after a shutdown is requested through the
+# management API, so that httpuv can finish sending the answer to that request
+SHUTDOWN_RESPONSE_SECONDS <- 0.5
+
 # Main Application Class
 TinyShinyServer <- setRefClass("TinyShinyServer",
   fields = list(
@@ -196,8 +200,24 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
           onHeaders = function(req) {
             reject_large_request_body(req, (config$config$max_request_size_mb %||% 100) * 1024^2)
           },
-          call = function(req) handle_http_request(req, config, template_manager, connection_manager, process_manager),
-          onWSOpen = function(ws) handle_websocket_connection(ws, config, connection_manager, process_manager)
+          # httpuv queues each request's handler on the event loop, and
+          # stopServer() leaves those already queued, which then run after
+          # the shutdown, in the R session's own event loop. They would start
+          # app processes that nothing stops. Requests that arrive while the
+          # server shuts down are refused too.
+          call = function(req) {
+            if (isTRUE(is_shutting_down)) {
+              return(create_error_response("The server is shutting down", 503))
+            }
+            handle_http_request(req, config, template_manager, connection_manager, process_manager)
+          },
+          onWSOpen = function(ws) {
+            if (isTRUE(is_shutting_down)) {
+              tryCatch(ws$close(), error = function(e) NULL)
+              return(invisible(NULL))
+            }
+            handle_websocket_connection(ws, config, connection_manager, process_manager)
+          }
         )
       )
 
@@ -214,19 +234,46 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
         app = list(
           # Management requests carry no body.
           onHeaders = function(req) reject_large_request_body(req, 65536),
-          call = function(req) handle_management_request(req, config, process_manager, template_manager)
+          call = function(req) {
+            if (isTRUE(is_shutting_down)) {
+              return(create_error_response("The server is shutting down", 503))
+            }
+            handle_management_request(req, config, process_manager, template_manager)
+          }
         )
       )
     },
     run_event_loop = function() {
       "Main event loop with proper error handling"
 
+      # When the management API asked for a shutdown, or NULL
+      shutdown_requested_at <- NULL
       outcome <- tryCatch({
         while (TRUE) {
-          # Check for a shutdown requested through the management API
-          if (isTRUE(config$shutdown_requested)) {
-            logger::log_info("Shutdown requested, initiating graceful shutdown")
+          # A Ctrl-C that a WebSocket callback caught; see note_interrupts()
+          if (isTRUE(config$interrupt_requested)) {
+            logger::log_info("Interrupt received, shutting down...")
             break
+          }
+
+          # A shutdown requested through the management API. httpuv sends
+          # the answer to that request on its own thread, and stopServer()
+          # cuts off an answer that it has not finished sending, so the loop
+          # runs on for a moment first, refusing new requests.
+          if (isTRUE(config$shutdown_requested)) {
+            if (is.null(shutdown_requested_at)) {
+              logger::log_info("Shutdown requested, initiating graceful shutdown")
+              is_shutting_down <<- TRUE
+              shutdown_requested_at <- Sys.time()
+            }
+            # A clock set back ends the wait rather than prolonging it
+            waited <- as.numeric(difftime(Sys.time(), shutdown_requested_at, units = "secs"))
+            if (waited < 0 || waited >= SHUTDOWN_RESPONSE_SECONDS) {
+              break
+            }
+            later::run_now()
+            httpuv::service(50)
+            next
           }
 
           # Reload between requests: stopping app processes blocks
@@ -312,8 +359,9 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
       if (!identical(config$config$log_dir, old_config$log_dir) ||
         !identical(config$config$log_level, old_config$log_level)) {
         # The new log_dir was checked before any app stopped. If it has
-        # become unwritable since, keep the previous server log rather than
-        # leave the reload half applied, but use the new log level, and say so.
+        # become unwritable since, keep the previous log_dir, for the app logs
+        # and render records as well as the server log, rather than leave the
+        # reload half applied, but use the new log level, and say so.
         log_problem <- tryCatch(
           {
             setup_logging(config$config$log_dir, config$config$log_level %||% "INFO")
@@ -321,7 +369,10 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
           },
           error = function(e) {
             logger::log_threshold(config$config$log_level %||% "INFO", namespace = "tinyshinyserver")
-            logger::log_warn("Keeping the previous server log: {error}", error = conditionMessage(e))
+            logger::log_warn("Keeping the previous log_dir: {error}", error = conditionMessage(e))
+            kept <- config$config
+            kept$log_dir <- old_config$log_dir
+            config$field("config", kept)
             conditionMessage(e)
           }
         )
@@ -350,7 +401,7 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
           )
         }
         if (!is.null(log_problem)) {
-          message <- paste0(message, "; kept the previous server log: ", log_problem)
+          message <- paste0(message, "; kept the previous log_dir: ", log_problem)
         }
       }
       config$field("last_reload", list(success = result$valid, message = message))

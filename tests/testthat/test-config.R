@@ -163,6 +163,13 @@ test_that("validate_config validates individual app configurations", {
   result <- config$validate_config(c(base_config, list(apps = list(list(name = "app1")))))
   expect_false(result$valid)
   expect_match(result$error, "missing field.*path")
+
+  # App with an empty path
+  for (path in c("", "   ")) {
+    result <- config$validate_config(c(base_config, list(apps = list(list(name = "app1", path = path)))))
+    expect_false(result$valid)
+    expect_match(result$error, "App 1 path must not be empty")
+  }
 })
 
 test_that("validate_config validates app resident field", {
