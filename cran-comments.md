@@ -65,19 +65,20 @@ that can affect existing users are:
   Checked with `R CMD check --as-cran` on the source tarball built from
   commit 1ac432c, including the PDF manual and the CRAN incoming
   feasibility check.
-* R-hub (commit 1ac432c, run
-  https://github.com/lab1702/tinyshinyserver/actions/runs/45101127926):
+* R-hub (commit b75c642, run
+  https://github.com/lab1702/tinyshinyserver/actions/runs/45105322056):
   linux (R-devel), windows (R-devel), macos-arm64 (R-devel), gcc16, and
   ubuntu-gcc12.
 
-The commit recording these results changes only this file, which is excluded
-from the build, so the package checked is identical.
+The commits after 1ac432c, b75c642 among them, change only this file and the
+R-hub workflow in `.github`, both excluded from the build, so the package
+checked locally and on R-hub is identical.
 
 ## R CMD check results
 
 Local: 0 errors | 0 warnings | 0 notes.
 
-R-hub at commit 1ac432c: 0 errors | 0 warnings | 0 notes on all five platforms.
+R-hub at commit b75c642: 0 errors | 0 warnings | 0 notes on all five platforms.
 
 Test results: 2659 passes locally and on R-hub's windows (R-devel), with 11
 intentional skips on CRAN (a timing check of the port test, and ten tests
