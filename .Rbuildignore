@@ -1,9 +1,9 @@
 ^LICENSE\.md$
 ^\.git$
 ^\.gitignore$
-^\.Rcheck$
-^\.\.Rcheck$
+^.*\.Rcheck$
 ^\.claude$
+^CLAUDE\.md$
 ^\.playwright-mcp$
 ^.*\.Rproj$
 ^\.Rproj\.user$

@@ -85,7 +85,7 @@ const { chromium } = require('playwright');
     page.once('dialog', dialog => dialog.accept());
     await page.locator('.reload-btn').click();
     await page.waitForFunction(() => document.getElementById('notice').textContent === 'Reload failed: Could not stop apps: live');
-    await page.waitForFunction(() => !document.querySelector('.reload-btn').disabled);
+    await page.waitForFunction(() => document.querySelector('.reload-btn').getAttribute('aria-disabled') !== 'true');
     connections = {};
     await page.evaluate(() => updateConnections());
     await page.waitForFunction(() => document.getElementById('connectionsContainer').textContent === 'No active connections');
@@ -150,7 +150,7 @@ const { chromium } = require('playwright');
     // A refresh updates the app cards in place, so the keyboard focus stays on a Restart button
     await page.evaluate(() => clearInterval(refreshInterval));
     const liveRestart = page.locator('#appsContainer .app-card').filter({ hasText: 'live' })
-      .getByRole('button', { name: 'Restart', exact: true });
+      .getByRole('button', { name: 'Restart live', exact: true });
     await liveRestart.focus();
     apps.live.uptime_seconds += 5;
     await page.evaluate(() => updateApps());
@@ -164,7 +164,7 @@ const { chromium } = require('playwright');
       path: '/apps/waiting', restart_in_seconds: 42 };
     await page.evaluate(() => updateApps());
     const waiting = page.locator('#appsContainer .app-card').filter({ hasText: 'waiting' });
-    await waiting.getByRole('button', { name: 'Restart', exact: true }).waitFor();
+    await waiting.getByRole('button', { name: 'Restart waiting', exact: true }).waitFor();
     assert.equal(await waiting.locator('.app-info').textContent(), 'Failed; starts again when opened in 42s');
     delete apps.waiting.restart_in_seconds;
     await page.evaluate(() => updateApps());
@@ -180,16 +180,26 @@ const { chromium } = require('playwright');
     const runningTile = () => page.locator('#systemStatus .status-card').filter({ hasText: 'Running apps' })
       .locator('.value').textContent();
     assert.equal(await runningTile(), '1');
+    // Restarting from the keyboard keeps the focus on the button, which is
+    // marked busy rather than disabled while the restart runs
     await page.locator('#appsContainer .app-card').filter({ hasText: 'live' })
-      .getByRole('button', { name: 'Restart', exact: true }).click();
+      .getByRole('button', { name: 'Restart live', exact: true }).focus();
+    await page.keyboard.press('Enter');
     await page.waitForFunction(() => document.getElementById('notice').textContent === 'App live restarted');
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), 'Restart live');
     await page.waitForFunction(() => Array.from(document.querySelectorAll('#systemStatus .status-card'))
       .some(card => card.textContent === 'Running apps0'), null, { timeout: 5000 });
     // A failed restart shows the server's reason, not "undefined"
     await page.locator('#appsContainer .app-card').filter({ hasText: 'dormant' })
-      .getByRole('button', { name: 'Restart', exact: true }).click();
+      .getByRole('button', { name: 'Restart dormant', exact: true }).click();
     await page.waitForFunction(() => document.getElementById('notice').textContent ===
       'Failed to restart dormant: Unexpected error; see server.log for the reason');
+    // An error stays until it is dismissed, which returns the focus to the page heading
+    assert.equal(await page.locator('#noticeBox').getAttribute('class'), 'notice notice-error');
+    await page.getByRole('button', { name: 'Dismiss message' }).click();
+    assert.equal(await page.locator('#noticeBox').getAttribute('class'), 'notice notice-empty');
+    assert.equal(await page.evaluate(() => document.getElementById('notice').textContent), '');
+    assert.equal(await page.evaluate(() => document.activeElement.tagName), 'H1');
     console.log('PASS: hostile headers and app paths render literally; ordinary metadata, empty-state, landing app-set reload, theme toggling, the refresh after a restart, and a failed restart\'s reason work.');
   } finally {
     await browser.close();

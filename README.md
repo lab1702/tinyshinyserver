@@ -123,6 +123,7 @@ Each entry in `apps` has these settings:
 | `max_request_size_mb` | `100` | Largest request body, in megabytes, that the proxy accepts; see [Limits and timeouts](#limits-and-timeouts) |
 | `max_response_size_mb` | `1024` | Largest app response, in megabytes, that the proxy forwards; see [Limits and timeouts](#limits-and-timeouts) |
 | `idle_timeout_minutes` | `30` | Minutes without a WebSocket message, in either direction, after which a session is closed; `0` keeps idle sessions open |
+| `max_unanswered_mb` | `256` | Most data, in megabytes, that an app may send a WebSocket session without a message from the browser in between; `0` sets no limit. See [Limits and timeouts](#limits-and-timeouts) |
 | `log_level` | `"INFO"` | Least severe messages written to `server.log`; see [Log levels](#log-levels) |
 
 ## Writing apps
@@ -157,7 +158,7 @@ If an app's directory is missing, or holds none of these entry points, the app i
 
 An app's R process starts in the app's directory and reads the `.Renviron` and `.Rprofile` there, as R does when you run the app on its own. The app's own environment variables, such as credentials, therefore apply to it, and a profile that activates renv gives it its own project library.
 
-- As at R's startup, `R_ENVIRON_USER` and `R_PROFILE_USER` take precedence: when one is set, the app reads the file it names instead, and when one is set but empty, the app reads no such file. An app directory without one of these files falls back to the user's `~/.Renviron` or `~/.Rprofile`.
+- As at R's startup, `R_ENVIRON_USER` and `R_PROFILE_USER` take precedence: when one is set, the app reads the file it names instead, and when one is set but empty, the app reads no such file. An app directory without one of these files falls back to the user's `~/.Renviron` or `~/.Rprofile`. An app's own `.Renviron` that sets `R_PROFILE_USER` chooses its profile in the same way: the app runs the file that it names, or none when it is empty, and not the `.Rprofile` of its directory as well.
 - The `.Renviron` and `.Rprofile` of the directory that `start_tss()` is called from do not apply to apps. Apps do inherit the environment variables of the R session that runs `start_tss()`, including any that it read from a `.Renviron` when it started.
 - Unless the app's own `.Renviron` sets `R_LIBS` or `R_LIBS_USER`, or its profile changes them, apps use the library paths of the R session that runs `start_tss()`. An app's `.Renviron` that sets one of these gives the app the library paths that R makes from them at its startup. The library variables of `~/.Renviron`, or of the file that `R_ENVIRON_USER` names, do not change an app's library paths, so an app without its own `.Renviron` keeps the server's, such as a renv library.
 - The site profile, `Rprofile.site` or the file that `R_PROFILE` names, runs in apps as it does at R's startup.
@@ -165,19 +166,20 @@ An app's R process starts in the app's directory and reads the `.Renviron` and `
 
 ### R Markdown and Quarto documents
 
-A Quarto document is rendered before it is served, which can take many seconds. To keep starts and restarts fast, the server renders it with the Quarto CLI, the one that `QUARTO_PATH` names or that `PATH` finds in the app's environment, only when the rendered page (`{name}.html`, next to the `.qmd`) may be out of date, and then serves it with `rmarkdown::run()`, as `quarto::quarto_serve()` does. The app's own R process does not need the quarto R package, so a renv project library without it works.
+A Quarto document is rendered before it is served, which can take many seconds. To keep starts and restarts fast, the server renders it with the Quarto CLI, the one that `QUARTO_PATH` names or that `PATH` finds in the app's environment, only when the rendered page (`{name}.html`, next to the `.qmd`) may be out of date, and then serves it with `rmarkdown::run()`, as `quarto::quarto_serve()` does. The app's own R process does not need the quarto R package, so a renv project library without it works. The R session that Quarto starts to render the document has the app's library paths and environment variables; it reads no user environment file, since the app's already apply, and runs the app's profile, so one that activates renv sets the library paths there too.
 
 The server records each render it makes in `{log_dir}/{app_name}_render.rds`. It renders the document again when:
 
 - the page is missing;
 - its last render did not finish, for example because the app was stopped while it rendered, which can leave an incomplete page;
-- a file in the app directory has been added, removed, or changed since its last render, including a file copied in with an older modification time.
+- a file in the app directory has been added, removed, or changed since its last render, including a file copied in with an older modification time;
+- R, or a package that the page was rendered with, now has another version or is no longer installed. The page records these versions itself, for the packages whose scripts and styles it includes and those that its code loaded, so this applies to a page that the server did not render too.
 
 A page that the server did not render, such as one deployed with the app or one that has changed since the server rendered it, is served while it is newer than every other file in the app directory. What rendering writes beside the page, `{name}_files`, `{name}_data`, and `{name}_cache`, does not count, and neither do the server's own log files and render records when `log_dir` lies in the app directory. Neither do hidden files and directories, such as `.git`, `.Rproj.user`, and `.Rhistory`, except a top-level `.Rprofile` or `.Renviron`, nor the packages that renv installs (`renv/library`, `renv/staging`, and renv's other package directories); `renv.lock` does count. The app's error log records whether the document was rendered, and the output of the render.
 
 This check does not notice:
 
-- **Changes outside the app directory**, such as an upgraded package. Delete the `.html` file to force a render at the next start.
+- **Other changes outside the app directory**, such as to data read while the document renders, to system libraries, or a newer Quarto CLI. Delete the `.html` file to force a render at the next start.
 - **A changed file whose size and modification time are both unchanged.**
 - **The passing of time.** Code that runs when the document is rendered, rather than in its server context, keeps its results from the last render. Compute dates and other values that change in the server context, or keep them fixed, as the example dashboard does.
 
@@ -224,7 +226,7 @@ The proxy forwards traffic to an app only when the app's own process is listenin
 | Resident (`"resident": true`) | With the server; again after a process failure | At shutdown, restart, or configuration reload | Immediate access matters |
 | On-demand (`"resident": false`, the default) | At the first HTTP request or WebSocket connection | When no longer used, as described below | Saving resources matters more than startup delay |
 
-An on-demand app stops once it has had no WebSocket connection and no HTTP request in progress for 30 seconds. The grace period lets a reloaded or newly opened page reconnect without restarting the app.
+An on-demand app stops once it has had no WebSocket connection and no HTTP request in progress for 30 seconds. The grace period lets a reloaded or newly opened page reconnect without restarting the app. A page's WebSocket opens only once the browser has the page, so after a large response the grace period also allows for a slow browser to receive it, at 128 KB per second, for up to 10 more minutes.
 
 An app that is still starting at that point is left to finish, for up to 10 minutes from its start, and stops within 30 seconds after it is ready if it is still unused. A slow start, such as a Quarto render, is therefore not thrown away when the visitor's page stops waiting. On platforms where the `ps` package cannot list a process's sockets, the server cannot tell that an app is still starting, and stops it.
 
@@ -340,10 +342,10 @@ The server has no authentication or TLS of its own. For access from other machin
 
 The proxy uses the `Host` header to block DNS rebinding, and accepts an app's WebSocket connection only when the browser's `Origin` matches the public host. A reverse proxy must therefore send these headers:
 
-- **On the same machine** (`proxy_host` is a loopback address): forward the upstream address as the `Host` header, because the proxy rejects requests whose `Host` is not `localhost`, `127.0.0.1`, or `[::1]`. Also set `X-Forwarded-Host` to the public host, including a non-default port, so that the WebSocket `Origin` check passes. The [Caddy example](#caddy-example) does both: `header_up Host {upstream_hostport}` sets the host, and Caddy sets `X-Forwarded-Host` by default. With nginx, use `proxy_set_header X-Forwarded-Host $http_host;` (not `$host`, which drops the port), set the `Upgrade` and `Connection` headers that WebSockets need, and add the client's address with `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`; otherwise nginx passes on a client's own `X-Forwarded-For`, and the dashboard shows whatever address the client chose. Because the proxy then sees only the upstream address as the host, the reverse proxy takes over the DNS-rebinding check: it must serve the apps only under their own host names, and refuse requests for any other name, as Caddy's site blocks do. An nginx `default_server` that passes every host name to the proxy would let a rebinding website reach the apps through a visitor's browser.
+- **On the same machine** (`proxy_host` is a loopback address): forward the upstream address as the `Host` header, because the proxy rejects requests with a `Host` header other than `localhost`, `127.0.0.1`, or `[::1]`. Also set `X-Forwarded-Host` to the public host, including a non-default port, so that the WebSocket `Origin` check passes. The [Caddy example](#caddy-example) does both: `header_up Host {upstream_hostport}` sets the host, and Caddy sets `X-Forwarded-Host` by default. With nginx, use `proxy_set_header X-Forwarded-Host $http_host;` (not `$host`, which drops the port), set the `Upgrade` and `Connection` headers that WebSockets need, and add the client's address with `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`; otherwise nginx passes on a client's own `X-Forwarded-For`, and the dashboard shows whatever address the client chose. Because the proxy then sees only the upstream address as the host, the reverse proxy takes over the DNS-rebinding check: it must serve the apps only under their own host names, and refuse requests for any other name, as Caddy's site blocks do. An nginx `default_server` that passes every host name to the proxy would let a rebinding website reach the apps through a visitor's browser.
 - **HTTPS**: a reverse proxy that serves the apps over HTTPS should send `X-Forwarded-Proto: https`, as Caddy does by default. The proxy then refuses a WebSocket that a page on the plain-HTTP site of the same host tries to open, so that a page injected into unencrypted traffic cannot use the HTTPS site's sessions.
 - **On another machine** (`proxy_host` is `"0.0.0.0"` or `"::"`): preserve the public `Host` header, because `X-Forwarded-Host` is trusted only from the same machine. With nginx, use `proxy_set_header Host $http_host;`, not `$host`, which drops a non-default port and makes the WebSocket `Origin` check fail.
-- **Management site**: put the management server behind the reverse proxy only if you need remote administration. It always rejects requests whose `Host` is not `localhost`, `127.0.0.1`, or `[::1]`, so forward the upstream address as the host. Keep CORS disabled, and serve it on a different host name from the apps, such as `manage.example.com`, never under a path on the apps' site. Otherwise scripts in other pages could send the management API's required request header, and restart apps or shut down the server.
+- **Management site**: put the management server behind the reverse proxy only if you need remote administration. It always rejects requests with a `Host` header other than `localhost`, `127.0.0.1`, or `[::1]`, so forward the upstream address as the host. Keep CORS disabled, and serve it on a different host name from the apps, such as `manage.example.com`, never under a path on the apps' site. Otherwise scripts in other pages could send the management API's required request header, and restart apps or shut down the server.
 
 ### Caddy example
 
@@ -402,10 +404,10 @@ The management dashboard uses relative URLs and needs no setting. A reverse prox
 
 Requests:
 
-- A request for an app that is not configured receives HTTP 404. `/proxy/{name}` without the trailing slash redirects to `/proxy/{name}/`.
+- A request for an app that is not configured receives HTTP 404. `/proxy/{name}` without the trailing slash redirects to `/proxy/{name}/` (HTTP 307).
 - The proxy forwards `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, and `OPTIONS` requests. Other methods receive HTTP 501 (Not Implemented).
 - Request bodies larger than `max_request_size_mb` (default: 100 MB), and bodies sent with chunked transfer encoding, are rejected with HTTP 413 before they are read. Apps that raise `shiny.maxRequestSize` above this limit need a larger value.
-- Query strings longer than 8,192 characters are rejected with HTTP 400.
+- Query strings longer than 8,192 characters are rejected with HTTP 400, and WebSocket handshakes with such a query string are refused.
 - Paths longer than 1,000 characters, counting the `/proxy/{name}` prefix, and paths with a `..` segment are rejected with HTTP 400. Otherwise, the path after `/proxy/{name}` reaches the app exactly as the client sent it.
 - Request headers whose names contain an underscore, such as `X_Custom`, are not passed on to apps; see [Security model](#security-model).
 
@@ -414,7 +416,7 @@ Responses:
 - If a running app does not accept connections, the proxy returns HTTP 503. Once the app accepts a connection, a request fails with HTTP 502 if the connection breaks or the app sends no data for 10 minutes; there is no limit on the total transfer time.
 - A response larger than `max_response_size_mb` (default: 1024 MB) is not forwarded: the proxy stops receiving it and answers HTTP 502, and `server.log` says why. The proxy cannot tell when a visitor stops waiting, so without this limit a response that an app streams without end would fill the disk and keep an on-demand app from stopping. A response that never ends but stays below the limit, such as one that sends a few bytes every few minutes, still keeps its request, and an on-demand app, in use until the app ends it.
 - A response reaches the browser once the app has finished sending it. A response that an app streams, such as server-sent events, is therefore not delivered piece by piece, and a download shows no progress until the proxy has received all of it.
-- A response larger than 8 MB is written to a file in R's temporary directory as it arrives, sent from there, and then deleted. It needs that much free disk space for the duration of the request, instead of the server's memory.
+- A response larger than 8 MB is written to a file in R's temporary directory as it arrives, sent from there, and then deleted. It needs that much free disk space for the duration of the request, instead of the server's memory. If the file cannot be written, for example because the disk is full, the request receives HTTP 502, and `server.log` says why.
 - If a client disconnects while a response is being sent over a keep-alive connection, which browsers and most reverse proxies use, R's web server, httpuv, does not release the response ([rstudio/httpuv#448](https://github.com/rstudio/httpuv/issues/448)). It stays in memory, or in that file, until the R session that runs the server ends. Repeated aborted downloads of large responses therefore use up memory or disk; restart the server if that happens.
 
 WebSocket sessions:
@@ -422,7 +424,8 @@ WebSocket sessions:
 - A message from the browser larger than 1 MB closes the session. The check runs only after the whole message has been received, so it does not limit the memory that a single very large message uses; expose the proxy port only to trusted or authenticated clients.
 - Messages from an app to the browser may be up to 2 GB.
 - A session that has carried no message in either direction for `idle_timeout_minutes` (default: 30) is closed, and the browser shows the app as disconnected. Sessions are checked every 5 minutes, and each one closed is recorded in `server.log`. For dashboards that people leave open without interacting, raise the value, or set it to `0` to keep idle sessions open.
-- Up to 100 messages per session are held while the app's WebSocket opens; when more arrive, the oldest are dropped.
+- The proxy cannot tell how much of what it sends a browser has been read. A browser that stops reading while the app keeps sending would therefore make the proxy hold the app's messages in memory, and the app's traffic would keep the session from counting as idle. A session to which the app has sent more than `max_unanswered_mb` (default: 256 MB) without a message from the browser in between is closed, and `server.log` records it. A dashboard that people leave open without interacting, and that receives more than that, is disconnected too; raise the value, or set it to `0`. The limit applies to each session, and the number of sessions is not limited, so expose the proxy port only to trusted or authenticated clients.
+- Up to 100 messages, and up to 16 MB, per session are held while the app's WebSocket opens. One more closes the session, and the browser shows the app as disconnected.
 - An app's R process completes a WebSocket handshake only between its computations. If it is busy, for example with another visitor's long calculation, the proxy tries again for up to 2 minutes while the browser waits, and then closes the browser's session.
 
 ## Logging
@@ -437,8 +440,11 @@ The server writes these files to `log_dir`:
 | `{name}_output.log` | The app's standard output |
 | `{name}_error.log` | The app's standard error, including R errors and warnings |
 | `{name}_output.prev.log`, `{name}_error.prev.log` | The same logs from the app's previous run |
+| `{name}_render.rds` | For a Quarto app, the record of the server's renders of its document; see [R Markdown and Quarto documents](#r-markdown-and-quarto-documents) |
 
 App output goes straight to these files and is not held in memory. When an app starts, its logs from the previous run are kept as the `.prev.log` files, so the output of a crash survives the automatic restart.
+
+The server does not rotate or trim its logs. `server.log` grows for as long as the server runs, and the next start appends to it; the server opens it for each line it writes, so a tool such as logrotate can rotate it while the server runs. An app's logs grow until the app restarts.
 
 To follow the server log from a terminal:
 
@@ -458,8 +464,10 @@ Get-Content logs/server.log -Wait
 |-------|---------|
 | `"DEBUG"` | Each request's routing, port probing, connection bookkeeping, the full address of each app WebSocket connection, and the first 100 characters of every WebSocket message |
 | `"INFO"` | Normal operations, such as apps starting and stopping and connections opening and closing |
-| `"WARN"` | Warning conditions, such as a full message queue |
+| `"WARN"` | Warning conditions, such as a session closed for a limit, or a refused WebSocket handshake |
 | `"ERROR"` | Errors that need attention |
+
+A refused WebSocket handshake, such as one from another website's page, is logged at WARN at most once every 10 seconds for each reason, with the number of others since then, which are logged at DEBUG. A page that opens handshakes in a loop therefore does not fill `server.log`.
 
 WebSocket messages can include what users type, and WebSocket addresses can carry tokens in their query strings, so use `"DEBUG"` only while diagnosing a problem.
 
@@ -467,7 +475,7 @@ WebSocket messages can include what users type, and WebSocket addresses can carr
 
 ### Apps don't start
 
-- Check the R console for errors at startup, such as a proxy or management port that is already in use.
+- Check the R console for errors at startup, such as a proxy or management port that is already in use or cannot be opened. A port counts as in use when another program listens on it at 127.0.0.1 or `[::1]`. A port that cannot be opened may be below 1024, which on Linux needs administrator rights, or `proxy_host` may be `"::1"` or `"::"` on a machine without IPv6.
 - Check `server.log`. It names an app directory that is missing or holds no supported [entry point](#entry-points), and records the ports assigned to apps.
 - Check the app's error log, `{name}_error.log`. After a crash and automatic restart, the crash output is in `{name}_error.prev.log`.
 - R Markdown apps need Pandoc, and Quarto apps need the Quarto CLI.
@@ -481,7 +489,7 @@ WebSocket messages can include what users type, and WebSocket addresses can carr
 ### The management dashboard is not reachable
 
 - Check the R console to confirm that the server is running, and `server.log` for the management server's startup messages.
-- Open http://localhost:3839 on the server machine itself, not through its external IP address or host name. Requests whose `Host` header is not `localhost`, `127.0.0.1`, or `[::1]` receive HTTP 403.
+- Open http://localhost:3839 on the server machine itself, not through its external IP address or host name. Requests with a `Host` header other than `localhost`, `127.0.0.1`, or `[::1]` receive HTTP 403.
 - Check that no firewall blocks localhost connections.
 
 ## Development

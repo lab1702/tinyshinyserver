@@ -221,6 +221,13 @@ is_other_document_path <- function(document, backend_path, websocket = FALSE) {
     if (!websocket) {
       return(FALSE)
     }
+    # A socket path that leaves the document's directory names no file that
+    # the document could render, and is refused before the file system is
+    # asked about it: whether the socket were then refused or opened would
+    # tell any client which files exist anywhere on the server.
+    if (grepl("(^|/)\\.\\.(/|$)", path) || grepl("\\", path, fixed = TRUE)) {
+      return(TRUE)
+    }
     # A path that names no file, or a directory, renders nothing
     target <- file.path(dirname(document$file), path)
     file.exists(target) && !dir.exists(target)
@@ -316,16 +323,23 @@ handle_proxy_request <- function(path, method, query_string, req, config, proces
   manager <- connection_manager %||% create_connection_manager(config, process_manager)
   manager$begin_http_request(app_name)
   released <- FALSE
-  release <- function() {
+  release <- function(response_bytes = 0) {
     if (!released) {
       released <<- TRUE
-      manager$end_http_request(app_name)
+      manager$end_http_request(app_name, response_bytes)
     }
   }
   tryCatch({
     response <- forward_request(method, target_url, req, app_name, config, template_manager)
-    if (promises::is.promise(response)) return(promises::finally(response, release))
-    release()
+    if (promises::is.promise(response)) {
+      # The response's size tells how long the browser may take to receive it
+      sized <- promises::then(response, function(value) {
+        release(tryCatch(response_body_bytes(value[["body"]]), error = function(e) 0))
+        value
+      })
+      return(promises::finally(sized, release))
+    }
+    release(tryCatch(response_body_bytes(response[["body"]]), error = function(e) 0))
     response
   }, error = function(e) {
     release()
@@ -632,6 +646,14 @@ proxy_response_headers <- function(raw_headers, target_url, app_name, method, ba
       if (!grepl(path_attribute, value, ignore.case = TRUE, perl = TRUE)) {
         request_path <- sub("[?#].*$", "", substring(target_url, nchar(authority) + 1))
         default_path <- sub("/[^/]*$", "", request_path)
+        # The request path is the client's, and a ";" in it would end the
+        # Path attribute and start attributes of the client's choosing, such
+        # as Domain. The default path is then cut back to the last directory
+        # before any character that a URL path does not carry as it is, or
+        # that separates cookie attributes. The cookie is sent to more of the
+        # app's pages than a browser would choose, but never to another app.
+        unsafe <- regexpr("[^A-Za-z0-9._~%!$&'()*+=:@/-]", default_path)
+        if (unsafe > 0) default_path <- sub("/[^/]*$", "", substr(default_path, 1, unsafe - 1))
         if (default_path == "" || !startsWith(default_path, "/")) default_path <- "/"
         value <- paste0(value, "; Path=", default_path)
       }
@@ -673,27 +695,43 @@ RESPONSE_SPOOL_BYTES <- 8 * 1024^2
 # Collects a response body from curl's data callback. finish() returns it in
 # a form httpuv sends: a raw vector, or a file that httpuv deletes once it has
 # been sent. A body larger than max_bytes is not kept: exceeded() then
-# reports it, and the transfer is to be cancelled.
+# reports it, and the transfer is to be cancelled. Nor is a body that cannot
+# be written to its file, as when the disk is full: error() then returns the
+# reason, as it does a body that is too large, and finish() returns NULL.
 response_body_collector <- function(limit = RESPONSE_SPOOL_BYTES, max_bytes = Inf) {
   chunks <- list()
   size <- 0
   path <- NULL
   writer <- NULL
   too_large <- FALSE
+  failure <- NULL
+  # Closing a writer whose file cannot be written can itself fail, and a
+  # failure must still remove the file
+  close_writer <- function() {
+    if (!is.null(writer)) {
+      closing <- writer
+      writer <<- NULL
+      tryCatch(closing(raw(), close = TRUE), error = function(e) NULL)
+    }
+  }
   discard <- function() {
     chunks <<- list()
-    if (!is.null(writer)) {
-      writer(raw(), close = TRUE)
-      writer <<- NULL
-    }
+    close_writer()
     if (!is.null(path)) {
       unlink(path)
       path <<- NULL
     }
   }
+  # An error raised in curl's data callback reaches only the console, and the
+  # transfer then fails with a message that names no cause. The cause is kept
+  # instead, so that the request fails with it and the log says what happened.
+  fail <- function(e) {
+    failure <<- response_spool_error(e)
+    discard()
+  }
   list(
     write = function(data, final = FALSE) {
-      if (length(data) == 0 || too_large) {
+      if (length(data) == 0 || too_large || !is.null(failure)) {
         return(invisible(NULL))
       }
       size <<- size + length(data)
@@ -702,23 +740,37 @@ response_body_collector <- function(limit = RESPONSE_SPOOL_BYTES, max_bytes = In
         discard()
         return(invisible(NULL))
       }
-      if (is.null(writer) && size > limit) {
-        # curl's writer holds no R connection, of which a session has few.
-        # A cleaner of /tmp may have removed R's session directory on a
-        # server that runs for weeks; tempdir() then creates it again.
-        path <<- tempfile("tss-response-", tmpdir = tempdir(check = TRUE))
-        writer <<- curl::file_writer(path)
-        for (chunk in chunks) writer(chunk)
-        chunks <<- list()
-      }
-      if (is.null(writer)) chunks[[length(chunks) + 1L]] <<- data else writer(data)
+      tryCatch({
+        if (is.null(writer) && size > limit) {
+          # curl's writer holds no R connection, of which a session has few.
+          # A cleaner of /tmp may have removed R's session directory on a
+          # server that runs for weeks; tempdir() then creates it again.
+          path <<- tempfile("tss-response-", tmpdir = tempdir(check = TRUE))
+          writer <<- curl::file_writer(path)
+          for (chunk in chunks) writer(chunk)
+          chunks <<- list()
+        }
+        if (is.null(writer)) chunks[[length(chunks) + 1L]] <<- data else writer(data)
+      }, error = fail)
       invisible(NULL)
     },
     finish = function() {
+      if (!is.null(failure)) {
+        return(NULL)
+      }
       if (is.null(writer)) {
         return(if (length(chunks) > 0) unlist(chunks, use.names = FALSE) else raw())
       }
-      writer(raw(), close = TRUE)
+      closed <- tryCatch({
+        writer(raw(), close = TRUE)
+        TRUE
+      }, error = function(e) {
+        fail(e)
+        FALSE
+      })
+      if (!closed) {
+        return(NULL)
+      }
       # The file now belongs to the response: a later discard() leaves it
       spooled <- list(file = path, owned = TRUE)
       writer <<- NULL
@@ -726,7 +778,20 @@ response_body_collector <- function(limit = RESPONSE_SPOOL_BYTES, max_bytes = In
       spooled
     },
     discard = discard,
-    exceeded = function() too_large
+    exceeded = function() too_large,
+    error = function() {
+      if (too_large) response_too_large_error(max_bytes) else failure
+    }
+  )
+}
+
+# The error of a transfer whose response could not be written to its file
+response_spool_error <- function(e) {
+  structure(
+    class = c("backend_response_spool_error", "simpleError", "error", "condition"),
+    list(message = paste(
+      "The app's response could not be written to a temporary file:", conditionMessage(e)
+    ), call = NULL)
   )
 }
 
@@ -763,11 +828,12 @@ fetch_backend_async <- function(url, handle, max_bytes = Inf) {
     curl::curl_fetch_multi(url, handle = handle, pool = pool,
       data = body$write,
       done = function(response) {
-        if (body$exceeded()) {
-          reject(response_too_large_error(max_bytes))
+        content <- if (is.null(body$error())) body$finish()
+        if (!is.null(body$error())) {
+          reject(body$error())
           return()
         }
-        response$content <- body$finish()
+        response$content <- content
         resolve(response)
       },
       fail = function(message) {
@@ -779,9 +845,11 @@ fetch_backend_async <- function(url, handle, max_bytes = Inf) {
     pump <- function(...) {
       tryCatch({
         result <- curl::multi_run(timeout = 0, pool = pool)
-        if (result$pending > 0 && body$exceeded()) {
+        # A body that is too large, or that cannot be written, ends the
+        # transfer rather than leaving libcurl to receive it to the end
+        if (result$pending > 0 && !is.null(body$error())) {
           curl::multi_cancel(handle)
-          reject(response_too_large_error(max_bytes))
+          reject(body$error())
           return()
         }
         if (result$pending > 0) {
@@ -810,9 +878,19 @@ fetch_backend_async <- function(url, handle, max_bytes = Inf) {
 # replay a POST while waiting for startup). Both the probe and retry are async.
 wait_for_backend <- function(url, wait_seconds = 0) {
   promises::promise(function(resolve, reject) {
-    deadline <- Sys.time() + wait_seconds
+    # R has no clock that cannot be set back, so the wait adds up the steps of
+    # the clock between probes and counts a step back as none: a clock set
+    # back does not keep a request waiting for as long as it was set back.
+    waited <- 0
+    last <- Sys.time()
+    seconds_left <- function() {
+      now <- Sys.time()
+      waited <<- waited + max(0, as.numeric(difftime(now, last, units = "secs")))
+      last <<- now
+      wait_seconds - waited
+    }
     probe <- function() {
-      remaining <- as.numeric(difftime(deadline, Sys.time(), units = "secs"))
+      remaining <- seconds_left()
       timeout_ms <- if (wait_seconds > 0) max(1, min(1000, remaining * 1000)) else 1000
       # Close the probe connection when it completes. Before libcurl 8, a
       # connect-only connection otherwise stays open in the unused pool until
@@ -822,7 +900,7 @@ wait_for_backend <- function(url, wait_seconds = 0) {
       promises::then(fetch_backend_async(url, handle),
         onFulfilled = function(response) resolve(TRUE),
         onRejected = function(error) {
-          remaining <- as.numeric(difftime(deadline, Sys.time(), units = "secs"))
+          remaining <- seconds_left()
           if (remaining > 0) {
             later::later(probe, min(0.1, remaining))
           } else {
@@ -900,19 +978,23 @@ is_same_origin_websocket <- function(req) {
 handle_websocket_connection <- function(ws, config, connection_manager, process_manager = NULL) {
   "Handle new WebSocket connections"
 
-  logger::log_info("WebSocket connection opened")
+  # Handshakes that are refused below are logged by their reason, a flood of
+  # them only at DEBUG; an accepted one is logged once it is added.
+  logger::log_debug("WebSocket handshake received")
+  reject <- function(reason, text) {
+    connection_manager$note_rejected_handshake(reason, text)
+    ws$close()
+  }
 
   if (!is_allowed_proxy_host(ws$request, config)) {
-    logger::log_warn("Rejecting WebSocket with Host {host}", host = log_value(request_header(ws$request, "host")))
-    ws$close()
+    reject("host", paste("Rejecting WebSocket with Host", log_value(request_header(ws$request, "host"))))
     return()
   }
 
   # Browsers attach cookies and cached credentials to cross-site WebSocket
   # handshakes, so only accept sessions opened by pages served from this host
   if (!is_same_origin_websocket(ws$request)) {
-    logger::log_warn("Rejecting cross-origin WebSocket from {origin}", origin = log_value(request_header(ws$request, "origin")))
-    ws$close()
+    reject("origin", paste("Rejecting cross-origin WebSocket from", log_value(request_header(ws$request, "origin"))))
     return()
   }
 
@@ -922,33 +1004,37 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
   # Determine which app this WebSocket is for
   request_path_validation <- validate_path(strip_base_path(ws$request$PATH_INFO, config$config$base_path))
   if (!request_path_validation$valid) {
-    logger::log_error("Invalid WebSocket path: {error}", error = request_path_validation$error)
-    ws$close()
+    reject("path", paste("Invalid WebSocket path:", request_path_validation$error))
+    return()
+  }
+
+  # The query string is passed on to the app, so it has the limit of an HTTP
+  # request's
+  query_validation <- validate_query_string(ws$request$QUERY_STRING)
+  if (!query_validation$valid) {
+    reject("query", paste("Invalid WebSocket query string:", query_validation$error))
     return()
   }
 
   # Do not fall back to another app when the path names none
   route <- parse_proxy_path(request_path_validation$sanitized)
   if (!route$valid) {
-    logger::log_error("Could not determine app for WebSocket connection: {error}", error = route$error)
-    ws$close()
+    reject("route", paste("Could not determine app for WebSocket connection:", route$error))
     return()
   }
   app_name <- route$app_name
 
-  logger::log_info("WebSocket routed to app: {app_name}", app_name = app_name)
+  logger::log_debug("WebSocket routed to app: {app_name}", app_name = app_name)
 
   app_config <- config$get_app_config(app_name)
   if (is.null(app_config)) {
-    logger::log_warn("Rejecting WebSocket for unknown app: {app_name}", app_name = app_name)
-    ws$close()
+    reject("app", paste("Rejecting WebSocket for unknown app:", app_name))
     return()
   }
 
   # Refused before an on-demand app starts, which nothing would then stop
   if (is_other_document_path(served_document(app_config, config), route$backend_path, websocket = TRUE)) {
-    logger::log_warn("Rejecting WebSocket for a document that app {app_name} does not serve", app_name = app_name)
-    ws$close()
+    reject("document", sprintf("Rejecting WebSocket for a document that app %s does not serve", app_name))
     return()
   }
 
@@ -960,9 +1046,8 @@ handle_websocket_connection <- function(ws, config, connection_manager, process_
 
   # A start records the document anew, as the directory now holds it
   if (is_other_document_path(config$get_app_document(app_name), route$backend_path, websocket = TRUE)) {
-    logger::log_warn("Rejecting WebSocket for a document that app {app_name} does not serve", app_name = app_name)
     connection_manager$schedule_session_check(app_name)
-    ws$close()
+    reject("document", sprintf("Rejecting WebSocket for a document that app %s does not serve", app_name))
     return()
   }
 

@@ -11,12 +11,17 @@ const { chromium } = require('playwright');
   let output = '';
   server.stdout.on('data', x => output += x);
   server.stderr.on('data', x => output += x);
-  const exited = new Promise(resolve => server.on('exit', resolve));
+  // A missing Rscript is reported by an 'error' event, without an 'exit'
+  let spawnError = null;
+  const exited = new Promise(resolve => {
+    server.on('exit', resolve);
+    server.on('error', error => { spawnError = error; output += String(error); resolve(); });
+  });
   let browser;
   try {
     const info = path.join(folder, 'urls.json');
     const deadline = Date.now() + 15000;
-    while (!fs.existsSync(info) && Date.now() < deadline && server.exitCode === null) {
+    while (!fs.existsSync(info) && Date.now() < deadline && server.exitCode === null && !spawnError) {
       await new Promise(resolve => setTimeout(resolve, 25));
     }
     assert.ok(fs.existsSync(info), output);
@@ -58,7 +63,7 @@ const { chromium } = require('playwright');
     // Real management UI buttons, including their automatic request headers.
     page.on('dialog', dialog => dialog.accept());
     await page.goto(urls.management);
-    await page.getByRole('button', {name: 'Restart', exact: true}).click();
+    await page.getByRole('button', {name: 'Restart app', exact: true}).click();
     await page.waitForFunction(() => document.querySelector('.restart-btn')?.textContent === 'Restart');
     assert.equal((await state()).restarts, 1);
     await page.getByRole('button', {name: 'Reload Config & Restart All'}).click();
@@ -77,7 +82,7 @@ const { chromium } = require('playwright');
   } finally {
     if (browser) await browser.close();
     fs.writeFileSync(path.join(folder, 'stop'), 'stop');
-    await exited;
+    if (!spawnError) await exited;
     fs.rmSync(folder, {recursive: true, force: true});
   }
 })().catch(e => {console.error(e); process.exitCode = 1;});

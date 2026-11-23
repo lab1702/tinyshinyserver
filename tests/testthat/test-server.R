@@ -26,7 +26,7 @@ test_that("the server starts logging at the configured level", {
 test_that("a busy port stops startup before any app or monitoring starts", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
-  writeLines(jsonlite::toJSON(list(apps = list(list(name = "app", path = "/tmp", resident = TRUE)),
+  writeLines(jsonlite::toJSON(list(apps = list(list(name = "app", path = unused_app_path(), resident = TRUE)),
     log_dir = tempdir(), starting_port = 3001), auto_unbox = TRUE), path)
   started_apps <- 0
   stopped_apps <- 0
@@ -70,7 +70,7 @@ test_that("a busy port stops startup before any app or monitoring starts", {
 test_that("started servers limit request bodies from their headers", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
-  writeLines(jsonlite::toJSON(list(apps = list(list(name = "app", path = "/tmp")),
+  writeLines(jsonlite::toJSON(list(apps = list(list(name = "app", path = unused_app_path())),
     log_dir = tempdir(), starting_port = 3001, max_request_size_mb = 2), auto_unbox = TRUE), path)
   local_mocked_bindings(is_port_in_use = function(...) FALSE, setup_logging = function(...) NULL,
     create_process_manager = function(config) list())
@@ -209,19 +209,52 @@ test_that("an unwritable server log does not stop logging or shutdown", {
 test_that("a server whose ports are in use stops before it writes to the server log", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
-  writeLines(jsonlite::toJSON(list(apps = list(list(name = "app", path = "/tmp")),
+  writeLines(jsonlite::toJSON(list(apps = list(list(name = "app", path = unused_app_path())),
     log_dir = tempdir(), starting_port = 3001), auto_unbox = TRUE), path)
   logging <- 0
   local_mocked_bindings(setup_logging = function(...) logging <<- logging + 1,
-    is_port_in_use = function(host, port) port == 3839)
+    is_port_in_use = function(host, port, ...) port == 3839,
+    loopback_port_accepts = function(port, ...) port == 3839)
   expect_error(TinyShinyServer$new(path), "management port 3839 is already in use")
   expect_equal(logging, 0)
+})
+
+test_that("the server's ports are checked for programs on either loopback address", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  writeLines(jsonlite::toJSON(list(apps = list(list(name = "app", path = unused_app_path())),
+    log_dir = tempdir(), starting_port = 3001, proxy_host = "0.0.0.0"), auto_unbox = TRUE), path)
+  asked <- list()
+  local_mocked_bindings(setup_logging = function(...) stop("must not log"),
+    is_port_in_use = function(host, port, loopback = FALSE) {
+      asked[[length(asked) + 1]] <<- list(host = host, port = port, loopback = loopback)
+      port == 3838
+    },
+    loopback_port_accepts = function(port, timeout_ms = 100, address = "127.0.0.1") address == "::1")
+  expect_error(TinyShinyServer$new(path), "proxy port 3838 is already in use by another program")
+  # App ports were checked first, as the configuration was read
+  proxy_checks <- Filter(function(check) check$port == 3838, asked)
+  expect_equal(proxy_checks, list(list(host = "0.0.0.0", port = 3838, loopback = TRUE)))
+})
+
+test_that("a server port that nothing answers on is not reported as in use", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  writeLines(jsonlite::toJSON(list(apps = list(list(name = "app", path = unused_app_path())),
+    log_dir = tempdir(), starting_port = 3001, proxy_port = 80), auto_unbox = TRUE), path)
+  # As when a port below 1024 needs rights the user lacks
+  local_mocked_bindings(setup_logging = function(...) stop("must not log"),
+    is_port_in_use = function(host, port, ...) port == 80,
+    loopback_port_accepts = function(...) FALSE)
+  error <- expect_error(TinyShinyServer$new(path), "proxy port 80 could not be opened at 127.0.0.1")
+  expect_no_match(conditionMessage(error), "already in use")
+  expect_match(conditionMessage(error), "not available to this user or on this machine", fixed = TRUE)
 })
 
 test_that("a port that the server cannot open is named in the server log", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
-  writeLines(jsonlite::toJSON(list(apps = list(list(name = "app", path = "/tmp")),
+  writeLines(jsonlite::toJSON(list(apps = list(list(name = "app", path = unused_app_path())),
     log_dir = tempdir(), starting_port = 3001), auto_unbox = TRUE), path)
   local_mocked_bindings(is_port_in_use = function(...) FALSE, setup_logging = function(...) NULL,
     create_process_manager = function(config) list(stop_all_apps = function() NULL))

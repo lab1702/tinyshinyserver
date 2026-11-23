@@ -38,7 +38,7 @@ test_that("configuration defaults and normalizes base_path", {
   config <- ShinyServerConfig$new()
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
-  settings <- list(apps = list(list(name = "app", path = "/tmp")), log_dir = tempdir(), starting_port = 3001)
+  settings <- list(apps = list(list(name = "app", path = unused_app_path())), log_dir = tempdir(), starting_port = 3001)
   writeLines(jsonlite::toJSON(settings, auto_unbox = TRUE), path)
   expect_identical(config$read_config(path)$base_path, "")
 
@@ -72,7 +72,7 @@ test_that("requests are routed with or without the prefix", {
 test_that("the bare prefix redirects to its trailing-slash form", {
   config <- base_path_config()
   result <- handle_http_request(base_path_request("/shiny", "?a=1"), config, list(), list())
-  expect_equal(result$status, 308)
+  expect_equal(result$status, 307)
   expect_equal(result$headers$Location, "/shiny/?a=1")
 })
 
@@ -80,7 +80,7 @@ test_that("app mount redirects include the prefix", {
   config <- base_path_config()
   for (path in c("/shiny/proxy/app", "/proxy/app")) {
     result <- handle_http_request(base_path_request(path, "x=1"), config, list(), list())
-    expect_equal(result$status, 308, info = path)
+    expect_equal(result$status, 307, info = path)
     expect_equal(result$headers$Location, "/shiny/proxy/app/?x=1", info = path)
   }
 })

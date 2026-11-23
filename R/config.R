@@ -6,7 +6,7 @@
 KNOWN_CONFIG_FIELDS <- c(
   "apps", "log_dir", "starting_port", "proxy_port", "proxy_host", "management_port",
   "restart_delay", "health_check_interval", "max_request_size_mb", "max_response_size_mb", "title",
-  "base_path", "idle_timeout_minutes", "log_level"
+  "base_path", "idle_timeout_minutes", "log_level", "max_unanswered_mb"
 )
 KNOWN_APP_FIELDS <- c("name", "path", "resident", "appstart_timeout")
 
@@ -18,6 +18,10 @@ MAX_TIMER_SECONDS <- 86400
 
 # The largest app response, in megabytes, that the proxy forwards by default
 DEFAULT_MAX_RESPONSE_SIZE_MB <- 1024
+
+# How many megabytes an app may send a WebSocket session, by default, without
+# a message from the browser in between, before the session is closed
+DEFAULT_MAX_UNANSWERED_MB <- 256
 
 duplicated_config_fields <- function(config) {
   "Describe the fields that a configuration gives more than once, at its top level or in an app"
@@ -70,7 +74,14 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     # When each session last carried a message. Kept apart from the connection
     # lists so that a message does not rewrite them.
     session_activity = "environment",
+    # The bytes that the app has sent each session since the browser's last
+    # message on it, which the proxy may still hold for a browser that does
+    # not read them; see max_unanswered_mb
+    session_unanswered = "environment",
     active_http_requests = "environment",
+    # When, in seconds of proc.time()'s elapsed clock, a slow browser may
+    # still be receiving the last large response of each app
+    http_transfer_ends = "environment",
     pending_session_checks = "environment",
     app_startup_state = "environment", # Track app startup progress (starting/ready)
     verified_backends = "environment", # Process generations confirmed to own their app port
@@ -90,11 +101,17 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     # Constants. Limits on request paths, query strings, and methods are the
     # defaults of the validation functions in validation.R.
     MAX_PENDING_MESSAGES = "numeric",
+    # The most bytes of browser messages that wait for an app's socket to open
+    MAX_PENDING_BYTES = "numeric",
     CONNECTION_TIMEOUT_MINUTES = "numeric", # Default of the idle_timeout_minutes field
     CLEANUP_INTERVAL_SECONDS = "numeric",
     MAX_MESSAGE_SIZE = "numeric",
     APP_STARTUP_TIMEOUT_SECONDS = "numeric",
     HTTP_SESSION_GRACE_SECONDS = "numeric",
+    # A slow browser's download rate, and the longest download time, that the
+    # idle check of an on-demand app allows for after a large response
+    HTTP_TRANSFER_BYTES_PER_SECOND = "numeric",
+    HTTP_TRANSFER_MAX_SECONDS = "numeric",
     # How long a browser's WebSocket waits for a busy app to complete the
     # handshake of the proxy's own socket to it
     WS_BACKEND_CONNECT_SECONDS = "numeric",
@@ -110,11 +127,14 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
     initialize = function() {
       # Initialize constants
       MAX_PENDING_MESSAGES <<- 100
+      MAX_PENDING_BYTES <<- 16 * 1024^2
       CONNECTION_TIMEOUT_MINUTES <<- 30
       CLEANUP_INTERVAL_SECONDS <<- 300
       MAX_MESSAGE_SIZE <<- 1048576
       APP_STARTUP_TIMEOUT_SECONDS <<- 30
       HTTP_SESSION_GRACE_SECONDS <<- 30
+      HTTP_TRANSFER_BYTES_PER_SECOND <<- 128 * 1024
+      HTTP_TRANSFER_MAX_SECONDS <<- 600
       WS_BACKEND_CONNECT_SECONDS <<- 120
       ON_DEMAND_START_LIMIT_SECONDS <<- 600
       START_PROBLEM_MAX_AGE_SECONDS <<- 30
@@ -125,7 +145,9 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       backend_connections <<- list()
       app_sessions <<- new.env(hash = TRUE, parent = emptyenv())
       session_activity <<- new.env(hash = TRUE, parent = emptyenv())
+      session_unanswered <<- new.env(hash = TRUE, parent = emptyenv())
       active_http_requests <<- new.env(hash = TRUE, parent = emptyenv())
+      http_transfer_ends <<- new.env(hash = TRUE, parent = emptyenv())
       pending_session_checks <<- new.env(hash = TRUE, parent = emptyenv())
       app_startup_state <<- new.env(hash = TRUE, parent = emptyenv())
       verified_backends <<- new.env(hash = TRUE, parent = emptyenv())
@@ -211,6 +233,7 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       new_config$max_response_size_mb <- new_config$max_response_size_mb %||% DEFAULT_MAX_RESPONSE_SIZE_MB
       new_config$base_path <- new_config$base_path %||% ""
       new_config$idle_timeout_minutes <- new_config$idle_timeout_minutes %||% CONNECTION_TIMEOUT_MINUTES
+      new_config$max_unanswered_mb <- new_config$max_unanswered_mb %||% DEFAULT_MAX_UNANSWERED_MB
       new_config$log_level <- toupper(new_config$log_level %||% "INFO")
 
       # Set default values for optional app fields
@@ -313,7 +336,14 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         return(0)
       }
       delay <- config$restart_delay %||% 5
-      max(0, delay - as.numeric(difftime(Sys.time(), failed_at, units = "secs")))
+      elapsed <- as.numeric(difftime(Sys.time(), failed_at, units = "secs"))
+      # R has no clock that cannot be set back. A clock set back since the
+      # failure would make the wait last as long as it was set back, so a
+      # wait that would be longer than restart_delay is over.
+      if (elapsed < 0) {
+        return(0)
+      }
+      max(0, delay - elapsed)
     },
     cached_start_problem = function(app_config) {
       "Why an app's directory cannot be served, or NULL, looked up again only once the directory changes"
@@ -331,10 +361,15 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
       path <- normalizePath(app_config$path, mustWork = FALSE)
       modified <- file.mtime(path)
       cached <- start_problems[[app_config$name]]
+      # A finding from a time after now, which a clock set back gives, is as
+      # old as the clock was set back
+      fresh <- function(cached) {
+        age <- as.numeric(difftime(read_at, cached$read_at, units = "secs"))
+        age >= 0 && age < START_PROBLEM_MAX_AGE_SECONDS
+      }
       if (!is.null(cached) && !is.na(modified) && identical(cached$path, path) &&
         identical(cached$modified, modified) &&
-        as.numeric(difftime(cached$read_at, modified, units = "secs")) > 2 &&
-        as.numeric(difftime(read_at, cached$read_at, units = "secs")) < START_PROBLEM_MAX_AGE_SECONDS) {
+        as.numeric(difftime(cached$read_at, modified, units = "secs")) > 2 && fresh(cached)) {
         return(cached$problem)
       }
       problem <- app_start_problem(app_config)
@@ -401,6 +436,14 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         value <- config$idle_timeout_minutes
         if (!is.numeric(value) || length(value) != 1 || !is.finite(value) || value < 0) {
           return(list(valid = FALSE, error = "idle_timeout_minutes must be a single non-negative finite number of minutes"))
+        }
+      }
+
+      # Zero lets an app send a session any amount without a browser message
+      if ("max_unanswered_mb" %in% names(config)) {
+        value <- config$max_unanswered_mb
+        if (!is.numeric(value) || length(value) != 1 || !is.finite(value) || value < 0) {
+          return(list(valid = FALSE, error = "max_unanswered_mb must be a single non-negative finite number of megabytes"))
         }
       }
 
@@ -611,8 +654,10 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         return(FALSE)
       }
 
-      if (exists(session_id, envir = session_activity, inherits = FALSE)) {
-        rm(list = session_id, envir = session_activity)
+      for (state in list(session_activity, session_unanswered)) {
+        if (exists(session_id, envir = state, inherits = FALSE)) {
+          rm(list = session_id, envir = state)
+        }
       }
 
       # Close callbacks may ask again for a session that has already gone
@@ -655,6 +700,18 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         return(get(session_id, envir = session_activity))
       }
       default
+    },
+    add_unanswered_bytes = function(session_id, bytes) {
+      "Count bytes that an app sent a session, returning the total since the browser's last message"
+      total <- (session_unanswered[[session_id]] %||% 0) + bytes
+      assign(session_id, total, envir = session_unanswered)
+      total
+    },
+    clear_unanswered_bytes = function(session_id) {
+      "Record that the browser sent a message on a session"
+      if (exists(session_id, envir = session_unanswered, inherits = FALSE)) {
+        rm(list = session_id, envir = session_unanswered)
+      }
     },
     add_backend_connection = function(session_id, connection_info) {
       "Add a backend connection to tracking"
@@ -863,6 +920,14 @@ ShinyServerConfig <- setRefClass("ShinyServerConfig",
         elapsed <- as.numeric(difftime(Sys.time(), startup_info$started_at,
           units = "secs"
         ))
+        # R has no clock that cannot be set back. A clock set back during the
+        # startup would keep it from timing out, and keep its requests
+        # waiting, for as long as it was set back, so its window starts again.
+        if (elapsed < 0) {
+          startup_info$started_at <- Sys.time()
+          assign(app_name, startup_info, envir = app_startup_state)
+          elapsed <- 0
+        }
         app_config <- get_app_config(app_name)
         startup_timeout <- max(APP_STARTUP_TIMEOUT_SECONDS, app_config$appstart_timeout %||% 0)
         if (identical(startup_info$state, "timeout") || elapsed > startup_timeout) {

@@ -1,25 +1,76 @@
 # Connection Manager Module
 # Manages WebSocket connections and session handling
 
-# A WebSocket message as DEBUG logs show it. Text that cannot be cut as
-# characters is described by its size, so that logging never fails a session.
+# A WebSocket message as DEBUG logs show it. Its text comes from a visitor or
+# an app, so it is cut short and cleaned of control characters as other
+# logged request values are; text that cannot be read is described by its
+# size, so that logging never fails a session.
 describe_ws_message <- function(data) {
   if (is.raw(data)) {
     return(paste(length(data), "binary bytes"))
   }
-  tryCatch(substring(data, 1, 100), error = function(e) paste(nchar(data, type = "bytes"), "bytes of text"))
+  tryCatch(log_value(data, 100), error = function(e) paste(nchar(data, type = "bytes"), "bytes of text"))
 }
+
+# The size of a WebSocket message as it is sent
+ws_message_bytes <- function(data) {
+  if (is.raw(data)) length(data) else sum(nchar(data, type = "bytes"))
+}
+
+# The size of an HTTP response body in any form that httpuv sends: a raw
+# vector, text, or the file that a large body was written to
+response_body_bytes <- function(body) {
+  if (is.null(body)) {
+    return(0)
+  }
+  if (is.list(body)) {
+    size <- if (is.character(body$file)) file.size(body$file) else NA
+    return(if (length(size) == 1 && !is.na(size)) size else 0)
+  }
+  if (is.raw(body) || is.character(body)) ws_message_bytes(body) else 0
+}
+
+# A refused WebSocket handshake is logged at WARN at most once in this many
+# seconds for each reason. Handshakes cost a client nothing, and a page in any
+# visitor's browser can open them in a loop, which would otherwise fill the
+# server log with warnings.
+REJECTED_HANDSHAKE_LOG_SECONDS <- 10
 
 # Connection Manager Class
 ConnectionManager <- setRefClass("ConnectionManager",
   fields = list(
     config = "ANY",
-    process_manager = "ANY" # Reference to process manager for immediate stops
+    process_manager = "ANY", # Reference to process manager for immediate stops
+    # For each reason a handshake was refused: when it was last logged at
+    # WARN, and how many refusals have been logged only at DEBUG since
+    rejected_handshakes = "environment"
   ),
   methods = list(
     initialize = function(server_config, proc_manager = NULL) {
       config <<- server_config
       process_manager <<- proc_manager
+      rejected_handshakes <<- new.env(hash = TRUE, parent = emptyenv())
+    },
+    note_rejected_handshake = function(reason, text) {
+      "Log a refused WebSocket handshake: at WARN once per reason every REJECTED_HANDSHAKE_LOG_SECONDS, otherwise at DEBUG"
+
+      now <- proc.time()[["elapsed"]]
+      previous <- rejected_handshakes[[reason]]
+      if (!is.null(previous) && now - previous$logged_at < REJECTED_HANDSHAKE_LOG_SECONDS) {
+        previous$suppressed <- previous$suppressed + 1
+        assign(reason, previous, envir = rejected_handshakes)
+        logger::log_debug("{text}", text = text)
+        return(invisible(FALSE))
+      }
+      suppressed <- previous$suppressed %||% 0
+      if (suppressed > 0) {
+        text <- sprintf("%s (and %d more for the same reason since the last such warning)", text, suppressed)
+      }
+      assign(reason, list(logged_at = now, suppressed = 0), envir = rejected_handshakes)
+      # The text holds values from the request, so it is the format's only
+      # argument and is never itself read as a format
+      logger::log_warn("{text}", text = text)
+      invisible(TRUE)
     },
     create_backend_connection = function(app_name, session_id, client_ws) {
       "Create WebSocket connection to backend Shiny app"
@@ -105,6 +156,26 @@ ConnectionManager <- setRefClass("ConnectionManager",
         conn <- config$get_backend_connection(session_id)
         if (is.null(conn) || !identical(conn$ws, backend_ws)) return()
         if (is.null(config$get_ws_connection(session_id))) return()
+        # httpuv queues what it sends a browser in this process and cannot
+        # tell how much a browser has yet to read, so a client that stops
+        # reading while the app keeps sending would hold it all here. The
+        # app's traffic also keeps the session from counting as idle. So a
+        # session on which the app has sent more than max_unanswered_mb since
+        # the browser's last message is closed. A browser that reads, such as
+        # a dashboard left open without interaction, cannot be told apart and
+        # is disconnected too, and a reload of the page reconnects it.
+        limit_mb <- config$config$max_unanswered_mb %||% DEFAULT_MAX_UNANSWERED_MB
+        if (limit_mb > 0) {
+          unanswered <- config$add_unanswered_bytes(session_id, ws_message_bytes(event$data))
+          if (unanswered > limit_mb * 1024^2) {
+            logger::log_warn(paste(
+              "Closing session {session_id} of app {app_name}: the app sent more than",
+              "max_unanswered_mb ({limit} MB) without a message from the browser"
+            ), session_id = session_id, app_name = app_name, limit = format(limit_mb, scientific = FALSE))
+            close_client_connection(session_id)
+            return()
+          }
+        }
         # Traffic from the app alone keeps a session from counting as idle
         config$touch_session(session_id)
         client_ws$send(event$data)
@@ -175,9 +246,11 @@ ConnectionManager <- setRefClass("ConnectionManager",
         # as the same app process runs.
         # Only a handshake that timed out is tried again: the app accepted the
         # connection. One that it refused or answered with an error fails.
+        # A clock set back since the first attempt, which R cannot rule out,
+        # ends the retries rather than prolonging them by as much
         elapsed <- as.numeric(difftime(Sys.time(), first_attempt, units = "secs"))
         timed_out <- grepl("handshake timed out", event$message %||% "", ignore.case = TRUE)
-        if (timed_out && !isTRUE(conn$ready) && elapsed < config$WS_BACKEND_CONNECT_SECONDS &&
+        if (timed_out && !isTRUE(conn$ready) && elapsed >= 0 && elapsed < config$WS_BACKEND_CONNECT_SECONDS &&
             !is.null(config$get_ws_connection(session_id)) &&
             identical(config$get_app_process(app_name), process) && is_process_alive(process) &&
             config$app_backend_verified(app_name)) {
@@ -206,12 +279,14 @@ ConnectionManager <- setRefClass("ConnectionManager",
       return(backend_ws)
     },
     handle_client_message = function(session_id, message, app_name) {
-      "Handle a message from a WebSocket client"
+      "Handle a message from a WebSocket client. FALSE: the message was refused, and the browser is to be told and its socket closed."
 
       # Validate message
       message_validation <- validate_ws_message(message, config$MAX_MESSAGE_SIZE)
       if (!message_validation$valid) {
-        logger::log_error("Invalid WebSocket message: {error}", error = message_validation$error)
+        logger::log_error("Invalid WebSocket message for app {app_name}, session {session_id}: {error}",
+          app_name = app_name, session_id = session_id, error = message_validation$error
+        )
         return(FALSE)
       }
       validated_message <- message_validation$sanitized
@@ -227,18 +302,29 @@ ConnectionManager <- setRefClass("ConnectionManager",
         return(FALSE)
       }
       config$touch_session(session_id)
+      config$clear_unanswered_bytes(session_id)
 
       tryCatch(
         {
           if (backend_conn$ready) {
             backend_conn$ws$send(validated_message)
           } else {
-            # Queue message for when connection is ready (with size limit)
+            # Messages wait here until the app's socket opens. The first that
+            # Shiny's browser code sends starts the session in the app, so a
+            # queue that dropped any would leave the browser connected to a
+            # session that never starts. A message that does not fit ends the
+            # session instead, which the browser shows as disconnected.
             current_pending <- backend_conn$pending_messages
-            if (length(current_pending) >= config$MAX_PENDING_MESSAGES) {
-              # Drop oldest messages to make room
-              current_pending <- tail(current_pending, config$MAX_PENDING_MESSAGES - 1)
-              logger::log_warn("Pending queue full, dropped oldest messages for app {app_name}", app_name = app_name)
+            pending_bytes <- sum(vapply(current_pending, ws_message_bytes, numeric(1))) +
+              ws_message_bytes(validated_message)
+            if (length(current_pending) >= config$MAX_PENDING_MESSAGES || pending_bytes > config$MAX_PENDING_BYTES) {
+              logger::log_warn(paste(
+                "Closing session {session_id} of app {app_name}: more messages arrived than are kept",
+                "while the app's socket opens ({count} messages, {bytes} bytes)"
+              ), session_id = session_id, app_name = app_name, count = length(current_pending) + 1,
+                bytes = format(pending_bytes, scientific = FALSE))
+              close_client_connection(session_id)
+              return(TRUE)
             }
             backend_conn$pending_messages <- append(current_pending, list(validated_message))
             config$add_backend_connection(session_id, backend_conn)
@@ -315,14 +401,34 @@ ConnectionManager <- setRefClass("ConnectionManager",
       count <- config$active_http_requests[[app_name]] %||% 0L
       assign(app_name, count + 1L, envir = config$active_http_requests)
     },
-    end_http_request = function(app_name) {
+    end_http_request = function(app_name, response_bytes = 0) {
+      "Record that a request to an app has its response, of response_bytes bytes"
       count <- max(0L, (config$active_http_requests[[app_name]] %||% 0L) - 1L)
       assign(app_name, count, envir = config$active_http_requests)
+      # The request ends when the app has answered, but httpuv only then
+      # starts sending the response, and gives no sign when the browser has
+      # it. A large page may take a slow browser longer than the grace period
+      # to download, and its WebSocket opens only after that, so the time
+      # such a download may take is added to the idle checks' grace.
+      transfer_seconds <- min(floor(response_bytes / config$HTTP_TRANSFER_BYTES_PER_SECOND),
+        config$HTTP_TRANSFER_MAX_SECONDS)
+      if (transfer_seconds > 0) {
+        ends <- proc.time()[["elapsed"]] + transfer_seconds
+        assign(app_name, max(ends, config$http_transfer_ends[[app_name]] %||% 0), envir = config$http_transfer_ends)
+      }
       # The response may be a new page whose WebSocket has not opened yet, so
       # the app is only checked for idleness after the usual grace period.
       if (count == 0L) {
         schedule_session_check(app_name)
       }
+    },
+    transfer_seconds_left = function(app_name) {
+      "How long a slow browser may still be receiving an app's last large response"
+      ends <- config$http_transfer_ends[[app_name]]
+      if (is.null(ends)) {
+        return(0)
+      }
+      max(0, ends - proc.time()[["elapsed"]])
     },
     schedule_session_check = function(app_name, grace_seconds = config$HTTP_SESSION_GRACE_SECONDS) {
       "Reclaim an HTTP-only launch after allowing time for a browser session"
@@ -330,6 +436,7 @@ ConnectionManager <- setRefClass("ConnectionManager",
       process <- config$get_app_process(app_name)
       if (is.null(process_manager) || is.null(app_config) || app_config$resident ||
           is.null(process) || config$get_app_connection_count(app_name) > 0L) return(FALSE)
+      grace_seconds <- grace_seconds + transfer_seconds_left(app_name)
       # Every finished HTTP request asks for a check, so drop the timer this
       # one replaces instead of leaving it queued for the whole grace period.
       cancel_session_check(app_name)

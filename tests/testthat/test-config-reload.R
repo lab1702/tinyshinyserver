@@ -21,13 +21,13 @@ reload_test_server <- function(path, env = parent.frame()) {
 test_that("read_reload_config reads the loaded file again with defaults", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
-  write_reload_config(path, list(list(name = "one", path = "/tmp")))
+  write_reload_config(path, list(list(name = "one", path = unused_app_path())))
   local_mocked_bindings(is_port_in_use = function(...) FALSE)
   config <- create_server_config(path)
   # An absolute path is kept as given, links and all
   expect_equal(config$config_file, path)
 
-  write_reload_config(path, list(list(name = "two", path = "/tmp", resident = TRUE)), title = "  New  ")
+  write_reload_config(path, list(list(name = "two", path = unused_app_path(), resident = TRUE)), title = "  New  ")
   check <- config$read_reload_config()
   expect_true(check$valid)
   expect_equal(check$config$apps[[1]]$name, "two")
@@ -40,14 +40,14 @@ test_that("read_reload_config reads the loaded file again with defaults", {
 test_that("read_reload_config reports invalid files", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
-  write_reload_config(path, list(list(name = "one", path = "/tmp")))
+  write_reload_config(path, list(list(name = "one", path = unused_app_path())))
   local_mocked_bindings(is_port_in_use = function(...) FALSE)
   config <- create_server_config(path)
 
   writeLines("{ invalid json }", path)
   expect_false(config$read_reload_config()$valid)
 
-  write_reload_config(path, list(list(name = "bad name", path = "/tmp")))
+  write_reload_config(path, list(list(name = "bad name", path = unused_app_path())))
   check <- config$read_reload_config()
   expect_false(check$valid)
   expect_match(check$error, "validation failed")
@@ -63,7 +63,7 @@ test_that("read_reload_config reports invalid files", {
 test_that("read_reload_config rejects listener changes", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
-  apps <- list(list(name = "one", path = "/tmp"))
+  apps <- list(list(name = "one", path = unused_app_path()))
   write_reload_config(path, apps, proxy_host = "localhost")
   local_mocked_bindings(is_port_in_use = function(...) FALSE)
   config <- create_server_config(path)
@@ -87,7 +87,7 @@ test_that("read_reload_config creates a new log_dir and rejects one it cannot wr
   blocker <- tempfile()
   new_logs <- tempfile()
   on.exit(unlink(c(path, blocker, new_logs), recursive = TRUE), add = TRUE)
-  apps <- list(list(name = "one", path = "/tmp"))
+  apps <- list(list(name = "one", path = unused_app_path()))
   write_reload_config(path, apps)
   local_mocked_bindings(is_port_in_use = function(...) FALSE)
   config <- create_server_config(path)
@@ -116,12 +116,12 @@ test_that("read_reload_config creates a new log_dir and rejects one it cannot wr
 test_that("reload endpoint rejects a bad file without requesting a reload", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
-  write_reload_config(path, list(list(name = "one", path = "/tmp")))
+  write_reload_config(path, list(list(name = "one", path = unused_app_path())))
   local_mocked_bindings(is_port_in_use = function(...) FALSE)
   config <- create_server_config(path)
   req <- list(HTTP_X_TINYSHINYSERVER_REQUEST = "management")
 
-  write_reload_config(path, list(list(name = "one", path = "/tmp")), proxy_port = 4000)
+  write_reload_config(path, list(list(name = "one", path = unused_app_path())), proxy_port = 4000)
   result <- route_management_request("/api/reload", "POST", req, config, list(), list())
   expect_equal(result$status, 400)
   body <- jsonlite::fromJSON(result$body)
@@ -129,7 +129,7 @@ test_that("reload endpoint rejects a bad file without requesting a reload", {
   expect_match(body$message, "proxy_port changed")
   expect_false(config$reload_requested)
 
-  write_reload_config(path, list(list(name = "two", path = "/tmp")))
+  write_reload_config(path, list(list(name = "two", path = unused_app_path())))
   result <- route_management_request("/api/reload", "POST", req, config, list(), list())
   expect_equal(result$status, 200)
   expect_true(jsonlite::fromJSON(result$body)$success)
@@ -143,11 +143,11 @@ test_that("reload endpoint rejects a bad file without requesting a reload", {
 test_that("a reload names the configuration fields that had no effect", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
-  write_reload_config(path, list(list(name = "app", path = "/tmp", resident = TRUE)))
+  write_reload_config(path, list(list(name = "app", path = unused_app_path(), resident = TRUE)))
   test <- reload_test_server(path)
   config <- test$server$config
 
-  write_reload_config(path, list(list(name = "app", path = "/tmp", resdient = TRUE)), restart_dealy = 1)
+  write_reload_config(path, list(list(name = "app", path = unused_app_path(), resdient = TRUE)), restart_dealy = 1)
   test$server$reload()
   expect_true(config$last_reload$success)
   expect_equal(config$last_reload$message,
@@ -157,7 +157,7 @@ test_that("a reload names the configuration fields that had no effect", {
 test_that("the status API reports the latest reload outcome", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
-  write_reload_config(path, list(list(name = "app", path = "/tmp", resident = TRUE)))
+  write_reload_config(path, list(list(name = "app", path = unused_app_path(), resident = TRUE)))
   test <- reload_test_server(path)
   config <- test$server$config
   req <- list(HTTP_X_TINYSHINYSERVER_REQUEST = "management")
@@ -177,7 +177,7 @@ test_that("the status API reports the latest reload outcome", {
   test$server$reload()
   expect_equal(status()$last_reload, list(success = FALSE, message = "Could not stop apps: app"))
 
-  write_reload_config(path, list(list(name = "app", path = "/tmp")), proxy_port = 4000)
+  write_reload_config(path, list(list(name = "app", path = unused_app_path())), proxy_port = 4000)
   test$server$reload()
   expect_false(status()$last_reload$success)
   expect_match(status()$last_reload$message, "proxy_port changed")
@@ -186,7 +186,7 @@ test_that("the status API reports the latest reload outcome", {
 test_that("reload stops everything, applies the file, and starts resident apps", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
-  write_reload_config(path, list(list(name = "old", path = "/tmp", resident = TRUE)))
+  write_reload_config(path, list(list(name = "old", path = unused_app_path(), resident = TRUE)))
   test <- reload_test_server(path)
   server <- test$server
   config <- server$config
@@ -198,8 +198,8 @@ test_that("reload stops everything, applies the file, and starts resident apps",
   config$set_app_starting("old")
 
   write_reload_config(path, list(
-    list(name = "resident", path = "/tmp", resident = TRUE),
-    list(name = "ondemand", path = "/tmp")
+    list(name = "resident", path = unused_app_path(), resident = TRUE),
+    list(name = "ondemand", path = unused_app_path())
   ), title = "Reloaded", starting_port = 4001, base_path = "/apps/")
   result <- server$reload()
 
@@ -221,11 +221,11 @@ test_that("reload finishes when the new log_dir stops being writable after its c
   path <- tempfile(fileext = ".json")
   new_logs <- tempfile("tss-new-logs")
   on.exit(unlink(c(path, new_logs), recursive = TRUE), add = TRUE)
-  write_reload_config(path, list(list(name = "old", path = "/tmp", resident = TRUE)))
+  write_reload_config(path, list(list(name = "old", path = unused_app_path(), resident = TRUE)))
   test <- reload_test_server(path)
   local_mocked_bindings(setup_logging = function(...) stop("Cannot write the server log"))
 
-  write_reload_config(path, list(list(name = "resident", path = "/tmp", resident = TRUE)),
+  write_reload_config(path, list(list(name = "resident", path = unused_app_path(), resident = TRUE)),
     title = "Reloaded", log_dir = new_logs)
   result <- test$server$reload()
 
@@ -262,9 +262,11 @@ test_that("a reload with the real process manager stops an app that the file no 
   expect_true(server$reload()$valid)
   expect_false(removed$is_alive())
   expect_named(config$get_all_app_processes(), "kept")
-  # Nothing that was scheduled for the removed app brings it back
+  # Nothing that was scheduled for the removed app brings it back, such as
+  # the readiness check due half a second after its start
   server$process_manager$health_check()
-  later::run_now(0.1)
+  deadline <- Sys.time() + 1
+  while (Sys.time() < deadline) later::run_now(0.05)
   expect_named(config$get_all_app_processes(), "kept")
 })
 
@@ -272,12 +274,12 @@ test_that("a reload applies a new log level even when it keeps the previous serv
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
   on.exit(logger::log_threshold("INFO", namespace = "tinyshinyserver"), add = TRUE)
-  write_reload_config(path, list(list(name = "app", path = "/tmp")))
+  write_reload_config(path, list(list(name = "app", path = unused_app_path())))
   test <- reload_test_server(path)
   logger::log_threshold("INFO", namespace = "tinyshinyserver")
   local_mocked_bindings(setup_logging = function(...) stop("Cannot write the server log"))
 
-  write_reload_config(path, list(list(name = "app", path = "/tmp")), log_level = "ERROR")
+  write_reload_config(path, list(list(name = "app", path = unused_app_path())), log_level = "ERROR")
   expect_true(test$server$reload()$valid)
   expect_equal(attr(logger::log_threshold(namespace = "tinyshinyserver"), "level"), "ERROR")
 })
@@ -285,7 +287,7 @@ test_that("a reload applies a new log level even when it keeps the previous serv
 test_that("an app that fails to start does not stop the other resident apps or the reload", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
-  write_reload_config(path, list(list(name = "old", path = "/tmp", resident = TRUE)))
+  write_reload_config(path, list(list(name = "old", path = unused_app_path(), resident = TRUE)))
   test <- reload_test_server(path)
   start_app <- test$server$process_manager$start_app
   test$server$field("process_manager", utils::modifyList(test$server$process_manager, list(
@@ -293,8 +295,8 @@ test_that("an app that fails to start does not stop the other resident apps or t
   )))
 
   write_reload_config(path, list(
-    list(name = "broken", path = "/tmp", resident = TRUE),
-    list(name = "working", path = "/tmp", resident = TRUE)
+    list(name = "broken", path = unused_app_path(), resident = TRUE),
+    list(name = "working", path = unused_app_path(), resident = TRUE)
   ), title = "Reloaded")
   result <- test$server$reload()
 
@@ -306,10 +308,10 @@ test_that("an app that fails to start does not stop the other resident apps or t
 test_that("reload leaves apps running when the file is rejected", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
-  write_reload_config(path, list(list(name = "app", path = "/tmp", resident = TRUE)))
+  write_reload_config(path, list(list(name = "app", path = unused_app_path(), resident = TRUE)))
   test <- reload_test_server(path)
 
-  write_reload_config(path, list(list(name = "app", path = "/tmp")), management_port = 4000)
+  write_reload_config(path, list(list(name = "app", path = unused_app_path())), management_port = 4000)
   result <- test$server$reload()
 
   expect_false(result$valid)
@@ -321,10 +323,10 @@ test_that("reload leaves apps running when the file is rejected", {
 test_that("reload restarts the previous configuration when ports cannot be assigned", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
-  write_reload_config(path, list(list(name = "app", path = "/tmp", resident = TRUE)))
+  write_reload_config(path, list(list(name = "app", path = unused_app_path(), resident = TRUE)))
   test <- reload_test_server(path)
 
-  write_reload_config(path, list(list(name = "new", path = "/tmp", resident = TRUE)))
+  write_reload_config(path, list(list(name = "new", path = unused_app_path(), resident = TRUE)))
   local_mocked_bindings(is_port_in_use = function(...) TRUE)
   result <- test$server$reload()
 
@@ -339,15 +341,15 @@ test_that("reload keeps the previous configuration when an app does not stop", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
   write_reload_config(path, list(
-    list(name = "stuck", path = "/tmp", resident = TRUE),
-    list(name = "other", path = "/tmp", resident = TRUE)
+    list(name = "stuck", path = unused_app_path(), resident = TRUE),
+    list(name = "other", path = unused_app_path(), resident = TRUE)
   ))
   test <- reload_test_server(path)
   config <- test$server$config
   # The mocked stop_all_apps leaves this process registered, as a failed stop does
   config$add_app_process("stuck", list(is_alive = function() TRUE))
 
-  write_reload_config(path, list(list(name = "new", path = "/tmp", resident = TRUE)), starting_port = 4001)
+  write_reload_config(path, list(list(name = "new", path = unused_app_path(), resident = TRUE)), starting_port = 4001)
   result <- test$server$reload()
 
   expect_false(result$valid)
@@ -362,7 +364,7 @@ test_that("reload keeps the previous configuration when an app does not stop", {
 test_that("reload applies a changed log_level", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
-  write_reload_config(path, list(list(name = "app", path = "/tmp")))
+  write_reload_config(path, list(list(name = "app", path = unused_app_path())))
   levels <- character()
   local_mocked_bindings(is_port_in_use = function(...) FALSE,
     setup_logging = function(log_dir, log_level = "INFO") levels <<- c(levels, log_level),
@@ -372,7 +374,7 @@ test_that("reload applies a changed log_level", {
   server <- TinyShinyServer$new(path)
   expect_equal(levels, "INFO")
 
-  write_reload_config(path, list(list(name = "app", path = "/tmp")), log_level = "debug")
+  write_reload_config(path, list(list(name = "app", path = unused_app_path())), log_level = "debug")
   expect_true(server$reload()$valid)
   expect_equal(levels, c("INFO", "DEBUG"))
 
@@ -384,7 +386,7 @@ test_that("reload applies a changed log_level", {
 test_that("the event loop runs a requested reload", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
-  write_reload_config(path, list(list(name = "app", path = "/tmp")))
+  write_reload_config(path, list(list(name = "app", path = unused_app_path())))
   server <- reload_test_server(path)$server
   reloads <- 0
   # Install the loop method before replacing the method it calls
@@ -394,11 +396,19 @@ test_that("the event loop runs a requested reload", {
     server$config$shutdown_requested <- TRUE
     stop("reload failure is logged, not fatal")
   }, envir = server)
-  local_mocked_bindings(service = function(...) NULL, .package = "httpuv")
+  # Were the real reload run instead, the loop would not end by itself; it
+  # ends after many turns, and the test fails rather than hangs
+  turns <- 0
+  local_mocked_bindings(service = function(...) {
+    turns <<- turns + 1
+    if (turns >= 100) server$config$shutdown_requested <- TRUE
+    NULL
+  }, .package = "httpuv")
 
   server$config$reload_requested <- TRUE
   run_event_loop()
 
+  expect_equal(turns, 1)
   expect_equal(reloads, 1)
   expect_false(server$config$reload_requested)
   expect_equal(server$config$last_reload, list(success = FALSE, message = "reload failure is logged, not fatal"))
@@ -425,8 +435,8 @@ test_that("an app that a reload cannot stop keeps the state of its process", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
   write_reload_config(path, list(
-    list(name = "stuck", path = "/tmp", resident = TRUE),
-    list(name = "other", path = "/tmp", resident = TRUE)
+    list(name = "stuck", path = unused_app_path(), resident = TRUE),
+    list(name = "other", path = unused_app_path(), resident = TRUE)
   ))
   test <- reload_test_server(path)
   config <- test$server$config
@@ -436,7 +446,7 @@ test_that("an app that a reload cannot stop keeps the state of its process", {
   config$set_app_document("other", list(type = "shiny"))
   config$note_start_failure("other")
 
-  write_reload_config(path, list(list(name = "new", path = "/tmp", resident = TRUE)))
+  write_reload_config(path, list(list(name = "new", path = unused_app_path(), resident = TRUE)))
   expect_false(test$server$reload()$valid)
   # Without its document, the app would serve its other documents
   expect_identical(config$get_app_document("stuck"), document)
@@ -449,7 +459,7 @@ test_that("an app that a reload cannot stop keeps the state of its process", {
 test_that("a reload that changes health_check_interval applies it at once", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
-  write_reload_config(path, list(list(name = "app", path = "/tmp")), health_check_interval = 86400)
+  write_reload_config(path, list(list(name = "app", path = unused_app_path())), health_check_interval = 86400)
   test <- reload_test_server(path)
   timers <- list()
   local_mocked_bindings(later = function(func, delay = 0, ...) {
@@ -463,7 +473,7 @@ test_that("a reload that changes health_check_interval applies it at once", {
   first <- Filter(function(timer) timer$delay == 5, timers)
   expect_length(first, 1)
 
-  write_reload_config(path, list(list(name = "app", path = "/tmp")), health_check_interval = 10)
+  write_reload_config(path, list(list(name = "app", path = unused_app_path())), health_check_interval = 10)
   expect_true(test$server$reload()$valid)
   expect_true(first[[1]]$cancelled)
   expect_equal(timers[[length(timers)]]$delay, 10)

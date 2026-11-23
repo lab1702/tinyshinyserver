@@ -12,7 +12,6 @@ library(flexdashboard)
 library(shiny)
 library(DT)
 library(plotly)
-library(dplyr)
 
 # Generate sample data
 set.seed(123)
@@ -45,7 +44,7 @@ p("This interactive report shows monthly business metrics including sales, profi
 ```
 
 Column
-=====================================
+-------------------------------------
 
 ### Monthly Trends
 
@@ -118,7 +117,7 @@ renderUI({
 ```
 
 Column
-=====================================
+-------------------------------------
 
 ### Data Table
 

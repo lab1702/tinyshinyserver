@@ -30,12 +30,18 @@ httpuv_request <- function(headers, ...) {
   req
 }
 
+# The path of an app that a test never starts. It names no directory, so that
+# reading a configuration reads no shared directory such as /tmp, whose
+# documents would be checked for apps that serve the same one, and judged
+# for an on-demand app that cannot start.
+unused_app_path <- function() file.path(tempdir(), "tss-unused-app")
+
 # The configuration that read_config() returns for a minimal file plus the given settings
 read_test_config <- function(...) {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
   settings <- utils::modifyList(
-    list(apps = list(list(name = "app", path = "/tmp")), log_dir = tempdir(), starting_port = 3001),
+    list(apps = list(list(name = "app", path = unused_app_path())), log_dir = tempdir(), starting_port = 3001),
     list(...)
   )
   writeLines(jsonlite::toJSON(settings, auto_unbox = TRUE), path)

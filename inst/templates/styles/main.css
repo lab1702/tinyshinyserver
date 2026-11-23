@@ -14,7 +14,7 @@
   --border-strong: light-dark(#cdd2d9, #3a414b);
   --text: light-dark(#1b1f24, #e6edf3);
   --text-muted: light-dark(#5a636e, #8b949e);
-  --text-subtle: light-dark(#7d8590, #6e7681);
+  --text-subtle: light-dark(#666e78, #848d97);
 
   --accent: light-dark(#2459d6, #4d8dff);
   --accent-hover: light-dark(#1b47b3, #72a5ff);
@@ -27,6 +27,8 @@
   --warning-soft: light-dark(#fff4d4, rgba(210, 153, 34, 0.15));
   --danger: light-dark(#c9252d, #f85149);
   --danger-hover: light-dark(#a51d24, #ff6a62);
+  /* A danger background that white text meets 4.5:1 contrast on */
+  --danger-solid: light-dark(#c9252d, #da3633);
   --danger-soft: light-dark(#ffebe9, rgba(248, 81, 73, 0.14));
   --dormant: light-dark(#6639ba, #a78bfa);
   --dormant-soft: light-dark(#f1ebff, rgba(167, 139, 250, 0.14));
@@ -83,7 +85,11 @@ button {
 }
 
 :focus-visible {
-  outline: none;
+  /* The ring is a shadow, which forced-colors modes such as Windows High
+     Contrast remove; they draw the transparent outline in a system color, so
+     the focus stays visible there. */
+  outline: 2px solid transparent;
+  outline-offset: 2px;
   box-shadow: var(--focus-ring);
 }
 
@@ -349,10 +355,46 @@ button {
   border-radius: var(--radius-sm);
   background: var(--surface);
   font-size: 14px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
 }
 
-.notice[hidden] {
-  display: none;
+.notice-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* With no message, the notice is hidden from view but kept in the
+   accessibility tree, as a live region must be for screen readers to announce
+   the text that is later put in it. */
+.notice.notice-empty {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.notice-dismiss {
+  flex: none;
+  padding: 0 4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-muted);
+  font-size: 18px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.notice-dismiss:hover {
+  color: var(--text);
 }
 
 .notice-success {
@@ -718,14 +760,17 @@ button {
 }
 
 .shutdown-btn:hover {
-  background: var(--danger);
-  border-color: var(--danger);
+  background: var(--danger-solid);
+  border-color: var(--danger-solid);
   color: #ffffff;
 }
 
 .restart-btn:disabled,
 .reload-btn:disabled,
-.shutdown-btn:disabled {
+.shutdown-btn:disabled,
+.restart-btn[aria-disabled="true"],
+.reload-btn[aria-disabled="true"],
+.shutdown-btn[aria-disabled="true"] {
   opacity: 0.55;
   cursor: not-allowed;
   background: var(--surface);

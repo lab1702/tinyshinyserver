@@ -35,7 +35,13 @@ main <- function() {
   })
   on.exit(httpuv::stopServer(foreign$server), add = TRUE)
   writeLines(jsonlite::toJSON(list(management = management$url, foreign = foreign$url), auto_unbox = TRUE), file.path(folder, "urls.json"))
-  deadline <- Sys.time() + 60
-  while (!file.exists(file.path(folder, "stop")) && Sys.time() < deadline) later::run_now(.01)
+  # Serve until the test asks to stop or its Node process is gone; the long
+  # deadline only guards against a test that neither stops nor exits
+  parent <- ps::ps_parent()
+  deadline <- Sys.time() + 600
+  while (!file.exists(file.path(folder, "stop")) && Sys.time() < deadline &&
+    isTRUE(tryCatch(ps::ps_is_running(parent), error = function(e) FALSE))) {
+    later::run_now(.01)
+  }
 }
 main()

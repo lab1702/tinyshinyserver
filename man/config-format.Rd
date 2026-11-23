@@ -34,6 +34,7 @@ other values shown are the defaults.
   "max_request_size_mb": 100,
   "max_response_size_mb": 1024,
   "idle_timeout_minutes": 30,
+  "max_unanswered_mb": 256,
   "log_level": "INFO"
 }
 }
@@ -50,7 +51,7 @@ warning in \code{server.log} at startup and after a reload.
 \describe{
   \item{\code{apps}}{Array of apps to host. Each app must have a \code{name} and a \code{path}; see \sQuote{Application Configuration}.}
   \item{\code{starting_port}}{First port to try when assigning ports to apps; a whole number from 1 to 65535. See \sQuote{Port Assignment}.}
-  \item{\code{log_dir}}{Directory for the server and app logs. The server writes \code{server.log}, and each app writes \code{<name>_output.log} and \code{<name>_error.log}; the previous run's logs are kept as \code{<name>_output.prev.log} and \code{<name>_error.prev.log}.}
+  \item{\code{log_dir}}{Directory for the server and app logs. The server writes \code{server.log}, and each app writes \code{<name>_output.log} and \code{<name>_error.log}; the previous run's logs are kept as \code{<name>_output.prev.log} and \code{<name>_error.prev.log}. For a Quarto app, the server also records its renders of the document in \code{<name>_render.rds}.}
 }
 }
 
@@ -67,6 +68,7 @@ warning in \code{server.log} at startup and after a reload.
   \item{\code{max_request_size_mb}}{Largest HTTP request body, in megabytes, that the proxy accepts; a positive finite number (default: 100). Larger bodies, and bodies sent with chunked transfer encoding, are rejected with HTTP 413 before they are read. Apps that raise \code{shiny.maxRequestSize} above this need a larger value.}
   \item{\code{max_response_size_mb}}{Largest app response, in megabytes, that the proxy forwards; a positive finite number (default: 1024). The proxy stops receiving a larger response and answers HTTP 502.}
   \item{\code{idle_timeout_minutes}}{Minutes without a WebSocket message, in either direction, after which a session is closed and the browser shows the app as disconnected; a non-negative finite number (default: 30). \code{0} keeps idle sessions open. Idle sessions are checked every 5 minutes.}
+  \item{\code{max_unanswered_mb}}{The most data, in megabytes, that an app may send a WebSocket session without a message from the browser in between; a non-negative finite number (default: 256). \code{0} sets no limit. Above it, the session is closed and the browser shows the app as disconnected; reloading the page reconnects it. The proxy cannot tell how much of what it sends a browser has been read, so this limits the memory that one browser that stops reading can make the server use. A dashboard left open without interaction that receives more than this needs a larger value, or \code{0}.}
   \item{\code{log_level}}{Least severe messages written to \code{server.log}: \code{"DEBUG"}, \code{"INFO"}, \code{"WARN"}, or \code{"ERROR"}, in any letter case (default: \code{"INFO"}). \code{"DEBUG"} also records the first 100 characters of every WebSocket message, which can include what users type.}
 }
 }

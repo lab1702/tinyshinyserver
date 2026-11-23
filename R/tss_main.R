@@ -95,11 +95,21 @@ TinyShinyServer <- setRefClass("TinyShinyServer",
         list(name = "management", host = "127.0.0.1", port = config$config$management_port %||% 3839)
       )
       for (server in ports) {
-        if (is_port_in_use(server$host, server$port)) {
-          stop(sprintf(
-            "The %s port %s is already in use, perhaps by another server; nothing was started",
-            server$name, server$port
-          ), call. = FALSE)
+        if (is_port_in_use(server$host, server$port, loopback = TRUE)) {
+          # A port that nothing answers on could not be opened for another
+          # reason, such as a port below 1024 without the right to use it, or
+          # an IPv6 address on a machine without IPv6. Saying it is in use
+          # would send the user looking for a server that does not exist.
+          answered <- loopback_port_accepts(server$port) || loopback_port_accepts(server$port, address = "::1")
+          reason <- if (answered) {
+            "is already in use by another program, perhaps another server"
+          } else {
+            sprintf(
+              "could not be opened at %s; another program may hold it, or the port or address is not available to this user or on this machine",
+              server$host
+            )
+          }
+          stop(sprintf("The %s port %s %s; nothing was started", server$name, server$port, reason), call. = FALSE)
         }
       }
       invisible(FALSE)

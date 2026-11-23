@@ -885,7 +885,7 @@ test_that("root redirect does not launch a dormant app", {
   config$config <- list(apps = list(list(name = "app", resident = FALSE)))
   manager <- list(start_app_on_demand = function(...) stop("must not start"))
   response <- handle_proxy_request("/proxy/app", "GET", "x=1", list(), config, manager)
-  expect_equal(response$status, 308)
+  expect_equal(response$status, 307)
   expect_equal(response$headers$Location, "/proxy/app/?x=1")
 })
 

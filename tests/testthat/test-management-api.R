@@ -613,19 +613,22 @@ test_that("an unexpected management error is answered with HTTP 500 and no detai
 })
 
 test_that("handle_app_restart restarts running app", {
-  temp_app_dir <- file.path(tempdir(), "restart_api_test")
-  dir.create(temp_app_dir, showWarnings = FALSE, recursive = TRUE)
-  writeLines("# placeholder", file.path(temp_app_dir, "app.R"))
+  temp_app_dir <- make_test_app_dir()
+  log_dir <- tempfile("tss-logs")
+  on.exit(unlink(c(temp_app_dir, log_dir), recursive = TRUE), add = TRUE)
 
   config <- ShinyServerConfig$new()
+  # Retire the new fake process, so that its scheduled readiness check does nothing
   on.exit(stop_test_app_processes(config), add = TRUE)
   config$config <- list(
     apps = list(
       list(name = "app1", path = temp_app_dir, port = 3001, resident = TRUE)
     ),
-    log_dir = tempdir(),
+    log_dir = log_dir,
     restart_delay = 0
   )
+  # The new process is not needed to see the restart answered
+  local_mocked_bindings(r_bg = function(...) list(is_alive = function() TRUE), .package = "callr")
 
   # Add a running process
   mock_process <- list(
@@ -646,9 +649,6 @@ test_that("handle_app_restart restarts running app", {
   expect_equal(result$status, 200)
   body <- jsonlite::fromJSON(result$body)
   expect_true(body$success)
-
-  # Cleanup
-  unlink(temp_app_dir, recursive = TRUE)
 })
 
 test_that("handle_app_restart handles restart failure", {

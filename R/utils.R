@@ -68,15 +68,33 @@ request_headers <- function(req) {
 
 # A value from a request as it is written to the log. Control characters,
 # with which a client could move the cursor of a terminal that follows the log
-# or overwrite a line, become "?", and a long value is cut short.
+# or overwrite a line, become "?". That includes the C1 controls, such as
+# U+009B, which some terminals read as the start of an escape sequence, and
+# every byte that is not part of valid UTF-8, so the log stays valid UTF-8. A
+# long value is cut short, between characters, at max_bytes bytes.
 log_value <- function(value, max_bytes = 200) {
   if (is.null(value) || length(value) == 0) {
     return("(none)")
   }
-  value <- gsub("[\001-\037\177]", "?", as.character(value)[1], useBytes = TRUE)
-  bytes <- charToRaw(value)
-  if (length(bytes) > max_bytes) {
-    value <- paste0(rawToChar(bytes[seq_len(max_bytes)]), "...")
+  value <- as.character(value)[1]
+  if (is.na(value)) {
+    return("NA")
+  }
+  # The bytes are read as UTF-8 whatever encoding the string is marked with,
+  # since a client sends bytes and not text in a declared encoding
+  value <- rawToChar(charToRaw(value))
+  Encoding(value) <- "UTF-8"
+  value <- iconv(value, "UTF-8", "UTF-8", sub = "?")
+  if (is.na(value)) {
+    return("?")
+  }
+  value <- gsub("[\\x{01}-\\x{1F}\\x{7F}-\\x{9F}]", "?", value, perl = TRUE)
+  if (nchar(value, type = "bytes") > max_bytes) {
+    # No character is shorter than a byte, so the first max_bytes characters
+    # hold every one that can be kept
+    chars <- strsplit(substr(value, 1, max_bytes), "", fixed = TRUE)[[1]]
+    kept <- cumsum(nchar(chars, type = "bytes")) <= max_bytes
+    value <- paste0(paste(chars[kept], collapse = ""), "...")
   }
   value
 }
@@ -339,12 +357,15 @@ create_method_not_allowed_response <- function(allowed = c("GET", "HEAD")) {
   response
 }
 
+# The redirect is temporary: its target includes base_path, which a reload can
+# change, and browsers keep a permanent redirect (301 or 308) without asking
+# again, so they would go on to the old prefix's URL, which no longer exists.
 create_redirect_response <- function(location, query_string = NULL) {
-  "Create a permanent redirect that keeps the method, body, and query string"
+  "Create a temporary redirect that keeps the method, body, and query string"
 
   query <- query_string %||% ""
   if (query != "" && !startsWith(query, "?")) query <- paste0("?", query)
-  list(status = 308L, headers = list(Location = paste0(location, query)), body = "")
+  list(status = 307L, headers = list(Location = paste0(location, query)), body = "")
 }
 
 # A reverse proxy serving the apps under base_path may pass the prefix through
@@ -390,12 +411,15 @@ process_owns_port <- function(process, port) {
   }, error = function(e) FALSE)
 }
 
-is_port_in_use <- function(host, port) {
-  "Check if a port is in use (an app could not listen on it)"
+is_port_in_use <- function(host, port, loopback = FALSE) {
+  "Check if a port is in use (a server could not listen on it, or local clients would reach another program there)"
 
   # Listen on the port briefly, as an app will. Connecting to it instead
   # waits about a second for each free port on Windows, where a refused
   # loopback connection is retried, which held up startup and every reload.
+  # A port that cannot be opened for another reason, such as a port below
+  # 1024 without the right to use it or an address this machine lacks, is
+  # also reported: no server could listen on it either.
   in_use <- tryCatch(
     {
       server <- httpuv::startServer(host, port, list(), quiet = TRUE)
@@ -404,24 +428,45 @@ is_port_in_use <- function(host, port) {
     },
     error = function(e) TRUE
   )
+  if (in_use) {
+    return(TRUE)
+  }
   # On Windows and macOS, a program that listens on every interface does not
   # keep an app from listening on 127.0.0.1 at the same port, and would then
   # lose its loopback connections to the app. Such a program accepts a
   # connection at once, so the wait for a free port is kept short. On Linux,
   # it keeps the app from listening, which the check above finds.
-  if (!in_use && identical(host, "127.0.0.1") && !identical(Sys.info()[["sysname"]], "Linux")) {
-    in_use <- loopback_port_accepts(port)
+  #
+  # The proxy and management servers are opened in a browser as
+  # "localhost", which may reach either loopback address, so for them
+  # (loopback = TRUE) a program on 127.0.0.1 or [::1] is found whatever
+  # address the server listens on: listening on 127.0.0.1 does not keep a
+  # program from [::1], nor, on Windows, does listening on every interface
+  # keep one from 127.0.0.1. A machine without IPv6 refuses the [::1]
+  # connection at once.
+  addresses <- if (isTRUE(loopback)) {
+    c("127.0.0.1", "::1")
+  } else if (identical(host, "127.0.0.1") && !identical(Sys.info()[["sysname"]], "Linux")) {
+    "127.0.0.1"
+  } else {
+    character()
   }
-  in_use
+  for (address in addresses) {
+    if (loopback_port_accepts(port, address = address)) {
+      return(TRUE)
+    }
+  }
+  FALSE
 }
 
-# Whether something accepts a TCP connection on 127.0.0.1 at a port within
-# timeout_ms milliseconds
-loopback_port_accepts <- function(port, timeout_ms = 100) {
+# Whether something accepts a TCP connection on a loopback address (127.0.0.1
+# or ::1) at a port within timeout_ms milliseconds
+loopback_port_accepts <- function(port, timeout_ms = 100, address = "127.0.0.1") {
   handle <- new_backend_handle(connect_only = TRUE, forbid_reuse = TRUE, connecttimeout_ms = timeout_ms)
+  authority <- if (grepl(":", address, fixed = TRUE)) paste0("[", address, "]") else address
   tryCatch(
     {
-      curl::curl_fetch_memory(paste0("http://127.0.0.1:", port, "/"), handle = handle)
+      curl::curl_fetch_memory(paste0("http://", authority, ":", port, "/"), handle = handle)
       TRUE
     },
     error = function(e) FALSE

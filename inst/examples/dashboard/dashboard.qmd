@@ -55,9 +55,8 @@ dateRangeInput("date_range",
 
 ## Row
 
-### Key Performance Indicators
-
 ```{r}
+#| title: Key Performance Indicators
 uiOutput("kpi_cards")
 ```
 
@@ -273,22 +272,19 @@ output$data_table <- DT::renderDataTable({
 
 ## Row
 
-### Time Series Analysis
-
 ```{r}
+#| title: Time Series Analysis
 plotlyOutput("trend_plot")
 ```
 
-### Category Breakdown
-
 ```{r}
+#| title: Category Breakdown
 plotlyOutput("category_plot")
 ```
 
 ## Row
 
-### Data Table
-
 ```{r}
+#| title: Data Table
 DT::dataTableOutput("data_table")
 ```

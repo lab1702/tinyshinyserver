@@ -1048,6 +1048,25 @@ test_that("long appstart_timeout extends startup state lifetime", {
   expect_equal(config$get_app_startup_state("app")$state, "timeout")
 })
 
+test_that("a clock set back prolongs neither a startup nor the wait after a failure", {
+  config <- ShinyServerConfig$new()
+  config$config <- list(apps = list(list(name = "app", appstart_timeout = 2)), restart_delay = 5)
+  # Times an hour from now, as a clock set back an hour leaves them
+  assign("app", list(state = "starting", started_at = Sys.time() + 3600), envir = config$app_startup_state)
+  state <- config$get_app_startup_state("app")
+  expect_equal(state$state, "starting")
+  # Requests wait no longer than the app's appstart_timeout
+  expect_equal(state$elapsed, 0)
+  # The startup's window starts again, and so ends in time
+  restarted <- get("app", envir = config$app_startup_state)$started_at
+  expect_lt(abs(as.numeric(difftime(restarted, Sys.time(), units = "secs"))), 5)
+
+  assign("app", Sys.time() + 3600, envir = config$start_failures)
+  expect_equal(config$start_backoff_seconds("app"), 0)
+  config$note_start_failure("app")
+  expect_gt(config$start_backoff_seconds("app"), 4)
+})
+
 test_that("title must be a non-empty string of at most 100 characters", {
   config <- ShinyServerConfig$new()
   base_config <- list(apps = list(list(name = "app1", path = "/path")),
@@ -1228,7 +1247,7 @@ test_that("port assignments reach the server log", {
     logger::log_appender(logger::appender_console, namespace = "tinyshinyserver")
     unlink(c(path, log_dir), recursive = TRUE)
   }, add = TRUE)
-  writeLines(jsonlite::toJSON(list(apps = list(list(name = "app", path = "/tmp")),
+  writeLines(jsonlite::toJSON(list(apps = list(list(name = "app", path = unused_app_path())),
     log_dir = log_dir, starting_port = 3001), auto_unbox = TRUE), path)
   local_mocked_bindings(is_port_in_use = function(...) FALSE)
   TinyShinyServer$new(path)

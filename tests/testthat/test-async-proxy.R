@@ -216,8 +216,10 @@ test_that("async proxy preserves methods, binary uploads, content types and HEAD
 })
 
 test_that("slow backend responses do not block unrelated HTTP requests", {
+  # The other requests start 0.05 seconds in and must finish before the slow
+  # one, which a loaded machine could delay past a shorter wait
   backend <- start_test_http_server(function(req) promises::promise(function(resolve, reject) {
-    later::later(function() resolve(create_html_response("slow result")), 0.3)
+    later::later(function() resolve(create_html_response("slow result")), 2)
   }))
   on.exit(httpuv::stopServer(backend$server), add = TRUE)
   config <- proxy_test_config(backend$port)
@@ -250,7 +252,7 @@ test_that("slow backend responses do not block unrelated HTTP requests", {
       ws$onError(function(event) reject(simpleError(event$message)))
     }, 0.05)
   })
-  result <- await_response(promises::promise_all(slow = slow, health = health, ws = websocket_response))
+  result <- await_response(promises::promise_all(slow = slow, health = health, ws = websocket_response), timeout = 10)
   expect_equal(tail(completed, 1), "slow")
   expect_setequal(head(completed, 2), c("health", "websocket"))
   expect_equal(result$ws, "still responsive")
@@ -638,11 +640,15 @@ test_that("transfers wait on their sockets instead of polling on a timer", {
 test_that("startup grace expiry returns 503 without blocking timers", {
   backend <- start_test_http_server(function(req) create_html_response("unused"))
   stop_test_http_server(backend)
-  config <- proxy_test_config(backend$port, timeout = 0.2)
+  # The grace period must not have run out before the request arrives, or no
+  # wait happens; a loaded machine could take longer than a short one
+  config <- proxy_test_config(backend$port, timeout = 1)
   config$set_app_starting("app")
   ran <- FALSE
   later::later(function() {ran <<- TRUE}, 0.05)
-  result <- await_response(forward_request("GET", backend$url, list(), "app", config))
+  result <- forward_request("GET", backend$url, list(), "app", config)
+  expect_true(promises::is.promise(result))
+  result <- await_response(result)
   expect_true(ran)
   expect_equal(result$status, 503)
   expect_match(result$body, "starting up")
@@ -894,7 +900,7 @@ test_that("bare app URLs redirect with query and method preserved", {
   on.exit(httpuv::stopServer(proxy$server), add = TRUE)
   url <- paste0(proxy$url, "/proxy/app?x=a%2Fb&y=2")
   response <- await_response(fetch_backend_async(url, curl::new_handle(followlocation = FALSE)))
-  expect_equal(response$status_code, 308)
+  expect_equal(response$status_code, 307)
   expect_equal(curl::parse_headers_list(response$headers)$location, "/proxy/app/?x=a%2Fb&y=2")
   expect_length(methods, 0)
   response <- await_response(fetch_backend_async(url, curl::new_handle(followlocation = TRUE, postfields = "payload")))
@@ -910,7 +916,9 @@ test_that("idle shutdown waits for every concurrent HTTP response", {
   }))
   on.exit(httpuv::stopServer(backend$server), add = TRUE)
   config <- proxy_test_config(backend$port)
-  config$HTTP_SESSION_GRACE_SECONDS <- 0.2
+  # Long enough that no check runs out between a response and the
+  # expectations after it, even on a loaded machine
+  config$HTTP_SESSION_GRACE_SECONDS <- 1.5
   config$config$apps[[1]]$resident <- FALSE
   alive <- TRUE
   kills <- 0
@@ -941,7 +949,7 @@ test_that("idle shutdown waits for every concurrent HTTP response", {
   expect_match(rawToChar(response$content), "first")
   expect_equal(kills, 0)
   expect_equal(config$active_http_requests$app, 0)
-  deadline <- Sys.time() + 2
+  deadline <- Sys.time() + 5
   while (kills == 0 && Sys.time() < deadline) later::run_now(.01)
   expect_equal(kills, 1)
 })
@@ -1213,6 +1221,23 @@ test_that("cookies with no path get an app-scoped default path", {
   expect_equal(nested$`set-cookie`, "session=abc; HttpOnly; Path=/proxy/app/folder")
 })
 
+test_that("a request path cannot add attributes to a cookie's default path", {
+  headers <- charToRaw("HTTP/1.1 200 OK\r\nSet-Cookie: sid=abc123; HttpOnly\r\n\r\n")
+  cookie <- function(path) proxy_response_headers(headers, paste0("http://127.0.0.1:3001", path), "app", "GET")$`set-cookie`
+  # A ";" in the path would otherwise end the Path attribute
+  crafted <- "/x;Domain=example.com;SameSite=None;Secure;Max-Age=31536000;y/page"
+  expect_equal(cookie(crafted), "sid=abc123; HttpOnly; Path=/proxy/app/")
+  # The directory is cut back to the last one before the character
+  expect_equal(cookie("/a/b;Domain=example.com/c/page"), "sid=abc123; HttpOnly; Path=/proxy/app/a")
+  expect_equal(cookie("/a/;x/page"), "sid=abc123; HttpOnly; Path=/proxy/app/a")
+  expect_equal(cookie("/a,b/page"), "sid=abc123; HttpOnly; Path=/proxy/app/")
+  # Characters that a URL path carries as they are, and encoded ones, are kept
+  expect_equal(cookie("/a%3Bb/c-d_e.f~g/page"), "sid=abc123; HttpOnly; Path=/proxy/app/a%3Bb/c-d_e.f~g")
+  for (path in c(crafted, "/a/b;Domain=example.com/c/page", "/a,b/page")) {
+    expect_no_match(cookie(path), "Domain|SameSite|Max-Age", info = path)
+  }
+})
+
 test_that("a response larger than max_response_size_mb is not kept or forwarded", {
   # A collector that passes the limit keeps nothing, in memory or on disk
   spooled <- function() list.files(tempdir(), pattern = "^tss-response-")
@@ -1244,4 +1269,137 @@ test_that("a response larger than max_response_size_mb is not kept or forwarded"
   response <- await_response(forward_request("GET", backend$url, list(), "app", config), timeout = 10)
   expect_equal(response$status, 200)
   expect_identical(response$body, payload)
+})
+
+test_that("a response that passes max_response_size_mb while it arrives ends its transfer", {
+  spooled <- function() list.files(tempdir(), pattern = "^tss-response-")
+  before <- spooled()
+  payload <- raw(8 * 1024^2)
+  backend <- start_test_http_server(function(req) {
+    list(status = 200L, headers = list("Content-Type" = "application/octet-stream"), body = payload)
+  })
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  config <- proxy_test_config(backend$port)
+  config$config$max_response_size_mb <- 1
+  # Written to a file early on, so that a cancelled transfer must remove it
+  collector <- response_body_collector
+  local_mocked_bindings(response_body_collector = function(...) collector(limit = 256 * 1024, ...))
+  cancel <- curl::multi_cancel
+  cancelled <- 0
+  local_mocked_bindings(multi_cancel = function(handle) {
+    cancelled <<- cancelled + 1
+    cancel(handle)
+  }, .package = "curl")
+  logged <- capture_test_log({
+    response <- await_response(forward_request("GET", backend$url, list(), "app", config), timeout = 30)
+  })
+  expect_equal(response$status, 502)
+  # The transfer ended before the app had sent the whole response
+  expect_equal(cancelled, 1)
+  expect_true(any(grepl("larger than max_response_size_mb", logged, fixed = TRUE)))
+  expect_length(setdiff(spooled(), before), 0)
+})
+
+test_that("a response that cannot be written to its file is not kept, and fails with the reason", {
+  spooled <- function() list.files(tempdir(), pattern = "^tss-response-")
+  before <- spooled()
+  writer <- curl::file_writer
+
+  # The file cannot be opened, as on a full disk
+  local_mocked_bindings(file_writer = function(path, ...) {
+    function(x, close = FALSE) stop("Failed to open file: disk is full")
+  }, .package = "curl")
+  body <- response_body_collector(limit = 10)
+  expect_no_error(body$write(as.raw(1:20)))
+  expect_s3_class(body$error(), "backend_response_spool_error")
+  expect_match(conditionMessage(body$error()), "disk is full", fixed = TRUE)
+  expect_false(body$exceeded())
+  expect_no_error(body$write(as.raw(1:20)))
+  expect_null(body$finish())
+  expect_no_error(body$discard())
+
+  # The data is written, but the file cannot be closed
+  local_mocked_bindings(file_writer = function(path, ...) {
+    real <- writer(path, ...)
+    function(x, close = FALSE) {
+      if (close) {
+        real(raw(), close = TRUE)
+        stop("Failed to flush file: disk is full")
+      }
+      real(x)
+    }
+  }, .package = "curl")
+  body <- response_body_collector(limit = 10)
+  body$write(as.raw(1:20))
+  path <- environment(body$write)$path
+  expect_true(file.exists(path))
+  expect_null(body$finish())
+  expect_match(conditionMessage(body$error()), "Failed to flush file", fixed = TRUE)
+  expect_false(file.exists(path))
+
+  # A proxied request then fails with HTTP 502, and the log says why
+  local_mocked_bindings(file_writer = function(path, ...) {
+    function(x, close = FALSE) stop("Failed to open file: disk is full")
+  }, .package = "curl")
+  payload <- as.raw(seq_len(65536) %% 251)
+  backend <- start_test_http_server(function(req) {
+    list(status = 200L, headers = list("Content-Type" = "application/octet-stream"), body = payload)
+  })
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  config <- proxy_test_config(backend$port)
+  collector <- response_body_collector
+  local_mocked_bindings(response_body_collector = function(...) collector(limit = 1024, ...))
+  logged <- capture_test_log({
+    response <- await_response(forward_request("GET", backend$url, list(), "app", config), timeout = 10)
+  })
+  expect_equal(response$status, 502)
+  expect_no_match(response$body, "disk")
+  expect_true(any(grepl("could not be written to a temporary file: Failed to open file: disk is full", logged,
+    fixed = TRUE)))
+  expect_length(setdiff(spooled(), before), 0)
+})
+
+test_that("a transfer that cannot be driven is cancelled and fails", {
+  backend <- start_test_http_server(function(req) promises::promise(function(resolve, reject) {
+    later::later(function() resolve(create_html_response("late")), 0.5)
+  }))
+  on.exit(httpuv::stopServer(backend$server), add = TRUE)
+  cancel <- curl::multi_cancel
+  cancelled <- 0
+  local_mocked_bindings(
+    multi_fdset = function(...) stop("Cannot list the transfer's sockets"),
+    multi_cancel = function(handle) {
+      cancelled <<- cancelled + 1
+      cancel(handle)
+    },
+    .package = "curl"
+  )
+  expect_error(await_response(fetch_backend_async(backend$url, new_backend_handle())),
+    "Cannot list the transfer's sockets")
+  expect_equal(cancelled, 1)
+})
+
+test_that("a request whose app restarts while it waits for the app is not forwarded", {
+  config <- proxy_test_config(3001)
+  config$set_app_starting("app")
+  replacement <- list(is_alive = function() TRUE, get_pid = function() -1L)
+  fetched <- FALSE
+  local_mocked_bindings(
+    wait_for_backend = function(url, wait_seconds) promises::promise(function(resolve, reject) {
+      # A restart replaces the app's process while the request waits
+      later::later(function() {
+        config$add_app_process("app", replacement)
+        resolve(TRUE)
+      }, 0)
+    }),
+    fetch_backend_async = function(...) {
+      fetched <<- TRUE
+      promises::promise_reject(simpleError("must not be forwarded"))
+    }
+  )
+  result <- await_response(forward_request("GET", "http://127.0.0.1:3001/", list(), "app", config))
+  expect_equal(result$status, 503)
+  expect_match(result$body, "App 'app' restarted, please retry", fixed = TRUE)
+  expect_equal(result$headers[["Retry-After"]], "2")
+  expect_false(fetched)
 })

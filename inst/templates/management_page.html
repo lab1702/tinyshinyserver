@@ -35,7 +35,7 @@
     <main class="container page">
         <div class="page-header">
             <div>
-                <h1>Server management</h1>
+                <h1 tabindex="-1">Server management</h1>
                 <p>Monitor and manage your Shiny applications.</p>
             </div>
             <div class="page-actions">
@@ -50,7 +50,12 @@
             </div>
         </div>
 
-        <div class="notice" id="notice" role="status" hidden></div>
+        <!-- The live region stays in the page while empty: one that appears
+             already holding its text is not announced by every screen reader -->
+        <div class="notice notice-empty" id="noticeBox">
+            <div class="notice-text" id="notice" role="status"></div>
+            <button class="notice-dismiss" id="noticeDismiss" type="button" aria-label="Dismiss message" onclick="hideNotice()" hidden>&times;</button>
+        </div>
 
         <div class="status-grid" id="systemStatus">
             <div class="loading">Loading system status...</div>
@@ -99,13 +104,53 @@
             isConnected = connected;
         }
 
-        function showNotice(message, kind) {
-            const notice = document.getElementById("notice");
-            notice.textContent = message;
-            notice.className = "notice notice-" + (kind || "info");
-            notice.hidden = false;
+        function hideNotice() {
+            const box = document.getElementById("noticeBox");
             clearTimeout(noticeTimer);
-            noticeTimer = setTimeout(() => { notice.hidden = true; }, 6000);
+            // The focus would otherwise drop to the page itself with the
+            // dismiss button
+            const hadFocus = box.contains(document.activeElement);
+            box.className = "notice notice-empty";
+            document.getElementById("notice").textContent = "";
+            document.getElementById("noticeDismiss").hidden = true;
+            if (hadFocus) document.querySelector("main h1").focus();
+        }
+
+        // Other notices go after a while, but not while the visitor is
+        // pointing at or has focused one
+        function scheduleNoticeHide() {
+            noticeTimer = setTimeout(() => {
+                const box = document.getElementById("noticeBox");
+                if (box.matches(":hover") || box.contains(document.activeElement)) {
+                    scheduleNoticeHide();
+                } else {
+                    hideNotice();
+                }
+            }, 8000);
+        }
+
+        function showNotice(message, kind) {
+            document.getElementById("noticeBox").className = "notice notice-" + (kind || "info");
+            document.getElementById("notice").textContent = message;
+            document.getElementById("noticeDismiss").hidden = false;
+            clearTimeout(noticeTimer);
+            // An error, which may be the only place its reason is shown apart
+            // from server.log, stays until it is dismissed or replaced
+            if (kind !== "error") scheduleNoticeHide();
+        }
+
+        // aria-disabled, unlike disabled, keeps the keyboard focus on a button
+        // while its request runs; the button then ignores clicks
+        function setBusy(button, busy) {
+            if (busy) {
+                button.setAttribute("aria-disabled", "true");
+            } else {
+                button.removeAttribute("aria-disabled");
+            }
+        }
+
+        function isBusy(button) {
+            return button.getAttribute("aria-disabled") === "true";
         }
 
         function formatDuration(seconds) {
@@ -239,7 +284,7 @@
                 const card = element("div", "app-card");
                 const header = element("div", "app-header");
                 const badge = element("span");
-                header.append(element("div", "app-name", app.name), badge);
+                header.append(element("h3", "app-name", app.name), badge);
                 const details = element("div", "app-details");
                 const actions = element("div", "app-actions");
                 card.append(header, details, actions);
@@ -297,8 +342,14 @@
             }
             if (entry.button) {
                 const busy = restarting.has(app.name);
-                entry.button.disabled = busy;
+                setBusy(entry.button, busy);
                 setText(entry.button, busy ? "Restarting..." : "Restart");
+                // The app's name tells one card's button from another's for
+                // assistive technology
+                const label = (busy ? "Restarting " : "Restart ") + app.name;
+                if (entry.button.getAttribute("aria-label") !== label) {
+                    entry.button.setAttribute("aria-label", label);
+                }
             }
             return entry.card;
         }
@@ -404,6 +455,9 @@
         const connectionRows = new Map();
 
         function restartApp(appName) {
+            if (restarting.has(appName)) {
+                return;
+            }
             restarting.add(appName);
             renderApps();
             const done = () => {
@@ -437,6 +491,10 @@
         }
 
         function reloadConfig() {
+            const button = document.querySelector(".reload-btn");
+            if (isBusy(button)) {
+                return;
+            }
             const confirmed = confirm(
                 "Reload the configuration file and restart all applications? " +
                 "Every app will stop and all users will be disconnected. " +
@@ -447,13 +505,12 @@
                 return;
             }
 
-            const button = document.querySelector(".reload-btn");
             const label = button.querySelector("span");
-            button.disabled = true;
+            setBusy(button, true);
             label.textContent = "Reloading...";
 
             const restore = () => {
-                button.disabled = false;
+                setBusy(button, false);
                 label.textContent = "Reload Config & Restart All";
             };
 
@@ -505,6 +562,10 @@
         }
 
         function shutdownServer() {
+            const button = document.querySelector(".shutdown-btn");
+            if (isBusy(button)) {
+                return;
+            }
             const confirmed = confirm(
                 "Are you sure you want to shutdown the entire Shiny server? " +
                 "This will stop all applications and the management interface. " +
@@ -515,9 +576,8 @@
                 return;
             }
 
-            const button = document.querySelector(".shutdown-btn");
             const label = button.querySelector("span");
-            button.disabled = true;
+            setBusy(button, true);
             label.textContent = "Shutting down...";
 
             if (refreshInterval) {
@@ -525,7 +585,7 @@
             }
 
             const restore = () => {
-                button.disabled = false;
+                setBusy(button, false);
                 label.textContent = "Shutdown Server";
                 refreshInterval = setInterval(refreshAll, 5000);
             };

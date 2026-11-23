@@ -155,6 +155,8 @@ app_start_problem <- function(app_config) {
 # rendered since, is current while it is newer than every source file. Files
 # that rendering writes, and the server's own files in log_dir, are not
 # sources: when log_dir lies in the app directory, they change at every start.
+# Either way, a page is out of date once a package that it was rendered with
+# has another version, as after an update of R or of the app's library.
 #
 # The result carries the sources as attribute "sources", for
 # render_quarto_document() to record. start_app() hands this function to the
@@ -205,6 +207,51 @@ quarto_needs_render <- function(qmd_file, log_dir = NULL, state_file = NULL) {
     return(answer(TRUE))
   }
 
+  # The page keeps the scripts and styles of the packages that it was
+  # rendered with, and records their versions. rmarkdown would render it
+  # again when one of them has changed, but start_app() tells it not to
+  # render, so the versions are compared here, as rmarkdown compares them. A
+  # page whose record cannot be read, as where jsonlite is missing, is judged
+  # by its files alone, so that it is not rendered at every start.
+  packages_changed <- function() {
+    lines <- tryCatch(readLines(output, encoding = "UTF-8", warn = FALSE), error = function(e) character())
+    ends <- which(lines == "</script>")
+    context <- function(name) {
+      tag <- paste0("<script type=\"application/shiny-prerendered\" data-context=\"", name, "\">")
+      start <- which(grepl(tag, lines, fixed = TRUE))
+      if (length(start) == 0) {
+        return(NULL)
+      }
+      start <- start[length(start)]
+      end <- ends[ends > start][1]
+      if (is.na(end) || end == start + 1) {
+        return(NULL)
+      }
+      json <- gsub("<\\u002f", "</", lines[(start + 1):(end - 1)], fixed = TRUE)
+      tryCatch(jsonlite::unserializeJSON(paste(json, collapse = "\n")), error = function(e) NULL)
+    }
+    recorded <- character()
+    for (dependency in context("dependencies")) {
+      if (is.list(dependency) && is.character(dependency$package) && is.character(dependency$pkgVersion)) {
+        recorded[dependency$package[1]] <- dependency$pkgVersion[1]
+      }
+    }
+    execution <- context("execution_dependencies")$packages
+    if (is.data.frame(execution) && all(c("packages", "version") %in% names(execution))) {
+      recorded[as.character(execution[["packages"]])] <- as.character(execution[["version"]])
+    }
+    for (package in names(recorded)) {
+      installed <- tryCatch(
+        suppressWarnings(as.character(utils::packageDescription(package, fields = "Version"))),
+        error = function(e) NA_character_
+      )
+      if (!identical(installed, unname(recorded[package]))) {
+        return(TRUE)
+      }
+    }
+    FALSE
+  }
+
   state <- if (is.null(state_file)) NULL else tryCatch(suppressWarnings(readRDS(state_file)), error = function(e) NULL)
   if (is.list(state) && identical(state$document, qmd_file)) {
     # A render that has not finished may have left an incomplete page
@@ -215,13 +262,13 @@ quarto_needs_render <- function(qmd_file, log_dir = NULL, state_file = NULL) {
     same_page <- identical(state$page, list(mtime = as.numeric(page$mtime), size = as.numeric(page$size)))
     # A page that has changed since was rendered elsewhere, and is judged as one
     if (same_page) {
-      return(answer(!identical(state$sources, snapshot)))
+      return(answer(!identical(state$sources, snapshot) || packages_changed()))
     }
   }
 
   # A file as new as the page may have changed after it was rendered
   changed <- snapshot$mtime >= as.numeric(file.mtime(output))
-  answer(any(is.na(changed) | changed))
+  answer(any(is.na(changed) | changed) || packages_changed())
 }
 
 # Render a Quarto document with the Quarto CLI, recording in state_file that a
@@ -252,6 +299,18 @@ render_quarto_document <- function(qmd_file, sources, state_file, quarto_bin) {
   if (is.na(Sys.getenv("QUARTO_R", unset = NA))) {
     Sys.setenv(QUARTO_R = R.home("bin"))
   }
+  # The R session that Quarto starts would make its library paths from the
+  # startup files again, and could find other versions of the packages that
+  # the app is served with, or none of them. It gets this session's library
+  # paths, which the app's .Renviron or profile may have set, and reads no
+  # user environment file: this session's variables, which it inherits,
+  # already hold what that file set. A profile that sets the library paths,
+  # such as one that activates renv, runs there too and sets them again.
+  saved <- Sys.getenv(c("R_LIBS", "R_ENVIRON_USER"), unset = NA, names = TRUE)
+  on.exit(for (name in names(saved)) {
+    if (is.na(saved[[name]])) Sys.unsetenv(name) else do.call(Sys.setenv, structure(list(saved[[name]]), names = name))
+  }, add = TRUE)
+  Sys.setenv(R_LIBS = paste(.libPaths(), collapse = .Platform$path.sep), R_ENVIRON_USER = nullfile())
   status <- system2(quarto_bin, c("render", shQuote(qmd_file)))
   if (!identical(as.integer(status), 0L)) {
     stop("quarto render ", qmd_file, " failed with exit status ", status, call. = FALSE)
@@ -286,7 +345,12 @@ apply_environ_libraries <- function(environ_file) {
   }
   others <- setdiff(assigned, library_vars)
   saved <- Sys.getenv(others, unset = NA, names = TRUE)
-  read <- tryCatch(readRenviron(environ_file), error = function(e) FALSE, warning = function(w) FALSE)
+  # R skips a line that it cannot read, with a warning that it gave once
+  # already, at the app's startup; the file's other lines still apply
+  read <- tryCatch(
+    withCallingHandlers(readRenviron(environ_file), warning = function(w) invokeRestart("muffleWarning")),
+    error = function(e) FALSE
+  )
   for (name in others) {
     if (is.na(saved[[name]])) {
       Sys.unsetenv(name)
@@ -325,6 +389,20 @@ app_environ_file <- function(app_path, named = Sys.getenv("R_ENVIRON_USER", unse
   }
   local <- file.path(app_path, ".Renviron")
   if (file.exists(local)) local else path.expand("~/.Renviron")
+}
+
+# The names of the variables that an environment file assigns, in lines of the
+# form name=value, as R reads it
+environ_assigned_names <- function(environ_file) {
+  if (!is.character(environ_file) || length(environ_file) != 1 || is.na(environ_file) ||
+    !file.exists(environ_file) || dir.exists(environ_file)) {
+    return(character())
+  }
+  lines <- tryCatch(readLines(environ_file, warn = FALSE), error = function(e) character())
+  unique(sub(
+    "^[[:space:]]*([^=[:space:]]+)[[:space:]]*=.*$", "\\1",
+    grep("^[[:space:]]*[^#=[:space:]]+[[:space:]]*=", lines, value = TRUE)
+  ))
 }
 
 # The user profile that R reads when it starts in the working directory: the
@@ -418,6 +496,12 @@ ProcessManager <- setRefClass("ProcessManager",
       # one, the app keeps this session's, such as a renv library, even where
       # ~/.Renviron, which R would read instead, sets R_LIBS_USER.
       library_file <- if (identical(environ_file, file.path(app_path, ".Renviron"))) environ_file else ""
+      # R reads the environment file before it chooses a profile, so a file
+      # that sets R_PROFILE_USER has chosen the app's profile, as it would for
+      # the app run on its own: R ran the profile that it names, or none for
+      # an empty value (on Windows, which cannot hold an empty variable, the
+      # one that R finds without it). No other profile is run after it.
+      profile_chosen <- "R_PROFILE_USER" %in% environ_assigned_names(environ_file)
       # The record of the server's renders of the app's Quarto document
       state_file <- file.path(log_dir, paste0(app_name, "_render.rds"))
       # Found here, where the quarto package is loaded; needed only to render
@@ -443,9 +527,10 @@ ProcessManager <- setRefClass("ProcessManager",
       # reported and the app still starts. The site profile runs too.
       process <- callr::r_bg(
         function(app_path, port, type, file, needs_render, render_document, log_dir, state_file,
-                 quarto_bin, environ_libraries, library_file, profile_file, profile_setting) {
+                 quarto_bin, environ_libraries, library_file, profile_file, profile_setting,
+                 profile_chosen) {
           environ_libraries(library_file)
-          profile <- profile_file(profile_setting)
+          profile <- if (profile_chosen) "" else profile_file(profile_setting)
           if (nzchar(profile) && file.exists(profile)) {
             tryCatch(source(profile), error = function(e) {
               message("Error in ", normalizePath(profile), ": ", conditionMessage(e))
@@ -498,7 +583,8 @@ ProcessManager <- setRefClass("ProcessManager",
           environ_libraries = environ_libraries,
           library_file = library_file,
           profile_file = profile_file,
-          profile_setting = Sys.getenv("R_PROFILE_USER", unset = NA)
+          profile_setting = Sys.getenv("R_PROFILE_USER", unset = NA),
+          profile_chosen = profile_chosen
         ),
         stdout = output_log,
         stderr = error_log,
@@ -570,8 +656,15 @@ ProcessManager <- setRefClass("ProcessManager",
           return(TRUE)
         }
 
-        # If not ready and still within the startup window, schedule another check
+        # If not ready and still within the startup window, schedule another
+        # check. R has no clock that cannot be set back: a clock set back
+        # during the startup would keep the window open for as long as it was
+        # set back, so the window starts again instead.
         elapsed <- as.numeric(difftime(Sys.time(), started_at, units = "secs"))
+        if (elapsed < 0) {
+          started_at <- Sys.time()
+          elapsed <- 0
+        }
         if (elapsed < startup_timeout) {
           later::later(function() {
             check_app_ready(app_name, app_port, process, attempt + 1, started_at)

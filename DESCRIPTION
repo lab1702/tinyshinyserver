@@ -17,8 +17,8 @@ Depends: R (>= 4.1.0)
 Imports:
     methods,
     shiny,
-    callr,
-    ps (>= 1.2.0),
+    callr (>= 3.2.0),
+    ps (>= 1.7.0),
     jsonlite,
     later (>= 1.4.0),
     curl (>= 3.3),
@@ -26,13 +26,13 @@ Imports:
     glue,
     httpuv (>= 1.5.5),
     websocket (>= 1.1.0),
-    logger,
+    logger (>= 0.2.0),
     rmarkdown,
     quarto,
     tools,
     utils
 Suggests:
-    testthat (>= 3.1.7),
+    testthat (>= 3.2.1),
     roxygen2,
     devtools,
     DT,

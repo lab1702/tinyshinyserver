@@ -69,6 +69,41 @@ test_that("get_client_ip returns unknown for missing info", {
 })
 
 # ============================================================================
+# log_value() tests
+# ============================================================================
+
+test_that("log_value replaces C0, DEL and C1 control characters", {
+  expect_equal(log_value("a\033[2Jb\tc\177"), "a?[2Jb?c?")
+  # U+009B (CSI) starts an escape sequence on terminals that read C1 controls
+  csi <- log_value("evil\u009b2J\u0085x")
+  expect_equal(csi, "evil?2J?x")
+  expect_true(validUTF8(csi))
+  expect_equal(log_value("café €"), "café €")
+})
+
+test_that("log_value writes every byte that is not valid UTF-8 as ?", {
+  raw_csi <- rawToChar(as.raw(c(0x65, 0x9b, 0x32, 0x4a)))
+  expect_equal(log_value(raw_csi), "e?2J")
+  bytes <- "a\xffb"
+  Encoding(bytes) <- "bytes"
+  expect_equal(log_value(bytes), "a?b")
+  expect_equal(log_value(NULL), "(none)")
+  expect_equal(log_value(character()), "(none)")
+  expect_equal(log_value(NA), "NA")
+})
+
+test_that("log_value cuts a long value between characters", {
+  cut <- log_value(paste0(strrep("a", 199), "€"))
+  expect_true(validUTF8(cut))
+  expect_equal(cut, paste0(strrep("a", 199), "..."))
+  euros <- log_value(strrep("€", 100))
+  expect_true(validUTF8(euros))
+  expect_equal(euros, paste0(strrep("€", 66), "..."))
+  expect_equal(log_value(strrep("a", 200)), strrep("a", 200))
+  expect_equal(log_value(strrep("a", 201)), paste0(strrep("a", 200), "..."))
+})
+
+# ============================================================================
 # generate_session_id() tests
 # ============================================================================
 
@@ -463,4 +498,45 @@ test_that("is_port_in_use also asks, where an app could share it, whether a port
   # Only the loopback address that apps use is asked about
   is_port_in_use("::1", port)
   expect_equal(asked, if (linux) 0 else 1)
+})
+
+test_that("is_port_in_use finds a program on either loopback address for the server's own ports", {
+  backend <- start_test_http_server(function(req) handle_health_check())
+  port <- backend$port
+  stop_test_http_server(backend)
+  asked <- character()
+  answering <- character()
+  local_mocked_bindings(loopback_port_accepts = function(port, timeout_ms = 100, address = "127.0.0.1") {
+    asked <<- c(asked, address)
+    address %in% answering
+  })
+  # Listening on every interface could ask the user to allow it through a
+  # firewall, so only loopback addresses are tried
+  for (host in c("127.0.0.1", "::1")) {
+    asked <- character()
+    answering <- character()
+    if (!is_port_in_use(host, port, loopback = TRUE)) {
+      expect_equal(asked, c("127.0.0.1", "::1"), info = host)
+    }
+    # A program on [::1] is found when the server would listen on 127.0.0.1
+    answering <- "::1"
+    expect_true(is_port_in_use(host, port, loopback = TRUE), label = host)
+    answering <- "127.0.0.1"
+    expect_true(is_port_in_use(host, port, loopback = TRUE), label = host)
+  }
+})
+
+test_that("loopback_port_accepts reaches a program on [::1]", {
+  server <- NULL
+  for (port in sample(20000:50000, 3)) {
+    server <- tryCatch(httpuv::startServer("::1", port, list(call = function(req) handle_health_check()), quiet = TRUE),
+      error = function(e) NULL)
+    if (!is.null(server)) break
+  }
+  if (is.null(server)) skip("IPv6 loopback unavailable")
+  on.exit(httpuv::stopServer(server), add = TRUE)
+  expect_true(loopback_port_accepts(port, address = "::1"))
+  # Listening on 127.0.0.1 does not keep a program from [::1], so only the
+  # check for the server's own ports finds it
+  expect_true(is_port_in_use("127.0.0.1", port, loopback = TRUE))
 })
