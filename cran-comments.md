@@ -70,11 +70,11 @@ that can affect existing users are:
 * Local: Windows 11 x64 (build 26300), x86_64-w64-mingw32,
   R 4.6.2 (2026-10-29 ucrt).
   Checked with `R CMD check --as-cran` on the source tarball built from
-  commit b3cc932, including the PDF manual and the CRAN incoming
+  commit ece7baf, including the PDF manual and the CRAN incoming
   feasibility check. The test suite was also run there at that commit with
   `NOT_CRAN=true`, which runs the tests skipped on CRAN.
-* R-hub (commit b3cc932, run
-  https://github.com/lab1702/tinyshinyserver/actions/runs/45199583077):
+* R-hub (commit ece7baf, run
+  https://github.com/lab1702/tinyshinyserver/actions/runs/45212260375):
   linux (R-devel), windows (R-devel), macos-arm64 (R-devel), gcc16, and
   ubuntu-gcc12.
 
@@ -85,21 +85,21 @@ from the build, so the package checked is identical.
 
 Local: 0 errors | 0 warnings | 0 notes.
 
-R-hub at commit b3cc932: 0 errors | 0 warnings | 0 notes on all five platforms.
+R-hub at commit ece7baf: 0 errors | 0 warnings | 0 notes on all five platforms.
 
-Test results: 3005 passes locally and on R-hub's windows (R-devel), with 12
+Test results: 3069 passes locally and on R-hub's windows (R-devel), with 12
 intentional skips on CRAN (timing checks of the port test and of forwarding
 many request headers, and ten tests that run R processes, such as apps that
 load shiny or a render with the Quarto CLI, and check their output, memory
 use, library paths, or cleanup).
 The other four R-hub platforms have one more skip: a test of keeping an
 app's log when it is held open runs only on Windows, the one platform that
-refuses to rename an open file. They have 3006 passes on the three Linux
-platforms and 3004 on macos-arm64 (R-devel): a test of a document name in
+refuses to rename an open file. They have 3070 passes on the three Linux
+platforms and 3068 on macos-arm64 (R-devel): a test of a document name in
 another letter case makes two more checks on a file system that tells
 letter case apart, which macOS's default file system, like Windows', does
 not. All runs had 0 failures and 0 warnings. One test's expectation count
-depends on timing. Locally with `NOT_CRAN=true`, the tests have 3072 passes
+depends on timing. Locally with `NOT_CRAN=true`, the tests have 3135 passes
 and no skips, failures, or warnings.
 
 ## Downstream dependencies
