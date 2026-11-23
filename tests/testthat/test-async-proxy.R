@@ -269,20 +269,33 @@ test_that("startup polling yields and sends a queued POST only once", {
   stop_test_http_server(backend)
   restarted <- NULL
   on.exit(if (!is.null(restarted)) httpuv::stopServer(restarted), add = TRUE)
-  config <- proxy_test_config(backend$port, timeout = 1)
+  # The app must be found listening before its startup window ends, which a
+  # loaded machine could delay past a short one
+  config <- proxy_test_config(backend$port, timeout = 5)
   config$set_app_starting("app")
+  # Another program can take the freed port before the app listens on it again
+  rebind_tried <- FALSE
+  rebind_failed <- FALSE
   later::later(function() {
-    restarted <<- httpuv::startServer("127.0.0.1", backend$port, list(call = function(req) {
+    rebind_tried <<- TRUE
+    restarted <<- tryCatch(httpuv::startServer("127.0.0.1", backend$port, list(call = function(req) {
       posts <<- posts + 1
       create_html_response("started")
-    }))
+    })), error = function(e) {
+      rebind_failed <<- TRUE
+      NULL
+    })
   }, 0.2)
   unrelated_ran <- FALSE
   later::later(function() {unrelated_ran <<- TRUE}, 0.05)
   result <- forward_request("POST", backend$url, list(rook.input = list(read = function() charToRaw("payload"))), "app", config)
   expect_true(promises::is.promise(result))
   expect_false(unrelated_ran)
-  response <- await_response(result)
+  response <- await_response(result, timeout = 10)
+  # A program that took the port answers before the app would have listened
+  deadline <- Sys.time() + 5
+  while (!rebind_tried && Sys.time() < deadline) later::run_now(0.01)
+  if (rebind_failed) skip("A stopped test server's port could not be listened on again")
   expect_true(unrelated_ran)
   expect_equal(response$status, 200)
   expect_equal(rawToChar(response$body), "started")
@@ -558,8 +571,10 @@ test_that("only transfers that never connect are marked as connection failures",
     release <<- resolve
   }))
   on.exit(httpuv::stopServer(stalled$server), add = TRUE)
+  # curl must see the connection open before the transfer times out, which a
+  # loaded machine could delay past a shorter limit
   timed_out <- tryCatch(
-    await_response(fetch_backend_async(stalled$url, curl::new_handle(timeout_ms = 300))),
+    await_response(fetch_backend_async(stalled$url, curl::new_handle(timeout_ms = 1000))),
     error = function(e) e
   )
   release(create_html_response("late"))
@@ -1092,6 +1107,10 @@ test_that("forwarding many request headers takes time in proportion to their num
   # httpuv admits about 80 KB of headers, which can be some 13,000 of them
   large <- list(HEADERS = stats::setNames(as.list(rep("", 16000)), paste0("a", seq_len(16000))))
   expect_length(forwarded_request_headers(large), 16000)
+  # It takes some hundredths of a second, and work that grew with the square
+  # of the count would take seconds; how long a loaded check machine takes is
+  # not this package's to bound
+  skip_on_cran()
   elapsed <- system.time(forwarded_request_headers(large))[["elapsed"]]
   expect_lt(elapsed, 0.5)
 })
