@@ -5,6 +5,10 @@ published on 2026-09-24 (CRAN package index checked on 2026-11-23).
 
 ## CRAN check problems in 0.2.1
 
+The CRAN package index lists a deadline of 2026-12-09 for this package
+(checked on 2026-11-23). This release fixes the check problem described
+below.
+
 The CRAN check results for 0.2.1 showed an ERROR on
 r-devel-linux-x86_64-debian-clang (as seen on 2026-11-20), and the noLD
 additional check still shows one (its output is from 2026-11-17). On
@@ -40,11 +44,11 @@ or `openssl`, and no longer suggests `roxygen2` or `devtools`.
 * Local: Windows 11 x64 (build 26300), x86_64-w64-mingw32,
   R 4.6.2 (2026-10-29 ucrt).
   Checked with `R CMD check --as-cran` on the source tarball built from
-  commit 1f158c2, including the PDF manual and the CRAN incoming
+  commit d059fb3, including the PDF manual and the CRAN incoming
   feasibility check. The test suite was also run there at that commit with
   `NOT_CRAN=true`, which runs the tests skipped on CRAN.
-* R-hub (commit 1f158c2, run
-  https://github.com/lab1702/tinyshinyserver/actions/runs/45266127642):
+* R-hub (commit d059fb3, run
+  https://github.com/lab1702/tinyshinyserver/actions/runs/45279376927):
   linux (R-devel), windows (R-devel), windows (R-oldrel, R 4.5.3),
   macos-arm64 (R-devel), macos-arm64 (R-oldrel, R 4.5.3), gcc16, and
   ubuntu-gcc12.
@@ -56,22 +60,26 @@ from the build, so the package checked is identical.
 
 Local: 0 errors | 0 warnings | 0 notes.
 
-R-hub at commit 1f158c2: 0 errors | 0 warnings | 0 notes on all seven platforms.
+R-hub at commit d059fb3: 0 errors | 0 warnings | 0 notes on all seven platforms.
 
 Test results: 3437 passes locally and on R-hub's two windows platforms
-(R-devel and R-oldrel), with 12 intentional skips on CRAN (timing checks of
-the port test and of forwarding many request headers, and ten tests that run
+(R-devel and R-oldrel), with 13 intentional skips on CRAN (timing checks of
+the port test and of forwarding many request headers; ten tests that run
 R processes, such as apps that load shiny or a render with the Quarto CLI,
-and check their output, memory use, library paths, or cleanup).
+and check their output, memory use, library paths, or cleanup; and one test
+that defines `.First()` in the global environment of the R session that runs
+the tests).
 The other five R-hub platforms have one more skip: a test of keeping an
 app's log when it is held open runs only on Windows, the one platform that
-refuses to rename an open file. They have 3438 passes on the three Linux
-platforms and 3436 on the two macos-arm64 platforms (R-devel and R-oldrel):
-a test of a document name in another letter case makes two more checks on a
-file system that tells letter case apart, which macOS's default file system,
-like Windows', does not. All runs had 0 failures and 0 warnings. One test's
+refuses to rename an open file. They have 3436 passes on the three Linux
+platforms and 3434 on the two macos-arm64 platforms (R-devel and R-oldrel).
+A test of the library path specifiers makes two more checks on Windows,
+where it also checks `%U` under a temporary `LOCALAPPDATA`, and a test of a
+document name in another letter case makes two more checks on a file system
+that tells letter case apart, which macOS's default file system, like
+Windows', does not. All runs had 0 failures and 0 warnings. One test's
 expectation count depends on timing. Locally with `NOT_CRAN=true`, the tests
-have 3503 passes and no skips, failures, or warnings.
+have 3507 passes and no skips, failures, or warnings.
 
 ## Downstream dependencies
 
