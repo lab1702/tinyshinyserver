@@ -529,5 +529,5 @@ To contribute, open an issue or a pull request on GitHub. Add tests for your cha
 ## Getting help
 
 - **In R**: `?start_tss`, `help("config-format")`, `help("example-config")`, and `?tinyshinyserver`
-- **Release notes**: [NEWS.md](NEWS.md), including the changes in 0.3.0 that reverse proxies need
+- **Release notes**: [NEWS.md](https://github.com/lab1702/tinyshinyserver/blob/main/NEWS.md), including the changes in 0.3.0 that reverse proxies need
 - **Bug reports and questions**: [GitHub Issues](https://github.com/lab1702/tinyshinyserver/issues)

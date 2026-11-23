@@ -19,7 +19,7 @@ Imports:
     shiny,
     callr (>= 3.7.0),
     ps (>= 1.7.0),
-    jsonlite,
+    jsonlite (>= 1.6),
     later (>= 1.4.0),
     curl (>= 3.3),
     promises,
