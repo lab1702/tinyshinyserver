@@ -13,18 +13,19 @@ library(shiny)
 library(DT)
 library(plotly)
 
-# Generate sample data
+# Generate sample data. Month is a factor so that the charts and the table
+# keep the months in calendar order rather than sorting them by name.
 set.seed(123)
 sales_data <- data.frame(
-  Month = month.name,
+  Month = factor(month.name, levels = month.name),
   Sales = round(runif(12, 50000, 150000), 0),
   Profit = round(runif(12, 10000, 50000), 0),
   Customers = round(runif(12, 500, 2000), 0)
 )
 ```
 
-Sidebar {.sidebar}
-=====================================
+Inputs {.sidebar}
+-------------------------------------
 
 ```{r}
 selectInput("metric", "Select Metric:",
@@ -85,33 +86,25 @@ renderUI({
   metric <- input$metric
   total_value <- sum(sales_data[[metric]])
   avg_value <- round(mean(sales_data[[metric]]), 0)
-  max_month <- sales_data$Month[which.max(sales_data[[metric]])]
+  max_month <- as.character(sales_data$Month[which.max(sales_data[[metric]])])
 
-  fluidRow(
-    column(
-      4,
-      div(
-        class = "well",
-        h3(format(total_value, big.mark = ","), style = "color: #337ab7;"),
-        p(paste("Total", metric))
-      )
-    ),
-    column(
-      4,
-      div(
-        class = "well",
-        h3(format(avg_value, big.mark = ","), style = "color: #5cb85c;"),
-        p(paste("Average", metric))
-      )
-    ),
-    column(
-      4,
-      div(
-        class = "well",
-        h3(max_month, style = "color: #f0ad4e;"),
-        p(paste("Best Month for", metric))
-      )
+  kpi <- function(value, label, color) {
+    div(
+      class = "well",
+      style = "flex: 1 1 8em; margin: 0;",
+      h3(value, style = paste0("margin-top: 0; color: ", color, ";")),
+      p(label, style = "margin: 0;")
     )
+  }
+
+  # A wrapping flex row rather than fluidRow(): a Bootstrap row's negative
+  # margins spill out of the panel and give it a horizontal scrollbar, and
+  # its fixed thirds clip the values when the panel is narrow.
+  div(
+    style = "display: flex; flex-wrap: wrap; gap: 10px;",
+    kpi(format(total_value, big.mark = ","), paste("Total", metric), "#337ab7"),
+    kpi(format(avg_value, big.mark = ","), paste("Average", metric), "#5cb85c"),
+    kpi(max_month, paste("Best Month for", metric), "#f0ad4e")
   )
 })
 ```
