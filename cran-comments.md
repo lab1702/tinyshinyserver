@@ -1,3 +1,25 @@
+## Resubmission
+
+This is a resubmission of version 0.3.0. The first submission, on 2026-11-24,
+passed the Windows pretest and failed the Debian pretest with one test
+failure, in "an app receives dot segments as the client sent them" in
+`tests/testthat/test-async-proxy.R`. The test requested `/a/%2e%2e/c`
+through the proxy and expected a test server to receive the same
+characters, but it received `/a/%2E%2E/c`. libcurl 8.20.0 and later write
+the hex digits of a percent-encoded character in a request path in upper
+case; the curl 8.23.0 command-line tool does the same with `--path-as-is`.
+The two paths mean the same, and the `.` and `..` segments that the test is
+about arrived as they were sent. This was a fault in the test, not in the
+package, and it is fixed: the test now compares the paths without regard to
+the letter case of those hex digits. NEWS.md and README.md, which said that
+an app receives the path exactly as the client sent it, now mention this
+change of letter case.
+
+Before this fix, the test passed on every test environment listed below, so
+none of them shows this behaviour of libcurl, and the corrected test has run
+only where the letter case does not change. Its comparison passes with the
+three paths that the Debian pretest log shows.
+
 ## Submission
 
 This is an update to version 0.3.0. The current CRAN version is 0.2.1,
@@ -44,14 +66,11 @@ or `openssl`, and no longer suggests `roxygen2` or `devtools`.
 * Local: Windows 11 x64 (build 26300), x86_64-w64-mingw32,
   R 4.6.2 (2026-10-29 ucrt).
   Checked with `R CMD check --as-cran` on the source tarball built from
-  commit 18cdb17, including the PDF manual and the CRAN incoming
+  commit c5f76ab, including the PDF manual and the CRAN incoming
   feasibility check. The test suite was also run there at that commit with
   `NOT_CRAN=true`, which runs the tests skipped on CRAN.
-* win-builder (commit 4c58a33, which differs from 18cdb17 only in this
-  file): R-devel (2026-11-17 r90926 ucrt), x86_64-w64-mingw32,
-  Windows Server 2022 x64 (build 20348), checked on 2026-11-24 (UTC).
-* R-hub (commit 18cdb17, run
-  https://github.com/lab1702/tinyshinyserver/actions/runs/45296481752):
+* R-hub (commit c5f76ab, run
+  https://github.com/lab1702/tinyshinyserver/actions/runs/45319163543):
   linux (R-devel), windows (R-devel), windows (R-oldrel, R 4.5.3),
   macos-arm64 (R-devel), macos-arm64 (R-oldrel, R 4.5.3), gcc16, and
   ubuntu-gcc12.
@@ -63,17 +82,15 @@ from the build, so the package checked is identical.
 
 Local: 0 errors | 0 warnings | 0 notes.
 
-win-builder (R-devel) at commit 4c58a33: 0 errors | 0 warnings | 0 notes.
+R-hub at commit c5f76ab: 0 errors | 0 warnings | 0 notes on all seven platforms.
 
-R-hub at commit 18cdb17: 0 errors | 0 warnings | 0 notes on all seven platforms.
-
-Test results: 3437 passes locally, on win-builder, and on R-hub's two
-windows platforms (R-devel and R-oldrel), with 13 intentional skips on CRAN
-(timing checks of the port test and of forwarding many request headers; ten
-tests that run R processes, such as apps that load shiny or a render with
-the Quarto CLI, and check their output, memory use, library paths, or
-cleanup; and one test that defines `.First()` in the global environment of
-the R session that runs the tests).
+Test results: 3437 passes locally and on R-hub's two windows platforms
+(R-devel and R-oldrel), with 13 intentional skips on CRAN (timing checks of
+the port test and of forwarding many request headers; ten tests that run
+R processes, such as apps that load shiny or a render with the Quarto CLI,
+and check their output, memory use, library paths, or cleanup; and one test
+that defines `.First()` in the global environment of the R session that runs
+the tests).
 The other five R-hub platforms have one more skip: a test of keeping an
 app's log when it is held open runs only on Windows, the one platform that
 refuses to rename an open file. They have 3436 passes on the three Linux
