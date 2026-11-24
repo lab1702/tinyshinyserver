@@ -47,6 +47,9 @@ or `openssl`, and no longer suggests `roxygen2` or `devtools`.
   commit 18cdb17, including the PDF manual and the CRAN incoming
   feasibility check. The test suite was also run there at that commit with
   `NOT_CRAN=true`, which runs the tests skipped on CRAN.
+* win-builder (commit 4c58a33, which differs from 18cdb17 only in this
+  file): R-devel (2026-11-17 r90926 ucrt), x86_64-w64-mingw32,
+  Windows Server 2022 x64 (build 20348), checked on 2026-11-24 (UTC).
 * R-hub (commit 18cdb17, run
   https://github.com/lab1702/tinyshinyserver/actions/runs/45296481752):
   linux (R-devel), windows (R-devel), windows (R-oldrel, R 4.5.3),
@@ -60,15 +63,17 @@ from the build, so the package checked is identical.
 
 Local: 0 errors | 0 warnings | 0 notes.
 
+win-builder (R-devel) at commit 4c58a33: 0 errors | 0 warnings | 0 notes.
+
 R-hub at commit 18cdb17: 0 errors | 0 warnings | 0 notes on all seven platforms.
 
-Test results: 3437 passes locally and on R-hub's two windows platforms
-(R-devel and R-oldrel), with 13 intentional skips on CRAN (timing checks of
-the port test and of forwarding many request headers; ten tests that run
-R processes, such as apps that load shiny or a render with the Quarto CLI,
-and check their output, memory use, library paths, or cleanup; and one test
-that defines `.First()` in the global environment of the R session that runs
-the tests).
+Test results: 3437 passes locally, on win-builder, and on R-hub's two
+windows platforms (R-devel and R-oldrel), with 13 intentional skips on CRAN
+(timing checks of the port test and of forwarding many request headers; ten
+tests that run R processes, such as apps that load shiny or a render with
+the Quarto CLI, and check their output, memory use, library paths, or
+cleanup; and one test that defines `.First()` in the global environment of
+the R session that runs the tests).
 The other five R-hub platforms have one more skip: a test of keeping an
 app's log when it is held open runs only on Windows, the one platform that
 refuses to rename an open file. They have 3436 passes on the three Linux
