@@ -178,7 +178,7 @@
 
 * The proxy no longer rejects, with HTTP 400, query strings that contain a literal `%`, such as `?discount=50%&x=1`, or paths with a name that only starts or ends with two dots, such as `/..hidden/`. Paths with a `..` segment are still rejected.
 
-* An app receives the request path exactly as the client sent it. `.` and `..` segments were removed on the way, including their `%2e` spellings, so `/proxy/app/a/%2e%2e/c` reached the app as `/c`.
+* An app receives the request path as the client sent it, except that with libcurl 8.20.0 or later the hex digits of a percent-encoded character arrive in upper case, so `%2e` arrives as `%2E`. `.` and `..` segments were removed on the way, including their `%2e` spellings, so `/proxy/app/a/%2e%2e/c` reached the app as `/c`.
 
 * A request body that the client sent without a `Content-Type` now reaches the app without one; the proxy labelled it `application/x-www-form-urlencoded`. A request with `Content-Length: 0` now reaches the app with that header and its `Content-Type`, which were both dropped.
 

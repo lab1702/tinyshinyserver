@@ -721,7 +721,9 @@ forward_request <- function(method, target_url, req, app_name, config, template_
       # its pool are never reused, so close the backend connection when done
       # instead of leaving it open until garbage collection. The app receives
       # the path as the client sent it: libcurl would otherwise remove "." and
-      # ".." segments, including their "%2e" spellings.
+      # ".." segments, including their "%2e" spellings. libcurl 8.20.0 and
+      # later still write the hex digits of a percent-encoded character in
+      # upper case, so "%2e" reaches the app as "%2E".
       handle <- new_backend_handle(
         customrequest = method, nobody = identical(method, "HEAD"), path_as_is = TRUE,
         connecttimeout = 10, low_speed_limit = 1, low_speed_time = 600, followlocation = FALSE,

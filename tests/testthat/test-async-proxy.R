@@ -529,7 +529,10 @@ test_that("an app receives dot segments as the client sent them", {
     response <- await_response(forward_request("GET", paste0(backend$url, path), list(), "app", config))
     expect_equal(response$status, 200)
   }
-  expect_identical(seen, paths)
+  # libcurl 8.20.0 and later write the hex digits of a percent-encoded
+  # character in upper case, so "%2e" can reach the app as "%2E"
+  upper_hex <- function(x) gsub("(%[0-9A-Fa-f]{2})", "\\U\\1", x, perl = TRUE)
+  expect_identical(upper_hex(seen), upper_hex(paths))
 })
 
 test_that("requests to a running app are forwarded without a readiness probe", {
