@@ -44,11 +44,11 @@ or `openssl`, and no longer suggests `roxygen2` or `devtools`.
 * Local: Windows 11 x64 (build 26300), x86_64-w64-mingw32,
   R 4.6.2 (2026-10-29 ucrt).
   Checked with `R CMD check --as-cran` on the source tarball built from
-  commit d059fb3, including the PDF manual and the CRAN incoming
+  commit 18cdb17, including the PDF manual and the CRAN incoming
   feasibility check. The test suite was also run there at that commit with
   `NOT_CRAN=true`, which runs the tests skipped on CRAN.
-* R-hub (commit d059fb3, run
-  https://github.com/lab1702/tinyshinyserver/actions/runs/45279376927):
+* R-hub (commit 18cdb17, run
+  https://github.com/lab1702/tinyshinyserver/actions/runs/45296481752):
   linux (R-devel), windows (R-devel), windows (R-oldrel, R 4.5.3),
   macos-arm64 (R-devel), macos-arm64 (R-oldrel, R 4.5.3), gcc16, and
   ubuntu-gcc12.
@@ -60,7 +60,7 @@ from the build, so the package checked is identical.
 
 Local: 0 errors | 0 warnings | 0 notes.
 
-R-hub at commit d059fb3: 0 errors | 0 warnings | 0 notes on all seven platforms.
+R-hub at commit 18cdb17: 0 errors | 0 warnings | 0 notes on all seven platforms.
 
 Test results: 3437 passes locally and on R-hub's two windows platforms
 (R-devel and R-oldrel), with 13 intentional skips on CRAN (timing checks of
